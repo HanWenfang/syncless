@@ -19,6 +19,8 @@ import socket
 import stackless
 import sys
 
+VERBOSE = False
+
 def SetFdBlocking(fd, is_blocking):
   """Set a file descriptor blocking or nonblocking.
 
@@ -105,6 +107,7 @@ class NonBlockingFile(object):
 
   def Close(self):
     # TODO(pts): Don't close stdout or stderr.
+    # TODO(pts): Assert there is no unflushed data in the buffer.
     if self.read_fd != -1:
       self.read_fh.close()
       self.read_fd = -1
@@ -132,6 +135,8 @@ class NonBlockingFile(object):
 
 def Log(msg):
   """Writes blockingly to stderr."""
+  if not VERBOSE:
+    return
   msg = str(msg)
   if msg and msg != '\n':
     if msg[-1] !=' \n':
@@ -191,17 +196,19 @@ def MainLoop(new_nbfs):
     # TODO(pts): Use epoll(2) instead.
     timeout = None
     while True:
-      Log('select mainc=%d nbfs=%r read=%r write=%r timeout=%r' % (
-          mainc,
-          [(nbf.read_fd, nbf.write_fd) for nbf in nbfs],
-          wait_read, wait_write, timeout))
+      if VERBOSE:
+        Log('select mainc=%d nbfs=%r read=%r write=%r timeout=%r' % (
+            mainc,
+            [(nbf.read_fd, nbf.write_fd) for nbf in nbfs],
+            wait_read, wait_write, timeout))
       try:
         got = select.select(wait_read, wait_write, (), timeout)
         break
       except select.error, e:
         if e.errno != errno.EAGAIN:
           raise
-    Log('select ret=%r' % (got,))
+    if VERBOSE:
+      Log('select ret=%r' % (got,))
     for nbf in nbfs:
       # TODO(pts): Allow one tasklet to wait for multiple events.
       if nbf.write_fd in got[1]:
@@ -212,7 +219,8 @@ def MainLoop(new_nbfs):
 
 # ---
 
-def Worker(nbf):
+def ChatWorker(nbf):
+  # TODO(pts): Let's select this from the command line.
   try:
     nbf.Write('Type something!\n')  # TODO(pts): Handle EPIPE.
     while True:
@@ -224,6 +232,30 @@ def Worker(nbf):
       nbf.Write('You typed %r, keep typing.\n' % s)
       # TODO(pts): Add feature to give up control during long computations.
     nbf.Write('Bye!\n')
+    nbf.Flush()
+  finally:
+    nbf.Close()
+
+def Worker(nbf):
+  import time
+  try:
+    # Read HTTP/1.x request.
+    req_buf = ''
+    while True:
+      req_buf += nbf.Read(4096)
+      i = req_buf.find('\n\n')
+      j = req_buf.find('\n\r\n')
+      if i >= 0 and i < j:
+        req_head = req_buf[:i]
+        break
+      elif j >= 0:
+        req_head = req_buf[:j]
+        break
+    req_buf = None  # TODO(pts): Read POST body.
+
+    # Write response.
+    nbf.Write('HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n'
+              'Hello, <i>World</i> @ %s!\n' % time.time())
     nbf.Flush()
   finally:
     nbf.Close()
@@ -240,6 +272,8 @@ def Listener(nbf):
 
 
 if __name__ == '__main__':
+  if len(sys.argv) > 1:
+    VERBOSE = True
   try:
     import psyco
     psyco.full()
@@ -248,7 +282,11 @@ if __name__ == '__main__':
   sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
   sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   sock.bind(('127.0.0.1', 6666))
-  sock.listen(5)
+  # Reducing this has a strong negative effect on ApacheBench worst-case
+  # connection times, as measured with:
+  # ab -n 100000 -c 50 http://127.0.0.1:6666/ >ab.stackless3.txt
+  # It increases the maximum Connect time from 8 to 9200 milliseconds.
+  sock.listen(100)
   Log('listening on %r' % (sock.getsockname(),))
   new_nbfs = []
   listener_nbf = NonBlockingFile(sock, sock, new_nbfs)
