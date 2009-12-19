@@ -37,7 +37,7 @@ def SetFdBlocking(fd, is_blocking):
 
 
 class NonBlockingFile(object):
-  def __init__(self, read_fh, write_fh):
+  def __init__(self, read_fh, write_fh, new_nbfs):
     self.write_buf = []
     self.read_fh = read_fh
     self.write_fh = write_fh
@@ -45,6 +45,9 @@ class NonBlockingFile(object):
     assert self.read_fd >= 0
     self.write_fd = write_fh.fileno()
     assert self.write_fd >= 0
+    if not isinstance(new_nbfs, list):
+      raise TypeError
+    self.new_nbfs = new_nbfs
     self.read_channel = stackless.channel()
     self.read_channel.preference = 1  # Prefer the sender (main task).
     self.write_channel = stackless.channel()
@@ -52,6 +55,10 @@ class NonBlockingFile(object):
     SetFdBlocking(self.read_fd, False)
     if self.read_fd != self.write_fd:
       SetFdBlocking(self.write_fd, False)
+    # Create a circular reference which lasts until the MainLoop resolves it.
+    # This should be the last operation in __init__ in case others raise an
+    # exception.
+    self.new_nbfs.append(self)
 
   def Write(self, data):
     self.write_buf.append(str(data))
@@ -98,27 +105,29 @@ class NonBlockingFile(object):
 
   def Close(self):
     # TODO(pts): Don't close stdout or stderr.
-    if self.read_fd != 1:
+    if self.read_fd != -1:
       self.read_fh.close()
       self.read_fd = -1
-    if self.write_fd != 1:
+    if self.write_fd != -1:
       self.write_fh.close()
       self.write_fd = -1
-    # !! TODO(pts): Remove self from nbfs.
 
   def Accept(self):
     """Non-blocking version of socket self.read_fh.accept().
 
     Return:
-      (accepted_socket, peer_name)
+      (accepted_nbf, peer_name)
     """
     while True:
       try:
-        return self.read_fh.accept()
+        accepted_socket, peer_name = self.read_fh.accept()
+        break
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
       self.read_channel.receive()
+    return (NonBlockingFile(accepted_socket, accepted_socket, self.new_nbfs),
+            peer_name)
 
 
 def Log(msg):
@@ -151,7 +160,8 @@ def ExceptHook(*args):
 sys.excepthook = ExceptHook
 
 
-def MainLoop(nbfs):
+def MainLoop(new_nbfs):
+  nbfs = []
   wait_read = []
   wait_write = []
   mainc = 0
@@ -160,11 +170,20 @@ def MainLoop(nbfs):
     stackless.run()  # Until all others are blocked.
     del wait_read[:]
     del wait_write[:]
+    if new_nbfs:
+      nbfs.extend(new_nbfs)
+      del new_nbfs[:]
+    need_rebuild_nbfs = False
     for nbf in nbfs:
+      if nbf.read_fd < 0 and nbf.write_fd < 0:
+        need_rebuild_nbfs = True
       if nbf.read_channel.balance < 0 and nbf.read_fd >= 0:
         wait_read.append(nbf.read_fd)
       if nbf.write_channel.balance < 0 and nbf.write_fd >= 0:
         wait_write.append(nbf.write_fd)
+    if need_rebuild_nbfs:
+      nbfs[:] = [nbf for nbf in nbfs
+                 if nbf.read_fd >= 0 and nbf.write_fd >= 0]
     if not (wait_read or wait_write):
       Log('no more files open, end of main loop')
       break
@@ -172,14 +191,15 @@ def MainLoop(nbfs):
     # TODO(pts): Use epoll(2) instead.
     timeout = None
     while True:
-      Log('select mainc=%d read=%r write=%r timeout=%r' % (
-          mainc, wait_read, wait_write, timeout))
+      Log('select mainc=%d nbfs=%r read=%r write=%r timeout=%r' % (
+          mainc,
+          [(nbf.read_fd, nbf.write_fd) for nbf in nbfs],
+          wait_read, wait_write, timeout))
       try:
         got = select.select(wait_read, wait_write, (), timeout)
         break
       except select.error, e:
         if e.errno != errno.EAGAIN:
-          os.write(2, 'EEE=%d' % e.errno)
           raise
     Log('select ret=%r' % (got,))
     for nbf in nbfs:
@@ -202,36 +222,38 @@ def Worker(nbf):
       except EOFError:
         break
       nbf.Write('You typed %r, keep typing.\n' % s)
-      # !! TODO(pts): Give up control during long computations.
+      # TODO(pts): Add feature to give up control during long computations.
     nbf.Write('Bye!\n')
     nbf.Flush()
   finally:
     nbf.Close()
 
-def Listener(nbf, nbfs):
+
+def Listener(nbf):
   try:
     while True:
-      accepted_socket, peer_name = nbf.Accept()
-      accepted_nbf = NonBlockingFile(accepted_socket, accepted_socket)
-      # TODO(pts): Autoregister nbf to nbfs.
-      nbfs.append(accepted_nbf)
+      accepted_nbf, peer_name = nbf.Accept()
       stackless.tasklet(Worker)(accepted_nbf)
     Log('accept got=%r' % (nbf.Accept(),))
   finally:
     nbf.Close()
 
+
 if __name__ == '__main__':
+  try:
+    import psyco
+    psyco.full()
+  except ImportError:
+    pass
   sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
   sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   sock.bind(('127.0.0.1', 6666))
   sock.listen(5)
   Log('listening on %r' % (sock.getsockname(),))
-  nbfs = []
-  listener_nbf = NonBlockingFile(sock, sock)
-  stackless.tasklet(Listener)(listener_nbf, nbfs)
-  nbfs.append(listener_nbf)
-  std_nbf = NonBlockingFile(sys.stdin, sys.stdout)
+  new_nbfs = []
+  listener_nbf = NonBlockingFile(sock, sock, new_nbfs)
+  stackless.tasklet(Listener)(listener_nbf)
+  std_nbf = NonBlockingFile(sys.stdin, sys.stdout, new_nbfs)
   stackless.tasklet(Worker)(std_nbf)  # Don't run it right now.
-  nbfs.append(std_nbf)
-  MainLoop(nbfs)
+  MainLoop(new_nbfs)
   assert 0, 'unexpected end of main loop'
