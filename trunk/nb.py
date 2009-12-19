@@ -1,7 +1,17 @@
 #! /usr/local/bin/stackless2.6
 #
-# nonblocking HTTP server in Python + Stackless
+# example nonblocking HTTP server in Python + Stackless
 # by pts@fazekas.hu at Sat Dec 19 18:09:16 CET 2009
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
 #
 # Docs: http://www.disinterest.org/resource/stackless/2.6.4-docs-html/library/stackless/channels.html
 #
@@ -292,6 +302,6 @@ if __name__ == '__main__':
   listener_nbf = NonBlockingFile(sock, sock, new_nbfs)
   stackless.tasklet(Listener)(listener_nbf)
   std_nbf = NonBlockingFile(sys.stdin, sys.stdout, new_nbfs)
-  stackless.tasklet(Worker)(std_nbf)  # Don't run it right now.
+  stackless.tasklet(ChatWorker)(std_nbf)  # Don't run it right now.
   MainLoop(new_nbfs)
   assert 0, 'unexpected end of main loop'
