@@ -33,6 +33,7 @@
 # TODO(pts): Implement broadcasting chatbot.
 # TODO(pts): Close connection on 413 Request Entity Too Large.
 # TODO(pts): Prove that there is no memory leak over a long running time.
+# TODO(pts): Use socket.recv_into() for buffering.
 
 import errno
 import fcntl
@@ -45,6 +46,9 @@ import sys
 import time
 
 VERBOSE = False
+
+FLOAT_INF = float('inf')
+"""The ``infinity'' float value."""
 
 def SetFdBlocking(fd, is_blocking):
   """Set a file descriptor blocking or nonblocking.
@@ -68,9 +72,12 @@ def SetFdBlocking(fd, is_blocking):
 
 
 class NonBlockingFile(object):
+  """A non-blocking file using MainLoop."""
+
   __slots__ = ['write_buf', 'read_fh', 'write_fh', 'read_fd', 'write_fd',
                'new_nbfs', 'cooperative_channel',
-               'read_channel', 'write_channel']
+               'read_channel', 'read_wake_up_at',
+               'write_channel', 'write_wake_up_at']
 
   def __init__(self, read_fh, write_fh=()):
     if write_fh is ():
@@ -90,6 +97,10 @@ class NonBlockingFile(object):
     self.read_channel.preference = 1  # Prefer the sender (main tasklet).
     self.write_channel = stackless.channel()
     self.write_channel.preference = 1  # Prefer the sender (main tasklet).
+    # None or a float timestamp when to wake up even if there is nothing to
+    # read or write.
+    self.read_wake_up_at = FLOAT_INF
+    self.write_wake_up_at = FLOAT_INF
     SetFdBlocking(self.read_fd, False)
     if self.read_fd != self.write_fd:
       SetFdBlocking(self.write_fd, False)
@@ -99,9 +110,11 @@ class NonBlockingFile(object):
     self.new_nbfs.append(self)
 
   def Write(self, data):
+    """Add data to self.write_buf."""
     self.write_buf.append(str(data))
 
   def Flush(self):
+    """Flush self.write_buf to self.write_fh, doing as many bytes as needed."""
     while self.write_buf:
       # TODO(pts): Measure special-casing of len(self.write_buf) == 1.
       data = ''.join(self.write_buf)
@@ -124,6 +137,32 @@ class NonBlockingFile(object):
           data = data[written:]
           self.write_buf.append(data)
           self.write_channel.receive()
+
+  def WaitForReadable(self, timeout=None, do_check_immediately=False):
+    """Return a bool indicating if the channel is now readable."""
+    if do_check_immediately:
+      poll = select.poll()  # TODO(pts): Pool the poll objects?
+      poll.register(self.read_fd, select.POLLIN)
+      if poll.poll(0):
+        return
+    if timeout is None or timeout == FLOAT_INF:
+      self.read_channel.receive()
+    else:
+      self.read_wake_up_at = time.time() + timeout
+      return self.read_channel.receive()
+
+  def WaitForWritable(self, timeout=None, do_check_immediately=False):
+    """Return a bool indicating if the channel is now writable."""
+    if do_check_immediately:
+      poll = select.poll()  # TODO(pts): Pool the poll objects?
+      poll.register(self.write_fd, select.POLLOUT)
+      if poll.poll(0):
+        return
+    if timeout is None or timeout == FLOAT_INF:
+      self.write_channel.receive()
+    else:
+      self.write_wake_up_at = time.time() + timeout
+      return self.write_channel.receive()
 
   def Read(self, size):
     """Read at most size bytes."""
@@ -160,6 +199,9 @@ class NonBlockingFile(object):
     if self in self.new_nbfs:
       # TODO(pts): Faster remove.
       self.new_nbfs[:] = [nbf for nbf in self.new_nbfs if nbf is not self]
+
+  def fileno(self):
+    return self.read_fd
 
   def Accept(self):
     """Non-blocking version of socket self.read_fh.accept().
@@ -256,13 +298,19 @@ class MainLoop(object):
         nbfs.extend(new_nbfs)
         del new_nbfs[:]
       need_rebuild_nbfs = False
+      # TODO(pts): Optimize building earliest_wake_up_at if there are only
+      # a few connections waiting for that -- and most of the connections have
+      # infinite timeout.
+      earliest_wake_up_at = FLOAT_INF
       for nbf in nbfs:
         if nbf.read_fd < 0 and nbf.write_fd < 0:
           need_rebuild_nbfs = True
         if nbf.read_channel.balance < 0 and nbf.read_fd >= 0:
           wait_read.append(nbf.read_fd)
+          earliest_wake_up_at = min(earliest_wake_up_at, nbf.read_wake_up_at)
         if nbf.write_channel.balance < 0 and nbf.write_fd >= 0:
           wait_write.append(nbf.write_fd)
+          earliest_wake_up_at = min(earliest_wake_up_at, nbf.write_wake_up_at)
       if need_rebuild_nbfs:
         nbfs[:] = [nbf for nbf in nbfs
                    if nbf.read_fd >= 0 and nbf.write_fd >= 0]
@@ -275,8 +323,10 @@ class MainLoop(object):
       assert cob <= 0
       if cob < 0:  # Some cooperative tasklets let others run
         timeout = 0
-      else:
+      elif earliest_wake_up_at == FLOAT_INF:
         timeout = None
+      else:
+        timeout = max(0, earliest_wake_up_at - time.time())
       while True:
         if VERBOSE:
           LogDebug('select mainc=%d nbfs=%r read=%r write=%r timeout=%r' % (
@@ -291,12 +341,26 @@ class MainLoop(object):
             raise
       if VERBOSE:
         LogDebug('select ret=%r' % (got,))
-      for nbf in nbfs:
-        # TODO(pts): Allow one tasklet to wait for multiple events.
-        if nbf.write_fd in got[1]:
-          nbf.write_channel.send(None)
-        if nbf.read_fd in got[0]:
-          nbf.read_channel.send(None)
+      if timeout is None:
+        for nbf in nbfs:
+          # TODO(pts): Allow one tasklet to wait for multiple events.
+          if nbf.write_fd in got[1]:
+            nbf.write_channel.send(True)
+          if nbf.read_fd in got[0]:
+            nbf.read_channel.send(True)
+      else:
+        now = time.time()
+        for nbf in nbfs:
+          if nbf.write_fd in got[1]:
+            nbf.write_channel.send(True)
+          elif nbf.write_wake_up_at <= now:  # TODO(pts): Better rounding.
+            nbf.write_wake_up_at = FLOAT_INF
+            nbf.write_channel.send(False)
+          if nbf.read_fd in got[0]:
+            nbf.read_channel.send(True)
+          elif nbf.read_wake_up_at <= now:  # TODO(pts): Better rounding.
+            nbf.read_wake_up_at = FLOAT_INF
+            nbf.read_channel.send(False)
 
       # Restore the balance, let cooperative tasklets continue running.
       while cob < 0:
@@ -311,6 +375,9 @@ def ChatWorker(nbf):
     nbf.Write('Type something!\n')  # TODO(pts): Handle EPIPE.
     while True:
       nbf.Flush()
+      if not nbf.WaitForReadable(3.5):  # 3.5 second
+        nbf.Write('Come on, type something, I\'m getting bored.\n')
+        continue
       s = nbf.Read(128)  # TODO(pts): Do line buffering.
       if not s:
         break
