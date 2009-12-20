@@ -28,6 +28,8 @@ Asynchronous DNS for Python:
 * adns-python: http://code.google.com/p/adns/python
 *              http://michael.susens-schurter.com/blog/2007/09/18/a-lesson-on-python-dns-and-threads/comment-page-1/
 
+TODO(pts): Move the main loop to another tasklet (?) so async operations can
+           work even at initialization.
 TODO(pts): Implement an async DNS resolver HTTP interface.
            (This will demonstrate asynchronous socket creation.)
 TODO(pts): Use epoll (as in tornado--twisted).
@@ -178,7 +180,7 @@ class NonBlockingFile(object):
       poll.register(self.read_fd, select.POLLIN)
       if poll.poll(0):
         return
-    if timeout is None or timeout == FLOAT_INF:
+    if expiration is None or expiration == FLOAT_INF:
       self.read_channel.receive()
     else:
       self.read_wake_up_at = expiration
@@ -192,7 +194,7 @@ class NonBlockingFile(object):
       poll.register(self.write_fd, select.POLLOUT)
       if poll.poll(0):
         return
-    if timeout is None or timeout == FLOAT_INF:
+    if expiration is None or expiration == FLOAT_INF:
       self.write_channel.receive()
     else:
       self.write_wake_up_at = expiration
@@ -228,7 +230,9 @@ class NonBlockingFile(object):
       # epoll set.
       self.read_fh.close()
       self.read_fd = -1
-    if self.write_fd != -1 and self.write_fd != read_fd:
+    if self.write_fd == self.read_fd:
+      self.write_fd = -1
+    elif self.write_fd != -1:
       self.write_fh.close()
       self.write_fd = -1
     if self in self.new_nbfs:
@@ -508,6 +512,8 @@ class MainLoop(object):
           if nbf.write_fd in got[1]:
             nbf.write_channel.send(True)
           elif nbf.write_wake_up_at <= now:  # TODO(pts): Better rounding.
+            # TODO(pts): Sometimes this wakes up 0.001 second earlier -- then
+            # we don't write to the channel.
             nbf.write_wake_up_at = FLOAT_INF
             nbf.write_channel.send(False)
           if nbf.read_fd in got[0]:
