@@ -1,0 +1,46 @@
+README for Syncless
+~~~~~~~~~~~~~~~~~~~
+by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
+
+Syncless is an experimental, lightweight, non-blocking (asynchronous) client
+and server socket network communication library implemented in Stackless
+Python 2.6. Syncless contains an asynchronous DNS resolver (using dnspython)
+and a HTTP server capable of serving WSGI applications. Syncless aims to be
+a coroutine-based alternative of event-driven networking engines (such as
+Twisted and FriendFeed's Tornado). Syncless is already about that fast, but
+it has less features and it's less stable now.
+
+Requirements
+~~~~~~~~~~~~
+* A recent Unix system. Tested on Linux 2.6, should work on FreeBSD. Testers
+  for other Unix variants are welcome.
+
+How to use
+~~~~~~~~~~
+1. Download and install Stackless Python 2.6.x from http://stackless.com/
+   For convenience, name the executable /usr/local/bin/stackless 
+
+2. Download and install dnspython from http://www.dnspython.org/
+   Example compilation and installation:
+
+     $ stackless2.6 ./setup.py build
+     $ sudo stackless2.6 ./setup.py install
+
+3. Download and extract Syncless.
+
+4. In the Syncless directory, run
+
+     $ stackless2.6 ./demo.py
+
+The original blog announcement of Syncless' precedessor:
+http://ptspts.blogspot.com/2009/12/experimental-http-server-using.html
+
+Planned features
+~~~~~~~~~~~~~~~~
+* HTTP client library (making urllib non-blocking?)
+* web.py integration
+* CherryPy integration
+* Twisted integration
+* productionization
+
+__EOF__
