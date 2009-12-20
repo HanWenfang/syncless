@@ -24,8 +24,9 @@
 # * dnspython: http://glyphy.com/asynchronous-dns-queries-python-2008-02-09 + http://www.dnspython.org/
 # * 
 #
+# TODO(pts): Implement an async DNS resolver HTTP interface.
+#            (This will demonstrate asynchronous socket creation.)
 # TODO(pts): Use epoll (as in tornado--twisted).
-# TODO(pts): 
 # TODO(pts): Document that scheduling is not fair if there are multiple readers
 #            on the same fd.
 # TODO(pts): Implement broadcasting chatbot.
@@ -108,7 +109,7 @@ class NonBlockingFile(object):
           self.write_buf.append(data)
           self.write_channel.receive()
         else:  # Partially flushed.
-          # TODO(pts): Do less string copying.
+          # TODO(pts): Do less string copying to avoid O(n^2) complexity.
           data = data[written:]
           self.write_buf.append(data)
           self.write_channel.receive()
@@ -497,25 +498,28 @@ KEEP_ALIVE_RESPONSES = (
     'Connection: Keep-Alive\r\n')
 
 
-def RespondWithBadRequest(nbf, reason):
+def RespondWithBadRequest(server_software, nbf, reason):
   msg = 'Bad request: ' + str(reason)
   # TODO(pts): Add Server: and Date:
   nbf.Write('HTTP/1.0 400 Bad Request\r\n'
+            'Server: %s\r\n'
             'Connection: close\r\n'
             'Content-Type: text/plain\r\n'
-            'Content-Length: %d\r\n\r\n%s\n' % (len(msg) + 1, msg))
+            'Content-Length: %d\r\n\r\n%s\n' %
+            (server_software, len(msg) + 1, msg))
   nbf.Flush()
 
 def WsgiWorker(nbf, wsgi_application, default_env):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
-  env = dict(default_env)
-  env['wsgi.errors'] = WsgiErrorsStream
   req_buf = ''
   do_keep_alive = True
+  server_software = default_env['SERVER_SOFTWARE']
   try:
     while do_keep_alive:
       do_keep_alive = False
+      env = dict(default_env)
+      env['wsgi.errors'] = WsgiErrorsStream
       # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
       # req_buf may contain some bytes after the previous request.
       LogDebug('reading HTTP request on nbf=%x' % id(nbf))
@@ -551,19 +555,20 @@ def WsgiWorker(nbf, wsgi_application, default_env):
       req_lines = req_head.rstrip('\r').replace('\r\n', '\n').split('\n')
       req_line1_items = req_lines.pop(0).split(' ', 2)
       if len(req_line1_items) != 3:
-        RespondWithBadRequest(nbf, 'bad line1')
+        RespondWithBadRequest(server_software, nbf, 'bad line1')
         return  # Don't reuse the connection.
       method, suburl, http_version = req_line1_items
       if http_version not in HTTP_VERSIONS:
-        RespondWithBadRequest(nbf, 'bad HTTP version: %r' % http_version)
+        RespondWithBadRequest(
+            server_software, nbf, 'bad HTTP version: %r' % http_version)
         return  # Don't reuse the connection.
       # TODO(pts): Support more methods for WebDAV.
       if method not in HTTP_1_1_METHODS:
-        RespondWithBadRequest(nbf, 'bad method')
+        RespondWithBadRequest(server_software, nbf, 'bad method')
         return  # Don't reuse the connection.
       if not SUB_URL_RE.match(suburl):
         # This also fails for HTTP proxy URLS http://...
-        RespondWithBadRequest(nbf, 'bad suburl')
+        RespondWithBadRequest(server_software, nbf, 'bad suburl')
         return  # Don't reuse the connection.
       env['REQUEST_METHOD'] = method
       env['SERVER_PROTOCOL'] = http_version
@@ -582,7 +587,7 @@ def WsgiWorker(nbf, wsgi_application, default_env):
       for line in req_lines:
         i = line.find(':')
         if i < 0:
-          RespondWithBadRequest(nbf, 'bad header line')
+          RespondWithBadRequest(server_software, nbf, 'bad header line')
           return
         j = line.find(': ', i)
         if j >= 0:
@@ -599,7 +604,7 @@ def WsgiWorker(nbf, wsgi_application, default_env):
           try:
             content_length = int(value)
           except ValueError:
-            RespondWithBadRequest(nbf, 'bad content-length')
+            RespondWithBadRequest(server_software, nbf, 'bad content-length')
             return
           env['CONTENT_LENGTH'] = value
         elif key == 'content-type':
@@ -611,13 +616,13 @@ def WsgiWorker(nbf, wsgi_application, default_env):
 
       if content_length is None:
         if method in ('POST', 'PUT'):
-          RespondWithBadRequest(nbf, 'missing content')
+          RespondWithBadRequest(server_software, nbf, 'missing content')
           return
         env['wsgi.input'] = input = WsgiEmptyInputStream
       else:
         if method not in ('POST', 'PUT'):
           if content_length:
-            RespondWithBadRequest(nbf, 'unexpected content')
+            RespondWithBadRequest(server_software, nbf, 'unexpected content')
             return
           content_length = None
           del env['CONTENT_LENGTH']
@@ -633,7 +638,6 @@ def WsgiWorker(nbf, wsgi_application, default_env):
           env['wsgi.input'] = input = WsgiEmptyInputStream
 
       is_not_head = method != 'HEAD'
-      do_generate_content_length = is_not_head
       res_content_length = None
       assert not nbf.write_buf
 
@@ -641,12 +645,11 @@ def WsgiWorker(nbf, wsgi_application, default_env):
         """Callback called by wsgi_application."""
         if nbf.write_buf:  # StartResponse called again by an error handler.
           del nbf.write_buf[:]
-          do_generate_content_length = is_not_head
           res_content_length = None
 
-        # TODO(pts): Send `Server:' header: Server: Apache
         # TODO(pts): Send `Date:' header: Date: Sun, 20 Dec 2009 12:48:56 GMT
         nbf.Write('HTTP/1.0 %s\r\n' % status)
+        nbf.Write('Server: %s\r\n' % server_software)
         for key, value in response_headers:
           key_lower = key.lower()
           if (key not in ('status', 'server', 'date', 'connection') and
@@ -656,7 +659,6 @@ def WsgiWorker(nbf, wsgi_application, default_env):
                                           'content-transfer-encoding'))):
             if key == 'content-length':
               # !! TODO(pts): Cut or pad the output below at content-length.
-              do_generate_content_length = False
               # TODO(pts): Handle parsing error here.
               res_content_length = int(value)
             key_capitalized = re.sub(
@@ -671,37 +673,24 @@ def WsgiWorker(nbf, wsgi_application, default_env):
 
       # TODO(pts): Handle application-level exceptions here.
       items = wsgi_application(env, StartResponse)
-      if do_generate_content_length:
-        assert res_content_length is None
-        i = 0
-        data0 = ''
-        for data in items:
-          if i > 1:
-            nbf.Write(data)
-            nbf.Flush()  # TODO(pts): Handle write errors (everywhere).
-          elif i:  # i == 1
-            nbf.Write('Connection: close\r\n')
-            nbf.Write('\r\n')
-            nbf.Write(data0)
-            nbf.Write(data)
-            nbf.Flush()
-            data0 = ''
-          else:
-            #LogDebug('input buffer: %r % (input.half_line, input.lines_rev))
-            if input.bytes_remaining:
-              input.ReadAndDiscardRemaining()
-            # Is this buffering contrary to the WSGI specification?
-            data0 = data
-          i += 1
-        if i <= 1:  # Generate Content-Length if there was only a single string.
-          if input.bytes_remaining:
-            input.ReadAndDiscardRemaining()
-          nbf.Write('Content-Length: %d\r\n' % len(data0))
-          do_keep_alive = do_req_keep_alive
-          nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
-          nbf.Write('\r\n')
-          nbf.Write(data0)
-          nbf.Flush()
+      if isinstance(items, list) or isinstance(items, tuple):
+        if is_not_head:
+          data = ''.join(map(str, items))
+        else:
+          data = ''
+        items = None
+        if input.bytes_remaining:
+          input.ReadAndDiscardRemaining()
+        if res_content_length is not None:
+          # TODO(pts): Pad or truncate.
+          assert len(data) == res_content_length
+        if is_not_head:
+          nbf.Write('Content-Length: %d\r\n' % len(data))
+        do_keep_alive = do_req_keep_alive
+        nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
+        nbf.Write('\r\n')
+        nbf.Write(data)
+        nbf.Flush()
       elif is_not_head:
         do_keep_alive = do_req_keep_alive and res_content_length is not None
         nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
@@ -711,6 +700,8 @@ def WsgiWorker(nbf, wsgi_application, default_env):
             input.ReadAndDiscardRemaining()
           nbf.Write(data)  # TODO(pts): Don't write if HEAD request.
           nbf.Flush()
+        if input.bytes_remaining:
+          input.ReadAndDiscardRemaining()
       else:  # HTTP HEAD request.
         do_keep_alive = do_req_keep_alive
         nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
@@ -721,10 +712,11 @@ def WsgiWorker(nbf, wsgi_application, default_env):
         for data in items:  # Run the generator function through.
           if input.bytes_remaining:  # TODO(pts): Check only once.
             input.ReadAndDiscardRemaining()
+        if input.bytes_remaining:
+          input.ReadAndDiscardRemaining()
 
-      if input.bytes_remaining:
-        input.ReadAndDiscardRemaining()
-      # !! TODO(pts): do cooperative scheduling with stackless
+      items = data = input = None
+      # !! TODO(pts): do cooperative scheduling with stackless if do_keep_alive
       # TODO(pts): Close the connection if the child has already closed.
   finally:
     nbf.Close()
@@ -741,6 +733,7 @@ def WsgiListener(nbf, wsgi_application):
   env['HTTPS']             = 'off'  # could be 'on'; Apache sets this
   server_ipaddr, server_port = nbf.read_fh.getsockname()
   env['SERVER_PORT'] = str(server_port)
+  env['SERVER_SOFTWARE'] = 'pts-stackless-wsgi'
   if server_ipaddr:
     # TODO(pts): Do a canonical name lookup.
     env['SERVER_ADDR'] = env['SERVER_NAME'] = server_ipaddr
