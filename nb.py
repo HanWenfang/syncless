@@ -39,6 +39,7 @@ import select
 import socket
 import stackless
 import sys
+import time
 
 VERBOSE = False
 
@@ -497,19 +498,28 @@ KEEP_ALIVE_RESPONSES = (
     'Connection: close\r\n',
     'Connection: Keep-Alive\r\n')
 
+WDAY = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
+MON = ('', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep',
+       'Oct', 'Nov', 'Dec')
 
-def RespondWithBadRequest(server_software, nbf, reason):
+def GetHttpDate(at):
+  now = time.gmtime(at)
+  return '%s, %2d %s %d %2d:%02d:%02d GMT' % (
+      WDAY[now[6]], now[2], MON[now[1]], now[0], now[3], now[4], now[5])
+      
+def RespondWithBadRequest(date, server_software, nbf, reason):
   msg = 'Bad request: ' + str(reason)
   # TODO(pts): Add Server: and Date:
   nbf.Write('HTTP/1.0 400 Bad Request\r\n'
             'Server: %s\r\n'
+            'Date: %s\r\n'
             'Connection: close\r\n'
             'Content-Type: text/plain\r\n'
             'Content-Length: %d\r\n\r\n%s\n' %
-            (server_software, len(msg) + 1, msg))
+            (server_software, date, len(msg) + 1, msg))
   nbf.Flush()
 
-def WsgiWorker(nbf, wsgi_application, default_env):
+def WsgiWorker(nbf, wsgi_application, default_env, date):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
   req_buf = ''
@@ -546,6 +556,8 @@ def WsgiWorker(nbf, wsgi_application, default_env):
         if not req_new:
           # The HTTP client has closed the connection before sending the headers.
           return
+        if date is None:
+          date = GetHttpDate(time.time())
         # TODO(pts): Ensure that refcount(req_buf) == 1 -- do the string
         # reference counters increase by slicing?
         req_buf += req_new  # Fast string append if refcount(req_buf) == 1.
@@ -555,20 +567,20 @@ def WsgiWorker(nbf, wsgi_application, default_env):
       req_lines = req_head.rstrip('\r').replace('\r\n', '\n').split('\n')
       req_line1_items = req_lines.pop(0).split(' ', 2)
       if len(req_line1_items) != 3:
-        RespondWithBadRequest(server_software, nbf, 'bad line1')
+        RespondWithBadRequest(date, server_software, nbf, 'bad line1')
         return  # Don't reuse the connection.
       method, suburl, http_version = req_line1_items
       if http_version not in HTTP_VERSIONS:
-        RespondWithBadRequest(
+        RespondWithBadRequest(date, 
             server_software, nbf, 'bad HTTP version: %r' % http_version)
         return  # Don't reuse the connection.
       # TODO(pts): Support more methods for WebDAV.
       if method not in HTTP_1_1_METHODS:
-        RespondWithBadRequest(server_software, nbf, 'bad method')
+        RespondWithBadRequest(date, server_software, nbf, 'bad method')
         return  # Don't reuse the connection.
       if not SUB_URL_RE.match(suburl):
         # This also fails for HTTP proxy URLS http://...
-        RespondWithBadRequest(server_software, nbf, 'bad suburl')
+        RespondWithBadRequest(date, server_software, nbf, 'bad suburl')
         return  # Don't reuse the connection.
       env['REQUEST_METHOD'] = method
       env['SERVER_PROTOCOL'] = http_version
@@ -587,7 +599,7 @@ def WsgiWorker(nbf, wsgi_application, default_env):
       for line in req_lines:
         i = line.find(':')
         if i < 0:
-          RespondWithBadRequest(server_software, nbf, 'bad header line')
+          RespondWithBadRequest(date, server_software, nbf, 'bad header line')
           return
         j = line.find(': ', i)
         if j >= 0:
@@ -604,7 +616,7 @@ def WsgiWorker(nbf, wsgi_application, default_env):
           try:
             content_length = int(value)
           except ValueError:
-            RespondWithBadRequest(server_software, nbf, 'bad content-length')
+            RespondWithBadRequest(date, server_software, nbf, 'bad content-length')
             return
           env['CONTENT_LENGTH'] = value
         elif key == 'content-type':
@@ -616,13 +628,14 @@ def WsgiWorker(nbf, wsgi_application, default_env):
 
       if content_length is None:
         if method in ('POST', 'PUT'):
-          RespondWithBadRequest(server_software, nbf, 'missing content')
+          RespondWithBadRequest(date, server_software, nbf, 'missing content')
           return
         env['wsgi.input'] = input = WsgiEmptyInputStream
       else:
         if method not in ('POST', 'PUT'):
           if content_length:
-            RespondWithBadRequest(server_software, nbf, 'unexpected content')
+            RespondWithBadRequest(
+                date, server_software, nbf, 'unexpected content')
             return
           content_length = None
           del env['CONTENT_LENGTH']
@@ -650,6 +663,7 @@ def WsgiWorker(nbf, wsgi_application, default_env):
         # TODO(pts): Send `Date:' header: Date: Sun, 20 Dec 2009 12:48:56 GMT
         nbf.Write('HTTP/1.0 %s\r\n' % status)
         nbf.Write('Server: %s\r\n' % server_software)
+        nbf.Write('Date: %s\r\n' % date)
         for key, value in response_headers:
           key_lower = key.lower()
           if (key not in ('status', 'server', 'date', 'connection') and
@@ -715,7 +729,7 @@ def WsgiWorker(nbf, wsgi_application, default_env):
         if input.bytes_remaining:
           input.ReadAndDiscardRemaining()
 
-      items = data = input = None
+      items = data = input = date = None
       # !! TODO(pts): do cooperative scheduling with stackless if do_keep_alive
       # TODO(pts): Close the connection if the child has already closed.
   finally:
@@ -744,10 +758,11 @@ def WsgiListener(nbf, wsgi_application):
   try:
     while True:
       accepted_nbf, peer_name = nbf.Accept()
+      date = GetHttpDate(time.time())
       if VERBOSE:
         LogDebug('connection accepted from=%r nbf=%x' %
                  (peer_name, id(accepted_nbf)))
-      stackless.tasklet(WsgiWorker)(accepted_nbf, wsgi_application, env)
+      stackless.tasklet(WsgiWorker)(accepted_nbf, wsgi_application, env, date)
   finally:
     nbf.Close()
 
