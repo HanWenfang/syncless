@@ -138,7 +138,7 @@ class NonBlockingFile(object):
           self.write_buf.append(data)
           self.write_channel.receive()
 
-  def WaitForReadable(self, timeout=None, do_check_immediately=False):
+  def WaitForReadableTimeout(self, timeout=None, do_check_immediately=False):
     """Return a bool indicating if the channel is now readable."""
     if do_check_immediately:
       poll = select.poll()  # TODO(pts): Pool the poll objects?
@@ -151,10 +151,10 @@ class NonBlockingFile(object):
       self.read_wake_up_at = time.time() + timeout
       return self.read_channel.receive()
 
-  def WaitForWritable(self, timeout=None, do_check_immediately=False):
+  def WaitForWritableTimeout(self, timeout=None, do_check_immediately=False):
     """Return a bool indicating if the channel is now writable."""
     if do_check_immediately:
-      poll = select.poll()  # TODO(pts): Pool the poll objects?
+      poll = select.poll()
       poll.register(self.write_fd, select.POLLOUT)
       if poll.poll(0):
         return
@@ -164,8 +164,36 @@ class NonBlockingFile(object):
       self.write_wake_up_at = time.time() + timeout
       return self.write_channel.receive()
 
-  def Read(self, size):
-    """Read at most size bytes."""
+  def WaitForReadableExpiration(self, expiration=None,
+                                do_check_immediately=False):
+    """Return a bool indicating if the channel is now readable."""
+    if do_check_immediately:
+      poll = select.poll()
+      poll.register(self.read_fd, select.POLLIN)
+      if poll.poll(0):
+        return
+    if timeout is None or timeout == FLOAT_INF:
+      self.read_channel.receive()
+    else:
+      self.read_wake_up_at = expiration
+      return self.read_channel.receive()
+
+  def WaitForWritableExpiration(self, expiration=None,
+                                do_check_immediately=False):
+    """Return a bool indicating if the channel is now writable."""
+    if do_check_immediately:
+      poll = select.poll()
+      poll.register(self.write_fd, select.POLLOUT)
+      if poll.poll(0):
+        return
+    if timeout is None or timeout == FLOAT_INF:
+      self.write_channel.receive()
+    else:
+      self.write_wake_up_at = expiration
+      return self.write_channel.receive()
+
+  def ReadAtMost(self, size):
+    """Read at most size bytes (unlike `read', which reads all)."""
     if size <= 0:
       return ''
     # TODO(pts): Implement reading exacly `size' bytes.
@@ -182,18 +210,19 @@ class NonBlockingFile(object):
     #  raise EOFError('end-of-file on fd %d' % self.read_fd)
     return got
 
-  def Close(self):
+  def close(self):
     # TODO(pts): Don't close stdout or stderr.
     # TODO(pts): Assert that there is no unflushed data in the buffer.
     # TODO(pts): Add unregister functionality without closing.
     # TODO(pts): Can an os.close() block on Linux (on the handshake)?
-    if self.read_fd != -1:
+    read_fd = self.read_fd
+    if read_fd != -1:
       # The contract is that self.read_fh.close() must call
       # os.close(self.read_fd) -- otherwise the fd wouldn't be removed from the
       # epoll set.
       self.read_fh.close()
       self.read_fd = -1
-    if self.write_fd != -1:
+    if self.write_fd != -1 and self.write_fd != read_fd:
       self.write_fh.close()
       self.write_fd = -1
     if self in self.new_nbfs:
@@ -203,7 +232,66 @@ class NonBlockingFile(object):
   def fileno(self):
     return self.read_fd
 
-  def Accept(self):
+
+class NonBlockingSocket(NonBlockingFile):
+  """A NonBlockingFile wrapping a socket, with proxy socket.socket methods.
+
+  TODO(pts): Implement socket methods more consistently.  
+  """
+
+  __slots__ = NonBlockingFile.__slots__ + ['family', 'type', 'proto']
+
+  def __init__(self, sock, sock_type=None, proto=0):
+    """Create a new NonBlockingSocket.
+    
+    Usage 1: NonBlockingSocket(sock)
+
+    Usage 2: NonBlockingSocket(family, type[, proto])
+    """
+    if sock_type is not None:
+      self.family = sock
+      sock = socket.socket(sock, sock_type, proto)  # family, type, proto
+      self.type = sock_type
+      self.proto = proto
+    else:
+      if not hasattr(sock, 'recvfrom'):
+        raise TypeError
+      self.family = sock.family
+      self.type = sock.type
+      self.proto = sock.proto
+    NonBlockingFile.__init__(self, sock)
+
+  def bind(self, address):
+    self.read_fh.bind(address)
+
+  def listen(self, backlog):
+    self.read_fh.listen(backlog)
+
+  def getsockname(self):
+    return self.read_fh.getsockname()
+
+  def getpeername(self):
+    return self.read_fh.getpeername()
+
+  def settimeout(self, timeout):
+    raise NotImplementedError
+
+  def gettimeout(self, timeout):
+    return None
+
+  def getpeername(self):
+    return self.read_fh.getpeername()
+
+  def setblocking(self, is_blocking):
+    pass   # Always non-blocking via MainLoop, but report as blocking.
+
+  def setsockopt(self, *args):
+    self.read_fh.setsockopt(*args)
+
+  def getsockopt(self, *args):
+    return self.read_fh.getsockopt(*args)
+
+  def accept(self):
     """Non-blocking version of socket self.read_fh.accept().
 
     Return:
@@ -216,8 +304,68 @@ class NonBlockingFile(object):
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
+      # TODO(pts): Document that non-blocking operations must not be called
+      # from the main tasklet.
+      assert not stackless.current.is_main
       self.read_channel.receive()
     return (NonBlockingFile(accepted_socket, accepted_socket), peer_name)
+
+  def recv(self, bufsize, flags=0):
+    """Read at most size bytes."""
+    while True:
+      try:
+        return self.read_fh.recv(bufsize, flags)
+      except socket.error, e:
+        if e.errno != errno.EAGAIN:
+          raise
+      self.read_channel.receive()
+
+  def recvfrom(self, bufsize, flags=0):
+    """Read at most size bytes, return (data, peer_address)."""
+    while True:
+      try:
+        return self.read_fh.recvfrom(bufsize, flags)
+      except socket.error, e:
+        if e.errno != errno.EAGAIN:
+          raise
+      self.read_channel.receive()
+
+  def connect(self):
+    """Non-blocking version of socket self.write_fh.connect()."""
+    while True:
+      try:
+        self.write_fh.connect()
+        return
+      except socket.error, e:
+        if e.errno != errno.EAGAIN:
+          raise
+      # TODO(pts): Document that non-blocking operations must not be called
+      # from the main tasklet.
+      assert not stackless.current.is_main
+      self.write_channel.receive()
+
+  def send(self, data, flags=0):
+    while True:
+      try:
+        return self.write_fh.send(data, flags)
+      except socket.error, e:
+        if e.errno != errno.EAGAIN:
+          raise
+      self.write_channel.receive()
+
+  def sendto(self, *args):
+    while True:
+      try:
+        return self.write_fh.sendto(*args)
+      except socket.error, e:
+        if e.errno != errno.EAGAIN:
+          raise
+      self.write_channel.receive()
+
+  def sendall(self, data, flags=0):
+    assert not self.write_buf, 'unexpected use of write buffer'
+    self.write_buf.append(str(data))
+    self.Flush()
 
 
 def LogInfo(msg):
@@ -375,10 +523,10 @@ def ChatWorker(nbf):
     nbf.Write('Type something!\n')  # TODO(pts): Handle EPIPE.
     while True:
       nbf.Flush()
-      if not nbf.WaitForReadable(3.5):  # 3.5 second
+      if not nbf.WaitForReadableTimeout(3.5):  # 3.5 second
         nbf.Write('Come on, type something, I\'m getting bored.\n')
         continue
-      s = nbf.Read(128)  # TODO(pts): Do line buffering.
+      s = nbf.ReadAtMost(128)  # TODO(pts): Do line buffering.
       if not s:
         break
       nbf.Write('You typed %r, keep typing.\n' % s)
@@ -386,7 +534,7 @@ def ChatWorker(nbf):
     nbf.Write('Bye!\n')
     nbf.Flush()
   finally:
-    nbf.Close()
+    nbf.close()
 
 class WsgiErrorsStream(object):
   @classmethod
@@ -435,7 +583,7 @@ class WsgiInputStream(object):
     del self.half_line[:]
     while self.bytes_remaining > 0:
       n = min(self.bytes_remaining, 4096)
-      got = len(self.nbf.Read(n))
+      got = len(self.nbf.ReadAtMost(n))
       if got:
         self.bytes_remaining -= got
       else:
@@ -492,7 +640,7 @@ class WsgiInputStream(object):
       return data[:size]
 
     # TODO(pts): Can we return less than size bytes? (WSGI doesn't say.)
-    data = self.nbf.Read(min(size, self.bytes_remaining))
+    data = self.nbf.ReadAtMost(min(size, self.bytes_remaining))
     if data:
       self.bytes_remaining -= len(data)
     else:
@@ -515,7 +663,7 @@ class WsgiInputStream(object):
           return data
         else:
           return ''
-      data = nbf.Read(n)
+      data = nbf.ReadAtMost(n)
       if not data:
         self.bytes_remaining = 0
         if half_line:
@@ -673,7 +821,7 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
             return
         # TODO(pts): Handle read errors (such as ECONNRESET etc.).
         # TODO(pts): Better buffering than += (do we need that?)
-        req_new = nbf.Read(4096)
+        req_new = nbf.ReadAtMost(4096)
         if not req_new:
           # The HTTP client has closed the connection before sending the headers.
           return
@@ -846,18 +994,18 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
         nbf.Write('\r\n')
         nbf.Flush()
         if not do_keep_alive:
-          nbf.Close()
+          nbf.close()
         for data in items:  # Run the generator function through.
           if input.bytes_remaining:  # TODO(pts): Check only once.
             input.ReadAndDiscardRemaining()
         if input.bytes_remaining:
           input.ReadAndDiscardRemaining()
   finally:
-    nbf.Close()
+    nbf.close()
     LogDebug('connection closed nbf=%x' % id(nbf))
 
 
-def WsgiListener(nbf, wsgi_application):
+def WsgiListener(nbs, wsgi_application):
   env = {}
   env['wsgi.version']      = (1, 0)
   env['wsgi.multithread']  = True
@@ -865,7 +1013,7 @@ def WsgiListener(nbf, wsgi_application):
   env['wsgi.run_once']     = False
   env['wsgi.url_scheme']   = 'http'  # could be 'https'
   env['HTTPS']             = 'off'  # could be 'on'; Apache sets this
-  server_ipaddr, server_port = nbf.read_fh.getsockname()
+  server_ipaddr, server_port = nbs.getsockname()
   env['SERVER_PORT'] = str(server_port)
   env['SERVER_SOFTWARE'] = 'pts-stackless-wsgi'
   if server_ipaddr:
@@ -877,14 +1025,14 @@ def WsgiListener(nbf, wsgi_application):
 
   try:
     while True:
-      accepted_nbf, peer_name = nbf.Accept()
+      accepted_nbs, peer_name = nbs.accept()
       date = GetHttpDate(time.time())
       if VERBOSE:
         LogDebug('connection accepted from=%r nbf=%x' %
-                 (peer_name, id(accepted_nbf)))
-      stackless.tasklet(WsgiWorker)(accepted_nbf, wsgi_application, env, date)
+                 (peer_name, id(accepted_nbs)))
+      stackless.tasklet(WsgiWorker)(accepted_nbs, wsgi_application, env, date)
   finally:
-    nbf.Close()
+    nbf.close()
 
 
 if __name__ == '__main__':
@@ -895,14 +1043,14 @@ if __name__ == '__main__':
     psyco.full()
   except ImportError:
     pass
-  sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-  sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-  sock.bind(('127.0.0.1', 6666))
+  listener_nbs = NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
+  listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  listener_nbs.bind(('127.0.0.1', 6666))
   # Reducing this has a strong negative effect on ApacheBench worst-case
   # connection times, as measured with:
   # ab -n 100000 -c 50 http://127.0.0.1:6666/ >ab.stackless3.txt
   # It increases the maximum Connect time from 8 to 9200 milliseconds.
-  sock.listen(100)
+  listener_nbs.listen(100)
 
   def SimpleWsgiApp(env, start_response):
     """Simplest possible application object"""
@@ -923,9 +1071,8 @@ if __name__ == '__main__':
               '<form method="post"><input name=foo><input name=bar>'
               '<input type=submit></form>\n']
 
-  LogInfo('listening on %r' % (sock.getsockname(),))
-  listener_nbf = NonBlockingFile(sock)
-  stackless.tasklet(WsgiListener)(listener_nbf, SimpleWsgiApp)
+  LogInfo('listening on %r' % (listener_nbs.getsockname(),))
+  stackless.tasklet(WsgiListener)(listener_nbs, SimpleWsgiApp)
   std_nbf = NonBlockingFile(sys.stdin, sys.stdout)
   stackless.tasklet(ChatWorker)(std_nbf)  # Don't run it right now.
   MainLoop.GetCurrent().Run()
