@@ -1,4 +1,15 @@
-"""WSGI server library for the Syncless server framework."""
+"""WSGI server library for the Syncless server framework.
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+"""
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
@@ -426,15 +437,16 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
             nbf.Write('%s: %s\r\n' % (key_capitalized, value))
         # Don't flush yet.
 
-      # TODO(pts): Join tuple or list response for automatic content-length
-      # generation. (Don't generate it from iterator.)
-
       # TODO(pts): Handle application-level exceptions here.
       items = wsgi_application(env, StartResponse)
       date = None
-      if isinstance(items, list) or isinstance(items, tuple):
+      if (isinstance(items, list) or isinstance(items, tuple) or
+          isinstance(items, str)):
         if is_not_head:
-          data = ''.join(map(str, items))
+          if isinstance(items, str):
+            data = items
+          else:
+            data = ''.join(map(str, items))
         else:
           data = ''
         items = None
