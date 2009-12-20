@@ -32,6 +32,7 @@
 #            on the same fd.
 # TODO(pts): Implement broadcasting chatbot.
 # TODO(pts): Close connection on 413 Request Entity Too Large.
+# TODO(pts): Prove that there is no memory leak over a long running time.
 
 import errno
 import fcntl
@@ -67,7 +68,13 @@ def SetFdBlocking(fd, is_blocking):
 
 
 class NonBlockingFile(object):
-  def __init__(self, read_fh, write_fh, new_nbfs):
+  __slots__ = ['write_buf', 'read_fh', 'write_fh', 'read_fd', 'write_fd',
+               'new_nbfs', 'cooperative_channel',
+               'read_channel', 'write_channel']
+
+  def __init__(self, read_fh, write_fh=()):
+    if write_fh is ():
+      write_fh = read_fh
     self.write_buf = []
     self.read_fh = read_fh
     self.write_fh = write_fh
@@ -75,13 +82,14 @@ class NonBlockingFile(object):
     assert self.read_fd >= 0
     self.write_fd = write_fh.fileno()
     assert self.write_fd >= 0
-    if not isinstance(new_nbfs, list):
-      raise TypeError
-    self.new_nbfs = new_nbfs
+    main_loop = MainLoop.GetCurrent()
+    self.new_nbfs = main_loop.new_nbfs
+    self.cooperative_channel = main_loop.cooperative_channel
+    main_loop = None
     self.read_channel = stackless.channel()
-    self.read_channel.preference = 1  # Prefer the sender (main task).
+    self.read_channel.preference = 1  # Prefer the sender (main tasklet).
     self.write_channel = stackless.channel()
-    self.write_channel.preference = 1  # Prefer the sender (main task).
+    self.write_channel.preference = 1  # Prefer the sender (main tasklet).
     SetFdBlocking(self.read_fd, False)
     if self.read_fd != self.write_fd:
       SetFdBlocking(self.write_fd, False)
@@ -167,8 +175,7 @@ class NonBlockingFile(object):
         if e.errno != errno.EAGAIN:
           raise
       self.read_channel.receive()
-    return (NonBlockingFile(accepted_socket, accepted_socket, self.new_nbfs),
-            peer_name)
+    return (NonBlockingFile(accepted_socket, accepted_socket), peer_name)
 
 
 def LogInfo(msg):
@@ -209,58 +216,92 @@ def ExceptHook(*args):
   orig_excepthook(*args)
 sys.excepthook = ExceptHook
 
+MAIN_LOOP_BY_MAIN = {}
+"""Maps stackless.main (per thread) objects to MainLoop objects."""
 
-def MainLoop(new_nbfs):
-  nbfs = []
-  wait_read = []
-  wait_write = []
-  mainc = 0
-  while True:
-    mainc += 1
-    stackless.run()  # Until all others are blocked.
-    del wait_read[:]
-    del wait_write[:]
-    if new_nbfs:
-      nbfs.extend(new_nbfs)
-      del new_nbfs[:]
-    need_rebuild_nbfs = False
-    for nbf in nbfs:
-      if nbf.read_fd < 0 and nbf.write_fd < 0:
-        need_rebuild_nbfs = True
-      if nbf.read_channel.balance < 0 and nbf.read_fd >= 0:
-        wait_read.append(nbf.read_fd)
-      if nbf.write_channel.balance < 0 and nbf.write_fd >= 0:
-        wait_write.append(nbf.write_fd)
-    if need_rebuild_nbfs:
-      nbfs[:] = [nbf for nbf in nbfs
-                 if nbf.read_fd >= 0 and nbf.write_fd >= 0]
-    if not (wait_read or wait_write):
-      LogDebug('no more files open, end of main loop')
-      break
-      
-    # TODO(pts): Use epoll(2) instead of select(2).
-    timeout = None
+class MainLoop(object):
+  __slots__ = ['new_nbfs', 'cooperative_channel']
+
+  def __init__(self):
+    # List of NonBlockingFile objects to be added in the next iteration
+    # within MainLoop.Run().
+    self.new_nbfs = []
+    # If a worker wants to give the CPU to the other workers, it calls
+    # self.cooperative_channel
+    self.cooperative_channel = stackless.channel()
+    self.cooperative_channel.preference = 1  # Prefer the sender (main tasklet).
+
+  @classmethod
+  def GetCurrent(cls):
+    main_loop = MAIN_LOOP_BY_MAIN.get(stackless.main)
+    if not main_loop:
+      main_loop = MAIN_LOOP_BY_MAIN[stackless.main] = MainLoop()
+    return main_loop
+
+  def Run(self):
+    """Run the main loop until there are no tasklets left."""
+    assert stackless.current.is_main
+    new_nbfs = self.new_nbfs
+    cooperative_channel = self.cooperative_channel
+    nbfs = []
+    wait_read = []
+    wait_write = []
+    mainc = 0
     while True:
-      if VERBOSE:
-        LogDebug('select mainc=%d nbfs=%r read=%r write=%r timeout=%r' % (
-            mainc,
-            [(nbf.read_fd, nbf.write_fd) for nbf in nbfs],
-            wait_read, wait_write, timeout))
-      try:
-        got = select.select(wait_read, wait_write, (), timeout)
+      mainc += 1
+      stackless.run()  # Until all others are blocked.
+      del wait_read[:]
+      del wait_write[:]
+      if new_nbfs:
+        nbfs.extend(new_nbfs)
+        del new_nbfs[:]
+      need_rebuild_nbfs = False
+      for nbf in nbfs:
+        if nbf.read_fd < 0 and nbf.write_fd < 0:
+          need_rebuild_nbfs = True
+        if nbf.read_channel.balance < 0 and nbf.read_fd >= 0:
+          wait_read.append(nbf.read_fd)
+        if nbf.write_channel.balance < 0 and nbf.write_fd >= 0:
+          wait_write.append(nbf.write_fd)
+      if need_rebuild_nbfs:
+        nbfs[:] = [nbf for nbf in nbfs
+                   if nbf.read_fd >= 0 and nbf.write_fd >= 0]
+      if not (wait_read or wait_write):
+        LogDebug('no more files open, end of main loop')
         break
-      except select.error, e:
-        if e.errno != errno.EAGAIN:
-          raise
-    if VERBOSE:
-      LogDebug('select ret=%r' % (got,))
-    for nbf in nbfs:
-      # TODO(pts): Allow one tasklet to wait for multiple events.
-      if nbf.write_fd in got[1]:
-        nbf.write_channel.send(None)
-      if nbf.read_fd in got[0]:
-        nbf.read_channel.send(None)
 
+      # TODO(pts): Use epoll(2) or poll(2) instead of select(2).
+      cob = cooperative_channel.balance
+      assert cob <= 0
+      if cob < 0:  # Some cooperative tasklets let others run
+        timeout = 0
+      else:
+        timeout = None
+      while True:
+        if VERBOSE:
+          LogDebug('select mainc=%d nbfs=%r read=%r write=%r timeout=%r' % (
+              mainc,
+              [(nbf.read_fd, nbf.write_fd) for nbf in nbfs],
+              wait_read, wait_write, timeout))
+        try:
+          got = select.select(wait_read, wait_write, (), timeout)
+          break
+        except select.error, e:
+          if e.errno != errno.EAGAIN:
+            raise
+      if VERBOSE:
+        LogDebug('select ret=%r' % (got,))
+      for nbf in nbfs:
+        # TODO(pts): Allow one tasklet to wait for multiple events.
+        if nbf.write_fd in got[1]:
+          nbf.write_channel.send(None)
+        if nbf.read_fd in got[0]:
+          nbf.read_channel.send(None)
+
+      # Restore the balance, let cooperative tasklets continue running.
+      while cob < 0:
+        cooperative_channel.send(None)
+        cob += 1
 
 # ---
 
@@ -524,6 +565,8 @@ def RespondWithBadRequest(date, server_software, nbf, reason):
 def WsgiWorker(nbf, wsgi_application, default_env, date):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
+  if not isinstance(date, str):
+    raise TypeError
   req_buf = ''
   do_keep_alive = True
   server_software = default_env['SERVER_SOFTWARE']
@@ -532,6 +575,15 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
       do_keep_alive = False
       env = dict(default_env)
       env['wsgi.errors'] = WsgiErrorsStream
+      if date is None:  # Reusing a keep-alive socket.
+        items = data = input
+        # For efficiency reasons, we don't check now whether the child has
+        # already closed the connection. If so, we'll be notified next time.
+
+        # Let other tasklets make some progress before we serve our next
+        # request.
+        nbf.cooperative_channel.receive()
+        
       # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
       # req_buf may contain some bytes after the previous request.
       LogDebug('reading HTTP request on nbf=%x' % id(nbf))
@@ -610,7 +662,7 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
           value = line[i + 1:]
         key = line[:i].lower()
         if key == 'connection':
-          do_req_keep_alive = value.lower() == 'keep-alive':
+          do_req_keep_alive = value.lower() == 'keep-alive'
         elif key == 'keep-alive':
           pass  # TODO(pts): Implement keep-alive timeout.
         elif key == 'content-length':
@@ -657,6 +709,9 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
 
       def StartResponse(status, response_headers, exc_info=None):
         """Callback called by wsgi_application."""
+        # Just set it to None, because we don't have to re-raise it since we
+        # haven't sent any headers yet.
+        exc_info = None
         if nbf.write_buf:  # StartResponse called again by an error handler.
           del nbf.write_buf[:]
           res_content_length = None
@@ -688,6 +743,7 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
 
       # TODO(pts): Handle application-level exceptions here.
       items = wsgi_application(env, StartResponse)
+      date = None
       if isinstance(items, list) or isinstance(items, tuple):
         if is_not_head:
           data = ''.join(map(str, items))
@@ -729,10 +785,6 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
             input.ReadAndDiscardRemaining()
         if input.bytes_remaining:
           input.ReadAndDiscardRemaining()
-
-      items = data = input = date = None
-      # !! TODO(pts): do cooperative scheduling with stackless if do_keep_alive
-      # TODO(pts): Close the connection if the child has already closed.
   finally:
     nbf.Close()
     LogDebug('connection closed nbf=%x' % id(nbf))
@@ -797,16 +849,17 @@ if __name__ == '__main__':
       return ['Posted/put %s.' % env['wsgi.input'].read(10)]
     elif env['PATH_INFO'] == '/hello':
       return ['Hello, <i>World</i> @ %s!\n' % time.time()]
+    elif env['PATH_INFO'] == '/foobar':
+      return iter(['foo', 'bar'])
     else:
       return ['<a href="/hello">hello</a>\n',
               '<form method="post"><input name=foo><input name=bar>'
               '<input type=submit></form>\n']
 
   LogInfo('listening on %r' % (sock.getsockname(),))
-  new_nbfs = []
-  listener_nbf = NonBlockingFile(sock, sock, new_nbfs)
+  listener_nbf = NonBlockingFile(sock)
   stackless.tasklet(WsgiListener)(listener_nbf, SimpleWsgiApp)
-  std_nbf = NonBlockingFile(sys.stdin, sys.stdout, new_nbfs)
+  std_nbf = NonBlockingFile(sys.stdin, sys.stdout)
   stackless.tasklet(ChatWorker)(std_nbf)  # Don't run it right now.
-  MainLoop(new_nbfs)
+  MainLoop.GetCurrent().Run()
   assert 0, 'unexpected end of main loop'
