@@ -17,6 +17,7 @@
 # Doc: http://wiki.netbsd.se/kqueue_tutorial
 # Doc: http://stackoverflow.com/questions/554805/stackless-python-network-performance-degrading-over-time
 # Doc: WSGI: http://www.python.org/dev/peps/pep-0333/
+# Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
 #
 # Asynchronous DNS for Python:
 #
@@ -30,6 +31,7 @@
 # TODO(pts): Document that scheduling is not fair if there are multiple readers
 #            on the same fd.
 # TODO(pts): Implement broadcasting chatbot.
+# TODO(pts): Close connection on 413 Request Entity Too Large.
 
 import errno
 import fcntl
@@ -595,7 +597,7 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
         env['QUERY_STRING'] = ''
 
       content_length = None
-      do_req_keep_alive = False
+      do_req_keep_alive = http_version == 'HTTP/1.1'  # False for HTTP/1.0
       for line in req_lines:
         i = line.find(':')
         if i < 0:
