@@ -492,6 +492,11 @@ HTTP_1_1_METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'DELETE',
 
 HTTP_VERSIONS = ('HTTP/1.0', 'HTTP/1.1')
 
+KEEP_ALIVE_RESPONSES = (
+    'Connection: close\r\n',
+    'Connection: Keep-Alive\r\n')
+
+
 def RespondWithBadRequest(nbf, reason):
   msg = 'Bad request: ' + str(reason)
   # TODO(pts): Add Server: and Date:
@@ -506,191 +511,224 @@ def WsgiWorker(nbf, wsgi_application, default_env):
   # http://www.python.org/dev/peps/pep-0333/
   env = dict(default_env)
   env['wsgi.errors'] = WsgiErrorsStream
+  req_buf = ''
+  do_keep_alive = True
   try:
-    # Read HTTP/1.x request.
-    req_buf = ''
-    while True:
-      # TODO(pts): Handle read errors (such as ECONNRESET etc.).
-      # TODO(pts): Better buffering than += (do we need that?)
-      req_buf += nbf.Read(4096)
-      # TODO(pts): Support HTTP/0.9 requests without headers.
-      i = req_buf.find('\n\n')
-      j = req_buf.find('\n\r\n')
-      if i >= 0 and i < j:
-        req_head = req_buf[:i]
-        req_buf = req_buf[i + 2:]
-        break
-      elif j >= 0:
-        req_head = req_buf[:j]
-        req_buf = req_buf[j + 3:]
-        break
-      if len(req_buf) > 32767:
-        # Request too long. Just abort the connection since it's too late to
-        # notify receiver.
-        return
-
-    # TODO(pts): Speed up this splitting?
-    req_lines = req_head.rstrip('\r').replace('\r\n', '\n').split('\n')
-    req_line1_items = req_lines.pop(0).split(' ', 2)
-    if len(req_line1_items) != 3:
-      RespondWithBadRequest(nbf, 'bad line1')
-      return  # Don't reuse the connection.
-    method, suburl, http_version = req_line1_items
-    if http_version not in HTTP_VERSIONS:
-      RespondWithBadRequest(nbf, 'bad HTTP version: %r' % http_version)
-      return  # Don't reuse the connection.
-    # TODO(pts): Support more methods for WebDAV.
-    if method not in HTTP_1_1_METHODS:
-      RespondWithBadRequest(nbf, 'bad method')
-      return  # Don't reuse the connection.
-    if not SUB_URL_RE.match(suburl):
-      # This also fails for HTTP proxy URLS http://...
-      RespondWithBadRequest(nbf, 'bad suburl')
-      return  # Don't reuse the connection.
-    env['REQUEST_METHOD'] = method
-    env['SERVER_PROTOCOL'] = http_version
-    # TODO(pts): What does appengine set here?
-    env['SCRIPT_NAME'] = ''
-    i = suburl.find('?')
-    if i >= 0:
-      env['PATH_INFO'] = suburl[:i]
-      env['QUERY_STRING'] = suburl[i + 1:]
-    else:
-      env['PATH_INFO'] = suburl
-      env['QUERY_STRING'] = ''
-    content_length = None
-    for line in req_lines:
-      i = line.find(':')
-      if i < 0:
-        RespondWithBadRequest(nbf, 'bad header line')
-        return
-      j = line.find(': ', i)
-      if j >= 0:
-        value = line[i + 2:]
-      else:
-        value = line[i + 1:]
-      key = line[:i].lower()
-      if key == 'connection':
-        pass  # TODO(pts): Implement keep-alive.
-      elif key == 'keep-alive':
-        pass  # TODO(pts): Implement HTTP/1.1 keep-alive.
-      elif key == 'content-length':
-        try:
-          content_length = int(value)
-        except ValueError:
-          RespondWithBadRequest(nbf, 'bad content-length')
+    while do_keep_alive:
+      do_keep_alive = False
+      # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
+      # req_buf may contain some bytes after the previous request.
+      LogDebug('reading HTTP request on nbf=%x' % id(nbf))
+      while True:
+        if req_buf:
+          # TODO(pts): Support HTTP/0.9 requests without headers.
+          i = req_buf.find('\n\n')
+          j = req_buf.find('\n\r\n')
+          if i >= 0 and i < j:
+            req_head = req_buf[:i]
+            req_buf = req_buf[i + 2:]
+            break
+          elif j >= 0:
+            req_head = req_buf[:j]
+            req_buf = req_buf[j + 3:]
+            break
+          if len(req_buf) > 32767:
+            # Request too long. Just abort the connection since it's too late to
+            # notify receiver.
+            return
+        # TODO(pts): Handle read errors (such as ECONNRESET etc.).
+        # TODO(pts): Better buffering than += (do we need that?)
+        req_new = nbf.Read(4096)
+        if not req_new:
+          # The HTTP client has closed the connection before sending the headers.
           return
-        env['CONTENT_LENGTH'] = value
-      elif key == 'content-type':
-        env['CONTENT_TYPE'] = value
-      elif not key.startswith('proxy-'):
-        env['HTTP_' + key.upper().replace('-', '_')] = value
-        # TODO(pts): Maybe override SERVER_NAME and SERVER_PORT from HTTP_HOST?
-        # Does Apache do this?
+        # TODO(pts): Ensure that refcount(req_buf) == 1 -- do the string
+        # reference counters increase by slicing?
+        req_buf += req_new  # Fast string append if refcount(req_buf) == 1.
+        req_new = None
 
-    is_not_head = method != 'HEAD'
-    do_generate_content_length = is_not_head
-    assert not nbf.write_buf
-
-    if content_length is None:
-      if method in ('POST', 'PUT'):
-        RespondWithBadRequest(nbf, 'missing content')
-        return
-      env['wsgi.input'] = input = WsgiEmptyInputStream
-    else:
-      if method not in ('POST', 'PUT'):
-        if content_length:
-          RespondWithBadRequest(nbf, 'unexpected content')
-          return
-        content_length = None
-        del env['CONTENT_LENGTH']
-      if content_length:
-        env['wsgi.input'] = input = WsgiInputStream(nbf, content_length)
-        if len(req_buf) > content_length:
-          input.AppendToReadBuffer(req_buf[:content_length])
-          req_buf = req_buf[content_length:]
-        elif req_buf:
-          input.AppendToReadBuffer(req_buf)
-          req_buf = ''
+      # TODO(pts): Speed up this splitting?
+      req_lines = req_head.rstrip('\r').replace('\r\n', '\n').split('\n')
+      req_line1_items = req_lines.pop(0).split(' ', 2)
+      if len(req_line1_items) != 3:
+        RespondWithBadRequest(nbf, 'bad line1')
+        return  # Don't reuse the connection.
+      method, suburl, http_version = req_line1_items
+      if http_version not in HTTP_VERSIONS:
+        RespondWithBadRequest(nbf, 'bad HTTP version: %r' % http_version)
+        return  # Don't reuse the connection.
+      # TODO(pts): Support more methods for WebDAV.
+      if method not in HTTP_1_1_METHODS:
+        RespondWithBadRequest(nbf, 'bad method')
+        return  # Don't reuse the connection.
+      if not SUB_URL_RE.match(suburl):
+        # This also fails for HTTP proxy URLS http://...
+        RespondWithBadRequest(nbf, 'bad suburl')
+        return  # Don't reuse the connection.
+      env['REQUEST_METHOD'] = method
+      env['SERVER_PROTOCOL'] = http_version
+      # TODO(pts): What does appengine set here?
+      env['SCRIPT_NAME'] = ''
+      i = suburl.find('?')
+      if i >= 0:
+        env['PATH_INFO'] = suburl[:i]
+        env['QUERY_STRING'] = suburl[i + 1:]
       else:
-        env['wsgi.input'] = input = WsgiEmptyInputStream
+        env['PATH_INFO'] = suburl
+        env['QUERY_STRING'] = ''
 
-    def StartResponse(status, response_headers, exc_info=None):
-      """Callback called by wsgi_application."""
-      if nbf.write_buf:  # StartResponse called again by an error handler.
-        del nbf.write_buf[:]
-        do_generate_content_length = is_not_head
-
-      # TODO(pts): Send `Server:' header: Server: Apache
-      # TODO(pts): Send `Date:' header: Date: Sun, 20 Dec 2009 12:48:56 GMT
-      nbf.Write('HTTP/1.0 %s\r\n' % status)
-      nbf.Write('Connection: close\r\n')  # TODO(pts): Implement keep-alive.
-      for key, value in response_headers:
-        key_lower = key.lower()
-        if (key not in ('status', 'connection', 'server', 'date') and
-            not key.startswith('proxy-') and
-            # Apache responds with content-type for HEAD requests.
-            (is_not_head or key not in ('content-length',
-                                        'content-transfer-encoding'))):
-          if key == 'content-length':
-            # TODO(pts): Cut or pad the output below at content-length.
-            do_generate_content_length = False
-          key_capitalized = re.sub(
-              HEADER_WORD_LOWER_LETTER_RE,
-              lambda match: match.group(0).upper(), key_lower)
-          # TODO(pts): Eliminate duplicate keys (except for set-cookie).
-          nbf.Write('%s: %s\r\n' % (key_capitalized, value))
-      # Don't flush yet.
-
-    # TODO(pts): Handle application-level exceptions here.
-    items = wsgi_application(env, StartResponse)
-    if do_generate_content_length:
-      i = 0
-      data0 = ''
-      for data in items:
-        if i > 1:
-          nbf.Write(data)
-          nbf.Flush()  # TODO(pts): Handle write errors (everywhere).
-        elif i:  # i == 1
-          nbf.Write('\r\n')
-          nbf.Write(data0)
-          nbf.Write(data)
-          nbf.Flush()
-          data0 = ''
+      content_length = None
+      do_req_keep_alive = False
+      for line in req_lines:
+        i = line.find(':')
+        if i < 0:
+          RespondWithBadRequest(nbf, 'bad header line')
+          return
+        j = line.find(': ', i)
+        if j >= 0:
+          value = line[i + 2:]
         else:
-          #LogDebug('input buffer: %r % (input.half_line, input.lines_rev))
+          value = line[i + 1:]
+        key = line[:i].lower()
+        if key == 'connection':
+          if value.lower() == 'keep-alive':
+            do_req_keep_alive = True
+        elif key == 'keep-alive':
+          pass  # TODO(pts): Implement keep-alive timeout.
+        elif key == 'content-length':
+          try:
+            content_length = int(value)
+          except ValueError:
+            RespondWithBadRequest(nbf, 'bad content-length')
+            return
+          env['CONTENT_LENGTH'] = value
+        elif key == 'content-type':
+          env['CONTENT_TYPE'] = value
+        elif not key.startswith('proxy-'):
+          env['HTTP_' + key.upper().replace('-', '_')] = value
+          # TODO(pts): Maybe override SERVER_NAME and SERVER_PORT from HTTP_HOST?
+          # Does Apache do this?
+
+      if content_length is None:
+        if method in ('POST', 'PUT'):
+          RespondWithBadRequest(nbf, 'missing content')
+          return
+        env['wsgi.input'] = input = WsgiEmptyInputStream
+      else:
+        if method not in ('POST', 'PUT'):
+          if content_length:
+            RespondWithBadRequest(nbf, 'unexpected content')
+            return
+          content_length = None
+          del env['CONTENT_LENGTH']
+        if content_length:
+          env['wsgi.input'] = input = WsgiInputStream(nbf, content_length)
+          if len(req_buf) > content_length:
+            input.AppendToReadBuffer(req_buf[:content_length])
+            req_buf = req_buf[content_length:]
+          elif req_buf:
+            input.AppendToReadBuffer(req_buf)
+            req_buf = ''
+        else:
+          env['wsgi.input'] = input = WsgiEmptyInputStream
+
+      is_not_head = method != 'HEAD'
+      do_generate_content_length = is_not_head
+      res_content_length = None
+      assert not nbf.write_buf
+
+      def StartResponse(status, response_headers, exc_info=None):
+        """Callback called by wsgi_application."""
+        if nbf.write_buf:  # StartResponse called again by an error handler.
+          del nbf.write_buf[:]
+          do_generate_content_length = is_not_head
+          res_content_length = None
+
+        # TODO(pts): Send `Server:' header: Server: Apache
+        # TODO(pts): Send `Date:' header: Date: Sun, 20 Dec 2009 12:48:56 GMT
+        nbf.Write('HTTP/1.0 %s\r\n' % status)
+        for key, value in response_headers:
+          key_lower = key.lower()
+          if (key not in ('status', 'server', 'date', 'connection') and
+              not key.startswith('proxy-') and
+              # Apache responds with content-type for HEAD requests.
+              (is_not_head or key not in ('content-length',
+                                          'content-transfer-encoding'))):
+            if key == 'content-length':
+              # !! TODO(pts): Cut or pad the output below at content-length.
+              do_generate_content_length = False
+              # TODO(pts): Handle parsing error here.
+              res_content_length = int(value)
+            key_capitalized = re.sub(
+                HEADER_WORD_LOWER_LETTER_RE,
+                lambda match: match.group(0).upper(), key_lower)
+            # TODO(pts): Eliminate duplicate keys (except for set-cookie).
+            nbf.Write('%s: %s\r\n' % (key_capitalized, value))
+        # Don't flush yet.
+
+      # TODO(pts): Join tuple or list response for automatic content-length
+      # generation. (Don't generate it from iterator.)
+
+      # TODO(pts): Handle application-level exceptions here.
+      items = wsgi_application(env, StartResponse)
+      if do_generate_content_length:
+        assert res_content_length is None
+        i = 0
+        data0 = ''
+        for data in items:
+          if i > 1:
+            nbf.Write(data)
+            nbf.Flush()  # TODO(pts): Handle write errors (everywhere).
+          elif i:  # i == 1
+            nbf.Write('Connection: close\r\n')
+            nbf.Write('\r\n')
+            nbf.Write(data0)
+            nbf.Write(data)
+            nbf.Flush()
+            data0 = ''
+          else:
+            #LogDebug('input buffer: %r % (input.half_line, input.lines_rev))
+            if input.bytes_remaining:
+              input.ReadAndDiscardRemaining()
+            # Is this buffering contrary to the WSGI specification?
+            data0 = data
+          i += 1
+        if i <= 1:  # Generate Content-Length if there was only a single string.
           if input.bytes_remaining:
             input.ReadAndDiscardRemaining()
-          # Is this buffering contrary to the WSGI specification?
-          data0 = data
-        i += 1
-      if i <= 1:  # Generate Content-Length if there was only a single string.
-        if input.bytes_remaining:
-          input.ReadAndDiscardRemaining()
-        nbf.Write('Content-Length: %d\r\n' % len(data0))
+          nbf.Write('Content-Length: %d\r\n' % len(data0))
+          do_keep_alive = do_req_keep_alive
+          nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
+          nbf.Write('\r\n')
+          nbf.Write(data0)
+          nbf.Flush()
+      elif is_not_head:
+        do_keep_alive = do_req_keep_alive and res_content_length is not None
+        nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
         nbf.Write('\r\n')
-        nbf.Write(data0)
+        for data in items:
+          if input.bytes_remaining:  # TODO(pts): Check only once.
+            input.ReadAndDiscardRemaining()
+          nbf.Write(data)  # TODO(pts): Don't write if HEAD request.
+          nbf.Flush()
+      else:  # HTTP HEAD request.
+        do_keep_alive = do_req_keep_alive
+        nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
+        nbf.Write('\r\n')
         nbf.Flush()
-    elif is_not_head:
-      nbf.Write('\r\n')
-      for data in items:
-        if input.bytes_remaining:  # TODO(pts): Check only once.
-          input.ReadAndDiscardRemaining()
-        nbf.Write(data)  # TODO(pts): Don't write if HEAD request.
-        nbf.Flush()
-    else:
-      nbf.Write('\r\n')
-      nbf.Flush()
-      nbf.Close()
-      for data in items:  # Run the generator function through.
-        if input.bytes_remaining:  # TODO(pts): Check only once.
-          input.ReadAndDiscardRemaining()
+        if not do_keep_alive:
+          nbf.Close()
+        for data in items:  # Run the generator function through.
+          if input.bytes_remaining:  # TODO(pts): Check only once.
+            input.ReadAndDiscardRemaining()
 
-    if input.bytes_remaining:
-      input.ReadAndDiscardRemaining()
+      if input.bytes_remaining:
+        input.ReadAndDiscardRemaining()
+      # !! TODO(pts): do cooperative scheduling with stackless
+      # TODO(pts): Close the connection if the child has already closed.
   finally:
     nbf.Close()
-  LogDebug('connection closed nbf=%x' % id(nbf))
+    LogDebug('connection closed nbf=%x' % id(nbf))
 
 
 def WsgiListener(nbf, wsgi_application):
@@ -715,7 +753,7 @@ def WsgiListener(nbf, wsgi_application):
       accepted_nbf, peer_name = nbf.Accept()
       if VERBOSE:
         LogDebug('connection accepted from=%r nbf=%x' %
-                 (peer_name, id(nbf)))
+                 (peer_name, id(accepted_nbf)))
       stackless.tasklet(WsgiWorker)(accepted_nbf, wsgi_application, env)
   finally:
     nbf.Close()
@@ -751,7 +789,7 @@ if __name__ == '__main__':
     elif env['PATH_INFO'] == '/hello':
       return ['Hello, <i>World</i> @ %s!\n' % time.time()]
     else:
-      return ['<a href="/hello">hello</a>\n'
+      return ['<a href="/hello">hello</a>\n',
               '<form method="post"><input name=foo><input name=bar>'
               '<input type=submit></form>\n']
 
