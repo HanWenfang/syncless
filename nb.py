@@ -610,8 +610,7 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
           value = line[i + 1:]
         key = line[:i].lower()
         if key == 'connection':
-          if value.lower() == 'keep-alive':
-            do_req_keep_alive = True
+          do_req_keep_alive = value.lower() == 'keep-alive':
         elif key == 'keep-alive':
           pass  # TODO(pts): Implement keep-alive timeout.
         elif key == 'content-length':
