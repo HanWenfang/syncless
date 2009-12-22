@@ -281,7 +281,7 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
 
         # Let other tasklets make some progress before we serve our next
         # request.
-        nbf.cooperative_channel.receive()
+        stackless.schedule()
         
       # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
       # req_buf may contain some bytes after the previous request.
@@ -519,5 +519,6 @@ def WsgiListener(nbs, wsgi_application):
         syncless.LogDebug('connection accepted from=%r nbf=%x' %
                  (peer_name, id(accepted_nbs)))
       stackless.tasklet(WsgiWorker)(accepted_nbs, wsgi_application, env, date)
+      accepted_nbs = peer_name = None  # Help the garbage collector.
   finally:
     nbf.close()
