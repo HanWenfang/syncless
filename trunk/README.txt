@@ -35,11 +35,27 @@ How to use
 The original blog announcement of Syncless' precedessor:
 http://ptspts.blogspot.com/2009/12/experimental-http-server-using.html
 
+Using Syncless with web frameworks
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The WSGI-capable HTTP server in Syncless can run any framework with WSGI
+support. Examples:
+
+* pure WSGI application, without a framework: see SimpleWsgiApp in demo.py
+* (web.py): see demo_syncless_web_py.py
+* CherrpyPy: see demo_syncless_cherrypy.py
+
+Please note that Syncless is not a web framework.
+
+Please note that Syncless is not ready yet for production (e.g. TCP
+communication error handling and robust recovery from exceptions are not
+written). Feel free to try it, however, with your web application (using any
+framework), and report problems.
+
 Planned features
 ~~~~~~~~~~~~~~~~
+* epoll() support on Linux
+* TCP communication error handling in the WSGI server
 * HTTP client library (making urllib non-blocking?)
-* web.py integration
-* CherryPy integration
 * Twisted integration
 * productionization
 

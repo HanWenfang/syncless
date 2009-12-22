@@ -15,8 +15,10 @@ __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import re
 import sys
+import socket
 import stackless
 import time
+import types
 
 import syncless
 
@@ -35,8 +37,11 @@ class WsgiErrorsStream(object):
     for msg in msgs:
       cls.write(msg)
 
+# TODO(pts): Replace the read buffering here with a faster `file' object in
+# non-blocking mode. We may have to use an extra file descriptor for that,
+# because of closing issues (_socket.socket.makefile() does this).
 class WsgiInputStream(object):
-  """POST data input stream sent to the WSGI application as env['input'].
+  """POST data input stream sent to the WSGI application as env['wsgi.input'].
 
   The methods read, readline, readlines and __iter__ correspond to the WSGI
   specification.
@@ -61,6 +66,15 @@ class WsgiInputStream(object):
     self.lines_rev = []
     # Buffers strings read without a newline (coming after self.lines_rev).
     self.half_line = []
+
+  def SetContentLength(self, content_length):
+    assert self.bytes_remaining == 0
+    del self.lines_rev[:]
+    del self.half_line[:]
+    if type(content_length) not in (int, long) or content_length < 0:
+      raise TypeError
+    self.bytes_remaining = content_length
+    self.bytes_read = 0
 
   def ReadAndDiscardRemaining(self):
     del self.lines_rev[:]
@@ -198,7 +212,8 @@ class WsgiInputStream(object):
 
 
 class WsgiEmptyInputStream(object):
-  """Empty POST data input stream sent to the WSGI application as env['input'].
+  """Empty POST data input stream sent to the WSGI application as
+  env['wsgi.input'].
 
   The methods read, readline, readlines and __iter__ correspond to the WSGI
   specification.
@@ -269,6 +284,7 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
   req_buf = ''
   do_keep_alive = True
   server_software = default_env['SERVER_SOFTWARE']
+  full_input = WsgiInputStream(nbf, content_length=0)
   try:
     while do_keep_alive:
       do_keep_alive = False
@@ -392,7 +408,8 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
           content_length = None
           del env['CONTENT_LENGTH']
         if content_length:
-          env['wsgi.input'] = input = WsgiInputStream(nbf, content_length)
+          full_input.SetContentLength(content_length)
+          env['wsgi.input'] = input = full_input
           if len(req_buf) > content_length:
             input.AppendToReadBuffer(req_buf[:content_length])
             req_buf = req_buf[content_length:]
@@ -494,6 +511,8 @@ def WsgiListener(nbs, wsgi_application):
   """HTTP server serving WSGI, listing on nbs, to be run in a tasklet."""
   if not isinstance(nbs, syncless.NonBlockingSocket):
     raise TypeError
+  if not callable(wsgi_application):
+    raise TypeError
   env = {}
   env['wsgi.version']      = (1, 0)
   env['wsgi.multithread']  = True
@@ -522,3 +541,68 @@ def WsgiListener(nbs, wsgi_application):
       accepted_nbs = peer_name = None  # Help the garbage collector.
   finally:
     nbf.close()
+
+def CanBeCherryPyApp(app):
+  # Since CherryPy applications can be of any type, the only way for us to
+  # detect such an application is to look for an exposed method (or class?).
+  if not isinstance(app, object) and not isinstance(app, types.InstanceType):
+    return False
+  for name in dir(app):
+    value = getattr(app, name)
+    if callable(value) and getattr(value, 'exposed', False):
+      return True
+  return False
+
+
+def RunHttpServer(app, server_address=None):
+  """Listen as a HTTP server, and run the specified application forever.
+
+  Args:
+    app: A WSGI application function, or a (web.py) web.application object.
+    server_address: TCP address to bind to, e.g. ('', 8080), or None to use
+      the default.
+  """
+  try:
+    import psyco
+    psyco.full()  # TODO(pts): Measure the speed in stackless Python.
+  except ImportError:
+    pass
+  if len(sys.argv) > 1:  # TODO(pts): Use getopt.
+    syncless.VERBOSE = True
+  if (not callable(app) and
+      hasattr(app, 'handle') and hasattr(app, 'request') and
+      hasattr(app, 'run') and hasattr(app, 'wsgifunc') and
+      hasattr(app, 'cgirun') and hasattr(app, 'handle')):
+    syncless.LogInfo('running (web.py) web.application')
+    wsgi_application = app.wsgifunc()
+    if server_address is None:
+      server_address = ('0.0.0.0', 8080)  # (web.py) default
+  elif CanBeCherryPyApp(app):
+    syncless.LogInfo('running CherryPy application')
+    import cherrypy
+    # See http://www.cherrypy.org/wiki/WSGI
+    wsgi_application = cherrypy.tree.mount(app, '/')
+    if server_address is None:
+      server_address = ('127.0.01', 8080)  # CherryPy default
+    # TODO(pts): Use CherryPy config files.
+  elif callable(app):
+    syncless.LogInfo('running WSGI application')
+    wsgi_application = app
+    if server_address is None:
+      server_address = ('127.0.0.1', 6666)
+  else:
+    print type(app)
+    assert 0, 'unsupported application type for %r' % (app,)
+    
+  listener_nbs = syncless.NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
+  listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  listener_nbs.bind(server_address)
+  # Reducing this has a strong negative effect on ApacheBench worst-case
+  # connection times, as measured with:
+  # ab -n 100000 -c 50 http://127.0.0.1:6666/ >ab.stackless3.txt
+  # It increases the maximum Connect time from 8 to 9200 milliseconds.
+  listener_nbs.listen(100)
+  syncless.LogInfo('listening on %r' % (listener_nbs.getsockname(),))
+  # From http://webpy.org/install (using with mod_wsgi).
+  stackless.tasklet(WsgiListener)(listener_nbs, wsgi_application)
+  syncless.RunMainLoop()
