@@ -28,6 +28,9 @@ Asynchronous DNS for Python:
 * adns-python: http://code.google.com/p/adns/python
 *              http://michael.susens-schurter.com/blog/2007/09/18/a-lesson-on-python-dns-and-threads/comment-page-1/
 
+Info: In interactive stackless, repeated invocations of stackless.current may
+  return different objects.
+
 TODO(pts): Move the main loop to another tasklet (?) so async operations can
            work even at initialization.
 TODO(pts): Implement an async DNS resolver HTTP interface.
@@ -83,13 +86,22 @@ class NonBlockingFile(object):
   """A non-blocking file using MainLoop."""
 
   __slots__ = ['write_buf', 'read_fh', 'write_fh', 'read_fd', 'write_fd',
-               'new_nbfs', 'cooperative_channel',
+               'new_nbfs',
                'read_channel', 'read_wake_up_at',
                'write_channel', 'write_wake_up_at']
 
   def __init__(self, read_fh, write_fh=()):
     if write_fh is ():
       write_fh = read_fh
+
+    if isinstance(read_fh, int):
+      if write_fh == read_fh:
+        read_fh = write_fh = os.fdopen(read_fh, 'r+')
+      else:
+        read_fh = os.fdopen(read_fh, 'r')
+    if isinstance(write_fh, int):
+      write_fh = os.fdopen(write_fh, 'w')
+    
     self.write_buf = []
     self.read_fh = read_fh
     self.write_fh = write_fh
@@ -97,9 +109,8 @@ class NonBlockingFile(object):
     assert self.read_fd >= 0
     self.write_fd = write_fh.fileno()
     assert self.write_fd >= 0
-    main_loop = MainLoop.GetCurrent()
+    main_loop = CurrentMainLoop()
     self.new_nbfs = main_loop.new_nbfs
-    self.cooperative_channel = main_loop.cooperative_channel
     main_loop = None
     self.read_channel = stackless.channel()
     self.read_channel.preference = 1  # Prefer the sender (main tasklet).
@@ -314,9 +325,6 @@ class NonBlockingSocket(NonBlockingFile):
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
-      # TODO(pts): Document that non-blocking operations must not be called
-      # from the main tasklet.
-      assert not stackless.current.is_main
       self.read_channel.receive()
     return (NonBlockingFile(accepted_socket, accepted_socket), peer_name)
 
@@ -349,9 +357,6 @@ class NonBlockingSocket(NonBlockingFile):
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
-      # TODO(pts): Document that non-blocking operations must not be called
-      # from the main tasklet.
-      assert not stackless.current.is_main
       self.write_channel.receive()
 
   def send(self, data, flags=0):
@@ -420,36 +425,45 @@ MAIN_LOOP_BY_MAIN = {}
 """Maps stackless.main (per thread) objects to MainLoop objects."""
 
 class MainLoop(object):
-  __slots__ = ['new_nbfs', 'cooperative_channel']
+  __slots__ = ['new_nbfs', 'nbfs', 'run_tasklet', 'reinsert_tasklet']
 
   def __init__(self):
     # List of NonBlockingFile objects to be added in the next iteration
     # within MainLoop.Run().
     self.new_nbfs = []
-    # If a worker wants to give the CPU to the other workers, it calls
-    # self.cooperative_channel
-    self.cooperative_channel = stackless.channel()
-    self.cooperative_channel.preference = 1  # Prefer the sender (main tasklet).
+    # TODO(pts): Don't we have a circular reference here?
+    self.nbfs = []
+    self.run_tasklet = stackless.tasklet(self.Run)()
+    # Helper tasklet to move self.run_tasklet in the chain.
+    self.reinsert_tasklet = stackless.tasklet(self.DoReinsert)()
 
-  @classmethod
-  def GetCurrent(cls):
-    main_loop = MAIN_LOOP_BY_MAIN.get(stackless.main)
-    if not main_loop:
-      main_loop = MAIN_LOOP_BY_MAIN[stackless.main] = MainLoop()
-    return main_loop
+  def DoReinsert(self):
+    while True:
+      # remove() is needed so that insert() will insert right before us.
+      self.run_tasklet.remove()
+      self.run_tasklet.insert()
+      stackless.schedule_remove()
 
   def Run(self):
     """Run the main loop until there are no tasklets left."""
-    assert stackless.current.is_main
+
+    # Kill the old main loop tasklet if necessary.
+    old_run_tasklet = self.run_tasklet
+    self.run_tasklet = stackless.current
+    if old_run_tasklet != self.run_tasklet:
+      assert old_run_tasklet.alive
+      assert not old_run_tasklet.blocked
+      old_run_tasklet.remove()  # Give control back to us after kill below.
+      old_run_tasklet.kill()
+    old_run_tasklet = None
+
     new_nbfs = self.new_nbfs
-    cooperative_channel = self.cooperative_channel
-    nbfs = []
-    wait_read = []
+    # Reuse self.nbfs populated by old_run_tasklet.
+    nbfs = self.nbfs
+    wait_read = [] 
     wait_write = []
-    mainc = 0
+    mainc = 0  # TODO(pts): Maybe move this to self.?
     while True:
-      mainc += 1
-      stackless.run()  # Until all others are blocked.
       del wait_read[:]
       del wait_write[:]
       if new_nbfs:
@@ -469,64 +483,88 @@ class MainLoop(object):
         if nbf.write_channel.balance < 0 and nbf.write_fd >= 0:
           wait_write.append(nbf.write_fd)
           earliest_wake_up_at = min(earliest_wake_up_at, nbf.write_wake_up_at)
-      if need_rebuild_nbfs:
+      if need_rebuild_nbfs:  # TODO(pts): More efficient remove_if.
         nbfs[:] = [nbf for nbf in nbfs
                    if nbf.read_fd >= 0 and nbf.write_fd >= 0]
-      if not (wait_read or wait_write):
-        LogDebug('no more files open, end of main loop')
-        break
-
-      # TODO(pts): Use epoll(2) or poll(2) instead of select(2).
-      cob = cooperative_channel.balance
-      assert cob <= 0
-      if cob < 0:  # Some cooperative tasklets let others run
-        timeout = 0
-      elif earliest_wake_up_at == FLOAT_INF:
-        timeout = None
-      else:
-        timeout = max(0, earliest_wake_up_at - time.time())
-      while True:
+      if wait_read or wait_write:
+        # TODO(pts): Use epoll(2) or poll(2) instead of select(2).
+        # TODO(pts): Do a wake up without a file descriptor on timeout.
+        if stackless.runcount > 1:
+          # Don't wait if we have some cooperative tasklets.
+          timeout = 0
+        elif earliest_wake_up_at == FLOAT_INF:
+          timeout = None
+        else:
+          timeout = max(0, earliest_wake_up_at - time.time())
+        while True:
+          if VERBOSE:
+            LogDebug('select mainc=%d nbfs=%r read=%r write=%r timeout=%r' % (
+                mainc,
+                [(nbf.read_fd, nbf.write_fd) for nbf in nbfs],
+                wait_read, wait_write, timeout))
+          try:
+            got = select.select(wait_read, wait_write, (), timeout)
+            break
+          except select.error, e:
+            if e.errno != errno.EAGAIN:
+              raise
         if VERBOSE:
-          LogDebug('select mainc=%d nbfs=%r read=%r write=%r timeout=%r' % (
-              mainc,
-              [(nbf.read_fd, nbf.write_fd) for nbf in nbfs],
-              wait_read, wait_write, timeout))
-        try:
-          got = select.select(wait_read, wait_write, (), timeout)
-          break
-        except select.error, e:
-          if e.errno != errno.EAGAIN:
-            raise
-      if VERBOSE:
-        LogDebug('select ret=%r' % (got,))
-      if timeout is None:
-        for nbf in nbfs:
-          # TODO(pts): Allow one tasklet to wait for multiple events.
-          if nbf.write_fd in got[1]:
-            nbf.write_channel.send(True)
-          if nbf.read_fd in got[0]:
-            nbf.read_channel.send(True)
+          LogDebug('select ret=%r' % (got,))
+        self.reinsert_tasklet.remove()
+        # Insert self.reinsert_tasklet just before us to the queue.
+        # The .send(...) calls below will insert woken-up tasklet between
+        # self.reinsert_tasklet and us (self.run_tasklet).
+        self.reinsert_tasklet.insert()
+        if timeout is None:
+          assert got[0] or got[1]
+          for nbf in nbfs:
+            # TODO(pts): Allow one tasklet to wait for multiple events.
+            if nbf.write_fd in got[1]:
+              nbf.write_channel.send(True)
+            if nbf.read_fd in got[0]:
+              nbf.read_channel.send(True)
+        else:
+          now = time.time()
+          for nbf in nbfs:
+            if nbf.write_fd in got[1]:
+              nbf.write_channel.send(True)
+            elif nbf.write_wake_up_at <= now:
+              # TODO(pts): Sometimes this wakes up 0.001 second earlier -- then
+              # we don't write to the channel.
+              nbf.write_wake_up_at = FLOAT_INF
+              nbf.write_channel.send(False)
+            if nbf.read_fd in got[0]:
+              nbf.read_channel.send(True)
+            elif nbf.read_wake_up_at <= now:
+              nbf.read_wake_up_at = FLOAT_INF
+              nbf.read_channel.send(False)
+        mainc += 1
+        if self.reinsert_tasklet.next == stackless.current:
+          # It would be OK just to call self.reinsert_tasklet.run() here
+          # (just like in the else branch), but this one seems to be faster.
+          self.reinsert_tasklet.remove()
+          stackless.schedule()
+        else:
+          # Run the tasklets inserted above.
+          self.reinsert_tasklet.run()
+      elif stackless.runcount <= 1:
+        LogDebug('no more files open, nothing to do, end of main loop')
+        break
       else:
-        now = time.time()
-        for nbf in nbfs:
-          if nbf.write_fd in got[1]:
-            nbf.write_channel.send(True)
-          elif nbf.write_wake_up_at <= now:  # TODO(pts): Better rounding.
-            # TODO(pts): Sometimes this wakes up 0.001 second earlier -- then
-            # we don't write to the channel.
-            nbf.write_wake_up_at = FLOAT_INF
-            nbf.write_channel.send(False)
-          if nbf.read_fd in got[0]:
-            nbf.read_channel.send(True)
-          elif nbf.read_wake_up_at <= now:  # TODO(pts): Better rounding.
-            nbf.read_wake_up_at = FLOAT_INF
-            nbf.read_channel.send(False)
+        mainc += 1
+        stackless.schedule()
 
-      # Restore the balance, let cooperative tasklets continue running.
-      while cob < 0:
-        cooperative_channel.send(None)
-        cob += 1
+
+def HasCurrentMainLoop():
+  return stackless.main in MAIN_LOOP_BY_MAIN
+
+def CurrentMainLoop():
+  # stackless.main is used as a thread ID.
+  main_loop = MAIN_LOOP_BY_MAIN.get(stackless.main)
+  if not main_loop:
+    main_loop = MAIN_LOOP_BY_MAIN[stackless.main] = MainLoop()
+  return main_loop
 
 
 def RunMainLoop():
-  MainLoop.GetCurrent().Run()
+  CurrentMainLoop().Run()
