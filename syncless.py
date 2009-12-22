@@ -101,7 +101,13 @@ class NonBlockingFile(object):
         read_fh = os.fdopen(read_fh, 'r')
     if isinstance(write_fh, int):
       write_fh = os.fdopen(write_fh, 'w')
-    
+
+    # Get access to the real socket object, so we can reliably close it.
+    if isinstance(read_fh, socket.socket):
+      read_fh = read_fh._sock
+    if isinstance(write_fh, socket.socket):
+      write_fh = write_fh._sock
+
     self.write_buf = []
     self.read_fh = read_fh
     self.write_fh = write_fh
