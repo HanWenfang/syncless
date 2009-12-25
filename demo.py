@@ -69,7 +69,7 @@ def SimpleWsgiApp(env, start_response):
     try:
       result = syncless_dns.resolver.query(hostname, 'A')
     except syncless_dns.DNSException, e:
-      # Example e.__class__.__name__: 'NXDOMAIN'
+      # Example e.__class__.__name__: 'NXDOMAIN', 'Timeout' (after >20 sec).
       return 'Resolve error: %s' % e.__class__.__name__
     return '\n<br>'.join(map(cgi.escape, map(repr, result)))
   else:
@@ -92,9 +92,12 @@ if __name__ == '__main__':
   except ImportError:
     pass
   if syncless_dns:
+    #for rdata in syncless_dns.resolver.query('asd', 'A'):
+    #  syncless.LogInfo(repr(rdata))
+    #syncless.LogInfo('Query1 done.')
     for rdata in syncless_dns.resolver.query('en.wikipedia.org', 'A'):
       syncless.LogInfo(repr(rdata))
-    syncless.LogInfo('Query done.')
+    syncless.LogInfo('Query2 done.')
   listener_nbs = syncless.NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
   listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   listener_nbs.bind(('127.0.0.1', 6666))

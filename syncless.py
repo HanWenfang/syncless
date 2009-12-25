@@ -31,6 +31,7 @@ Asynchronous DNS for Python:
 Info: In interactive stackless, repeated invocations of stackless.current may
   return different objects.
 
+TODO(pts): Specify TCP socket timeout. Verify it.
 TODO(pts): Move the main loop to another tasklet (?) so async operations can
            work even at initialization.
 TODO(pts): Implement an async DNS resolver HTTP interface.
@@ -81,14 +82,23 @@ def SetFdBlocking(fd, is_blocking):
     fcntl.fcntl(fd, fcntl.F_SETFL, value)
   return bool(old & os.O_NONBLOCK)
 
+class WaitSlot(object):
+  """A file descriptor a MainLoop can wait for and wake up tasklets."""
+
+  __slots__ = ['mode', # 0 for read, 1 for write
+               'fd', 'channel', 'wake_up_at']
+
+  def fileno(self):
+    return self.fd
+
 
 class NonBlockingFile(object):
   """A non-blocking file using MainLoop."""
 
-  __slots__ = ['write_buf', 'read_fh', 'write_fh', 'read_fd', 'write_fd',
-               'new_nbfs',
-               'read_channel', 'read_wake_up_at',
-               'write_channel', 'write_wake_up_at']
+  __slots__ = ['write_buf', 'read_fh', 'write_fh', 'read_slot', 'write_slot',
+               'closed_wait_slots',
+               'read_wake_up_slots', 'read_slots',
+               'write_wake_up_slots', 'write_slots']
 
   def __init__(self, read_fh, write_fh=()):
     if write_fh is ():
@@ -111,28 +121,36 @@ class NonBlockingFile(object):
     self.write_buf = []
     self.read_fh = read_fh
     self.write_fh = write_fh
-    self.read_fd = read_fh.fileno()
-    assert self.read_fd >= 0
-    self.write_fd = write_fh.fileno()
-    assert self.write_fd >= 0
+
+    read_slot = self.read_slot = WaitSlot()
+    read_slot.mode = 0
+    read_slot.fd = read_fh.fileno()
+    assert read_slot.fd >= 0
+    read_slot.channel = stackless.channel()
+    read_slot.channel.preference = 1  # Prefer the sender (main tasklet).
+    read_slot.wake_up_at = FLOAT_INF
+
+    write_slot = self.write_slot = WaitSlot()
+    write_slot.mode = 1
+    write_slot.fd = write_fh.fileno()
+    assert write_slot.fd >= 0
+    write_slot.channel = stackless.channel()
+    write_slot.channel.preference = 1  # Prefer the sender (main tasklet).
+    write_slot.wake_up_at = FLOAT_INF
+
     main_loop = CurrentMainLoop()
-    self.new_nbfs = main_loop.new_nbfs
+    self.closed_wait_slots = main_loop.closed_wait_slots
+    self.read_wake_up_slots = main_loop.read_wake_up_slots
+    self.write_wake_up_slots = main_loop.write_wake_up_slots
+    self.read_slots = main_loop.read_slots
+    self.write_slots = main_loop.write_slots
     main_loop = None
-    self.read_channel = stackless.channel()
-    self.read_channel.preference = 1  # Prefer the sender (main tasklet).
-    self.write_channel = stackless.channel()
-    self.write_channel.preference = 1  # Prefer the sender (main tasklet).
+
     # None or a float timestamp when to wake up even if there is nothing to
     # read or write.
-    self.read_wake_up_at = FLOAT_INF
-    self.write_wake_up_at = FLOAT_INF
-    SetFdBlocking(self.read_fd, False)
-    if self.read_fd != self.write_fd:
-      SetFdBlocking(self.write_fd, False)
-    # Create a circular reference which lasts until the MainLoop resolves it.
-    # This should be the last operation in __init__ in case others raise an
-    # exception.
-    self.new_nbfs.append(self)
+    SetFdBlocking(read_slot.fd, False)
+    if read_slot.fd != write_slot.fd:
+      SetFdBlocking(write_slot.fd, False)
 
   def Write(self, data):
     """Add data to self.write_buf."""
@@ -146,7 +164,7 @@ class NonBlockingFile(object):
       del self.write_buf[:]
       if data:
         try:
-          written = os.write(self.write_fd, data)
+          written = os.write(self.write_slot.fd, data)
         except OSError, e:
           if e.errno == errno.EAGAIN:
             written = 0
@@ -156,66 +174,69 @@ class NonBlockingFile(object):
           break
         elif written == 0:  # Nothing flushed.
           self.write_buf.append(data)
-          self.write_channel.receive()
+          self.write_slots.add(self.write_slot)
+          self.write_slot.channel.receive()
         else:  # Partially flushed.
           # TODO(pts): Do less string copying to avoid O(n^2) complexity.
           data = data[written:]
           self.write_buf.append(data)
-          self.write_channel.receive()
+          self.write_slots.add(self.write_slot)
+          self.write_slot.channel.receive()
 
   def WaitForReadableTimeout(self, timeout=None, do_check_immediately=False):
     """Return a bool indicating if the channel is now readable."""
     if do_check_immediately:
       poll = select.poll()  # TODO(pts): Pool the poll objects?
-      poll.register(self.read_fd, select.POLLIN)
+      poll.register(self.read_slot.fd, select.POLLIN)
       if poll.poll(0):
         return
-    if timeout is None or timeout == FLOAT_INF:
-      self.read_channel.receive()
-    else:
-      self.read_wake_up_at = time.time() + timeout
-      return self.read_channel.receive()
+    if not (timeout is None or timeout == FLOAT_INF):
+      self.read_slot.wake_up_at = time.time() + timeout
+      self.read_wake_up_slots.append(self.read_slot)
+    self.read_slots.add(self.read_slot)
+    return self.read_slot.channel.receive()
 
   def WaitForWritableTimeout(self, timeout=None, do_check_immediately=False):
     """Return a bool indicating if the channel is now writable."""
     if do_check_immediately:
       poll = select.poll()
-      poll.register(self.write_fd, select.POLLOUT)
+      poll.register(self.write_slot.fd, select.POLLOUT)
       if poll.poll(0):
         return
-    if timeout is None or timeout == FLOAT_INF:
-      self.write_channel.receive()
-    else:
-      self.write_wake_up_at = time.time() + timeout
-      return self.write_channel.receive()
+    if not (timeout is None or timeout == FLOAT_INF):
+      self.write_slot.wake_up_at = time.time() + timeout
+      self.write_wake_up_slots.append(self.write_slot)
+    self.write_slots.add(self.write_slot)
+    return self.write_slot.channel.receive()
 
   def WaitForReadableExpiration(self, expiration=None,
                                 do_check_immediately=False):
     """Return a bool indicating if the channel is now readable."""
     if do_check_immediately:
       poll = select.poll()
-      poll.register(self.read_fd, select.POLLIN)
+      poll.register(self.read_slot.fd, select.POLLIN)
       if poll.poll(0):
         return
-    if expiration is None or expiration == FLOAT_INF:
-      self.read_channel.receive()
-    else:
-      self.read_wake_up_at = expiration
-      return self.read_channel.receive()
+    if not (expiration is None or expiration == FLOAT_INF):
+      self.read_slot.wake_up_at = expiration
+      self.read_wake_up_slots.append(self.read_slot)
+    self.read_slots.add(self.read_slot)
+    return self.read_slot.channel.receive()
 
   def WaitForWritableExpiration(self, expiration=None,
                                 do_check_immediately=False):
     """Return a bool indicating if the channel is now writable."""
     if do_check_immediately:
       poll = select.poll()
-      poll.register(self.write_fd, select.POLLOUT)
+      poll.register(self.write_slot.fd, select.POLLOUT)
       if poll.poll(0):
         return
-    if expiration is None or expiration == FLOAT_INF:
-      self.write_channel.receive()
-    else:
-      self.write_wake_up_at = expiration
-      return self.write_channel.receive()
+    if not (expiration is None or expiration == FLOAT_INF):
+      # TODO(pts): Make self.write_slot a local variable (everywhere).
+      self.write_slot.wake_up_at = expiration
+      self.write_wake_up_slots.append(self.write_slot)
+    self.write_slots.add(self.write_slot)
+    return self.write_slot.channel.receive()
 
   def ReadAtMost(self, size):
     """Read at most size bytes (unlike `read', which reads all)."""
@@ -224,15 +245,16 @@ class NonBlockingFile(object):
     # TODO(pts): Implement reading exacly `size' bytes.
     while True:
       try:
-        got = os.read(self.read_fd, size)
+        got = os.read(self.read_slot.fd, size)
         break
       except OSError, e:
         if e.errno != errno.EAGAIN:
           raise
-      self.read_channel.receive()
+      self.read_slots.add(self.read_slot)
+      self.read_slot.channel.receive()
     # Don't raise EOFError, sys.stdin.read() doesn't raise that either.
     #if not got:
-    #  raise EOFError('end-of-file on fd %d' % self.read_fd)
+    #  raise EOFError('end-of-file on fd %d' % self.read_slot.fd)
     return got
 
   def close(self):
@@ -240,24 +262,28 @@ class NonBlockingFile(object):
     # TODO(pts): Assert that there is no unflushed data in the buffer.
     # TODO(pts): Add unregister functionality without closing.
     # TODO(pts): Can an os.close() block on Linux (on the handshake)?
-    read_fd = self.read_fd
+    read_fd = self.read_slot.fd
     if read_fd != -1:
       # The contract is that self.read_fh.close() must call
-      # os.close(self.read_fd) -- otherwise the fd wouldn't be removed from the
+      # os.close(self.read_slot.fd) -- otherwise the fd wouldn't be removed from the
       # epoll set.
       self.read_fh.close()
-      self.read_fd = -1
-    if self.write_fd == self.read_fd:
-      self.write_fd = -1
-    elif self.write_fd != -1:
+      self.read_slot.fd = -1
+    write_fd = self.write_slot.fd
+    if write_fd == read_fd:
+      self.write_slot.fd = -1
+    elif write_fd != -1:
       self.write_fh.close()
-      self.write_fd = -1
-    if self in self.new_nbfs:
-      # TODO(pts): Faster remove.
-      self.new_nbfs[:] = [nbf for nbf in self.new_nbfs if nbf is not self]
+      self.write_slot.fd = -1
+    # TODO(pts): Split closed_wait_slots to reads and writes.
+    self.closed_wait_slots.add(self.read_slot)
+    self.closed_wait_slots.add(self.write_slot)
+
+  def __del__(self):
+    self.close()
 
   def fileno(self):
-    return self.read_fd
+    return self.read_slot.fd
 
 
 class NonBlockingSocket(NonBlockingFile):
@@ -331,7 +357,8 @@ class NonBlockingSocket(NonBlockingFile):
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
-      self.read_channel.receive()
+      self.read_slots.add(self.read_slot)
+      self.read_slot.channel.receive()
     return (NonBlockingFile(accepted_socket, accepted_socket), peer_name)
 
   def recv(self, bufsize, flags=0):
@@ -342,7 +369,8 @@ class NonBlockingSocket(NonBlockingFile):
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
-      self.read_channel.receive()
+      self.read_slots.add(self.read_slot)
+      self.read_slot.channel.receive()
 
   def recvfrom(self, bufsize, flags=0):
     """Read at most size bytes, return (data, peer_address)."""
@@ -352,7 +380,8 @@ class NonBlockingSocket(NonBlockingFile):
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
-      self.read_channel.receive()
+      self.read_slots.add(self.read_slot)
+      self.read_slot.channel.receive()
 
   def connect(self):
     """Non-blocking version of socket self.write_fh.connect()."""
@@ -363,7 +392,8 @@ class NonBlockingSocket(NonBlockingFile):
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
-      self.write_channel.receive()
+      self.write_slots.add(self.write_slot)
+      self.write_slot.channel.receive()
 
   def send(self, data, flags=0):
     while True:
@@ -372,7 +402,8 @@ class NonBlockingSocket(NonBlockingFile):
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
-      self.write_channel.receive()
+      self.write_slots.add(self.write_slot)
+      self.write_slot.channel.receive()
 
   def sendto(self, *args):
     while True:
@@ -381,7 +412,8 @@ class NonBlockingSocket(NonBlockingFile):
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
-      self.write_channel.receive()
+      self.write_slots.add(self.write_slot)
+      self.write_slot.channel.receive()
 
   def sendall(self, data, flags=0):
     assert not self.write_buf, 'unexpected use of write buffer'
@@ -431,17 +463,25 @@ MAIN_LOOP_BY_MAIN = {}
 """Maps stackless.main (per thread) objects to MainLoop objects."""
 
 class MainLoop(object):
-  __slots__ = ['new_nbfs', 'nbfs', 'run_tasklet', 'reinsert_tasklet']
+  __slots__ = ['closed_wait_slots', 'run_tasklet', 'reinsert_tasklet', 'epoll',
+               'read_wake_up_slots', 'read_slots',
+               'write_wake_up_slots', 'write_slots']
 
   def __init__(self):
-    # List of NonBlockingFile objects to be added in the next iteration
-    # within MainLoop.Run().
-    self.new_nbfs = []
     # TODO(pts): Don't we have a circular reference here?
-    self.nbfs = []
+    self.closed_wait_slots = set()
+    self.read_wake_up_slots = []
+    self.write_wake_up_slots = []
+    self.read_slots = set()
+    self.write_slots = set()
     self.run_tasklet = stackless.tasklet(self.Run)()
     # Helper tasklet to move self.run_tasklet in the chain.
     self.reinsert_tasklet = stackless.tasklet(self.DoReinsert)()
+    self.reinsert_tasklet.remove()
+    try:
+      self.epoll = select.epoll()
+    except (OSError, IOError, select.error, NameError, socket.error):
+      self.epoll = None
 
   def DoReinsert(self):
     while True:
@@ -452,7 +492,6 @@ class MainLoop(object):
 
   def Run(self):
     """Run the main loop until there are no tasklets left."""
-
     # Kill the old main loop tasklet if necessary.
     old_run_tasklet = self.run_tasklet
     self.run_tasklet = stackless.current
@@ -463,96 +502,116 @@ class MainLoop(object):
       old_run_tasklet.kill()
     old_run_tasklet = None
 
-    new_nbfs = self.new_nbfs
-    # Reuse self.nbfs populated by old_run_tasklet.
-    nbfs = self.nbfs
-    wait_read = [] 
-    wait_write = []
+    reinsert_tasklet = self.reinsert_tasklet
+    closed_wait_slots = self.closed_wait_slots
+    read_wake_up_slots = self.read_wake_up_slots
+    write_wake_up_slots = self.write_wake_up_slots
+    read_slots = self.read_slots
+    write_slots = self.write_slots
     mainc = 0  # TODO(pts): Maybe move this to self.?
+    not_closed_callback = lambda wait_slot: wait_slot not in closed_wait_slots
     while True:
-      del wait_read[:]
-      del wait_write[:]
-      if new_nbfs:
-        nbfs.extend(new_nbfs)
-        del new_nbfs[:]
-      need_rebuild_nbfs = False
-      # TODO(pts): Optimize building earliest_wake_up_at if there are only
-      # a few connections waiting for that -- and most of the connections have
-      # infinite timeout.
-      earliest_wake_up_at = FLOAT_INF
-      for nbf in nbfs:
-        if nbf.read_fd < 0 and nbf.write_fd < 0:
-          need_rebuild_nbfs = True
-        if nbf.read_channel.balance < 0 and nbf.read_fd >= 0:
-          wait_read.append(nbf.read_fd)
-          earliest_wake_up_at = min(earliest_wake_up_at, nbf.read_wake_up_at)
-        if nbf.write_channel.balance < 0 and nbf.write_fd >= 0:
-          wait_write.append(nbf.write_fd)
-          earliest_wake_up_at = min(earliest_wake_up_at, nbf.write_wake_up_at)
-      if need_rebuild_nbfs:  # TODO(pts): More efficient remove_if.
-        nbfs[:] = [nbf for nbf in nbfs
-                   if nbf.read_fd >= 0 and nbf.write_fd >= 0]
-      if wait_read or wait_write:
+      if closed_wait_slots:
+        # TODO(pts): Implement Faster delete_if in Python.
+        # TODO(pts): Remove this in .close() -- if they are sets.
+        read_wake_up_slots[:] = filter(not_closed_callback, read_wake_up_slots)
+        write_wake_up_slots[:] = filter(not_closed_callback, write_wake_up_slots)
+        for wait_slot in closed_wait_slots:
+          if wait_slot in read_slots:
+            read_slots.remove(wait_slot)
+          if wait_slot in write_slots:
+            write_slots.remove(wait_slot)
+        closed_wait_slots.clear()
+
+      if read_slots or write_slots:
         # TODO(pts): Use epoll(2) or poll(2) instead of select(2).
         # TODO(pts): Do a wake up without a file descriptor on timeout.
+        # TODO(pts): Allow one tasklet to wait for `or' of multiple events.
         if stackless.runcount > 1:
           # Don't wait if we have some cooperative tasklets.
           timeout = 0
-        elif earliest_wake_up_at == FLOAT_INF:
-          timeout = None
         else:
-          timeout = max(0, earliest_wake_up_at - time.time())
+          if read_wake_up_slots:
+            earliest_wake_up_at = min(
+                read_slot.wake_up_at for read_slot in read_wake_up_slots)
+            if write_wake_up_slots:
+              earliest_wake_up_at = min(
+                earliest_wake_up_at,
+                min(write_slot.wake_up_at for write_slot in
+                    write_wake_up_slots))
+          elif write_wake_up_slots:
+            earliest_wake_up_at = min(
+              write_slot.wake_up_at for write_slot in write_wake_up_slots)
+          else:
+            earliest_wake_up_at = FLOAT_INF
+          if earliest_wake_up_at == FLOAT_INF:
+            timeout = None
+          else:
+            # We increase the timeout by 1 ms (1/1024 s) to prevent select()
+            # from waking up 1ms too early.
+            timeout = max(0, earliest_wake_up_at - time.time() + 0.0009765625)
         while True:
           if VERBOSE:
-            LogDebug('select mainc=%d nbfs=%r read=%r write=%r timeout=%r' % (
-                mainc,
-                [(nbf.read_fd, nbf.write_fd) for nbf in nbfs],
-                wait_read, wait_write, timeout))
+            LogDebug('select mainc=%d read=%r write=%r timeout=%r' % (
+                mainc, read_slots, write_slots, timeout))
           try:
-            got = select.select(wait_read, wait_write, (), timeout)
+            # TODO(pts): Verify that there is no duplicate fd in WaitSlot. This
+            # is needed for correct operation of select.select() and
+            # selet.epoll().
+            got = select.select(read_slots, write_slots, (), timeout)
             break
           except select.error, e:
             if e.errno != errno.EAGAIN:
               raise
         if VERBOSE:
           LogDebug('select ret=%r' % (got,))
-        self.reinsert_tasklet.remove()
-        # Insert self.reinsert_tasklet just before us to the queue.
+        reinsert_tasklet.remove()
+        # Insert reinsert_tasklet just before us to the queue.
         # The .send(...) calls below will insert woken-up tasklet between
-        # self.reinsert_tasklet and us (self.run_tasklet).
-        self.reinsert_tasklet.insert()
-        if timeout is None:
-          assert got[0] or got[1]
-          for nbf in nbfs:
-            # TODO(pts): Allow one tasklet to wait for multiple events.
-            if nbf.write_fd in got[1]:
-              nbf.write_channel.send(True)
-            if nbf.read_fd in got[0]:
-              nbf.read_channel.send(True)
-        else:
+        # reinsert_tasklet and us (self.run_tasklet).
+        reinsert_tasklet.insert()  # Increases stackless.runcount.
+        for write_slot in got[1]:
+          write_slot.channel.send(True)
+          write_slots.remove(write_slot)
+        for read_slot in got[0]:
+          read_slot.channel.send(True)
+          read_slots.remove(read_slot)
+        if timeout is not None and (write_wake_up_slots or read_wake_up_slots):
           now = time.time()
-          for nbf in nbfs:
-            if nbf.write_fd in got[1]:
-              nbf.write_channel.send(True)
-            elif nbf.write_wake_up_at <= now:
-              # TODO(pts): Sometimes this wakes up 0.001 second earlier -- then
-              # we don't write to the channel.
-              nbf.write_wake_up_at = FLOAT_INF
-              nbf.write_channel.send(False)
-            if nbf.read_fd in got[0]:
-              nbf.read_channel.send(True)
-            elif nbf.read_wake_up_at <= now:
-              nbf.read_wake_up_at = FLOAT_INF
-              nbf.read_channel.send(False)
+          # TODO(pts): Use a heap for write_wake_up_slots and
+          # read_wake_up_slots, and measure the difference.
+          j = 0
+          for i in xrange(len(write_wake_up_slots)):
+            write_slot = write_wake_up_slots[i]
+            if write_slot in write_slots:
+              if now >= write_slot.wake_up_at:
+                write_slot.channel.send(False)
+                write_slots.remove(write_slot)
+              else:
+                write_wake_up_slots[j] = write_wake_up_slots[i]
+                j += 1
+          del write_wake_up_slots[j:]
+          j = 0
+          for i in xrange(len(read_wake_up_slots)):
+            read_slot = read_wake_up_slots[i]
+            if read_slot in read_slots:
+              if now >= read_slot.wake_up_at:
+                read_slot.channel.send(False)
+                read_slots.remove(read_slot)
+              else:
+                read_wake_up_slots[j] = read_wake_up_slots[i]
+                j += 1
+          del read_wake_up_slots[j:]
+
         mainc += 1
-        if self.reinsert_tasklet.next == stackless.current:
-          # It would be OK just to call self.reinsert_tasklet.run() here
+        if reinsert_tasklet.next == stackless.current:
+          # It would be OK just to call reinsert_tasklet.run() here
           # (just like in the else branch), but this one seems to be faster.
-          self.reinsert_tasklet.remove()
+          reinsert_tasklet.remove()
           stackless.schedule()
         else:
           # Run the tasklets inserted above.
-          self.reinsert_tasklet.run()
+          reinsert_tasklet.run()
       elif stackless.runcount <= 1:
         LogDebug('no more files open, nothing to do, end of main loop')
         break
