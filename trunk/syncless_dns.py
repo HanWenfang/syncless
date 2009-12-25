@@ -69,12 +69,14 @@ def OurWaitFor(*args):
 dns.query._wait_for = OurWaitFor
 
 def OurWaitForWritable(s, expiration):
-  s.WaitForWritableExpiration(expiration)
+  if not s.WaitForWritableExpiration(expiration):
+    raise dns.exception.Timeout
 
 dns.query._wait_for_writable = OurWaitForWritable
 
 def OurWaitForReadable(s, expiration):
-  s.WaitForReadableExpiration(expiration)
+  if not s.WaitForReadableExpiration(expiration):
+    raise dns.exception.Timeout
         
 dns.query._wait_for_readable = OurWaitForReadable
 
