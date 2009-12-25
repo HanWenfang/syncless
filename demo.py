@@ -98,6 +98,7 @@ if __name__ == '__main__':
     for rdata in syncless_dns.resolver.query('en.wikipedia.org', 'A'):
       syncless.LogInfo(repr(rdata))
     syncless.LogInfo('Query2 done.')
+    pass
   listener_nbs = syncless.NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
   listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   listener_nbs.bind(('127.0.0.1', 6666))
