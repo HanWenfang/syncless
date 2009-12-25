@@ -58,6 +58,12 @@ def SimpleWsgiApp(env, start_response):
     return ['Hello, <i>World</i> @ %s!\n' % time.time()]
   elif env['PATH_INFO'] == '/foobar':
     return iter(['foo', 'bar'])
+  elif env['PATH_INFO'] == '/infinite':
+    s = 'x' * 99998 + '\n'
+    def InfiniteYield():
+      while True:
+        yield s
+    return InfiniteYield()
   elif env['PATH_INFO'] == '/a':
     if '=' not in env['QUERY_STRING']:
       return 'Missing hostname!'

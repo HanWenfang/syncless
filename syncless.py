@@ -43,6 +43,8 @@ TODO(pts): Close connection on 413 Request Entity Too Large.
 TODO(pts): Prove that there is no memory leak over a long running time.
 TODO(pts): Use socket.recv_into() for buffering.
 TODO(pts): Handle signals (at least KeyboardInterrupt).
+TODO(pts): Handle errno.EPIPE etc.
+TODO(pts): /infinite 100K buffer on localhost is much faster than 10K.
 """
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
@@ -57,6 +59,8 @@ import sys
 import time
 
 VERBOSE = False
+
+EPOLL_EDGE_TRIGGERED = True
 
 FLOAT_INF = float('inf')
 """The ``infinity'' float value."""
@@ -85,7 +89,7 @@ class WaitSlot(object):
   """A file descriptor a MainLoop can wait for and wake up tasklets."""
 
   __slots__ = ['mode', # 0 for read, 1 for write
-               'fd', 'channel', 'wake_up_at']
+               'fd', 'channel', 'wake_up_at', 'ready']
 
   def fileno(self):
     return self.fd
@@ -128,6 +132,7 @@ class NonBlockingFile(object):
     read_slot.channel = stackless.channel()
     read_slot.channel.preference = 1  # Prefer the sender (main tasklet).
     read_slot.wake_up_at = FLOAT_INF
+    read_slot.ready = False
 
     write_slot = self.write_slot = WaitSlot()
     write_slot.mode = 1
@@ -136,6 +141,7 @@ class NonBlockingFile(object):
     write_slot.channel = stackless.channel()
     write_slot.channel.preference = 1  # Prefer the sender (main tasklet).
     write_slot.wake_up_at = FLOAT_INF
+    write_slot.ready = False
 
     main_loop = CurrentMainLoop()
     self.closed_wait_slots = main_loop.closed_wait_slots
@@ -157,12 +163,14 @@ class NonBlockingFile(object):
 
   def Flush(self):
     """Flush self.write_buf to self.write_fh, doing as many bytes as needed."""
-    while self.write_buf:
+    if self.write_buf:
       # TODO(pts): Measure special-casing of len(self.write_buf) == 1.
       data = ''.join(self.write_buf)
       del self.write_buf[:]
-      if data:
+      while data:
         try:
+          # TODO(pts): wget + Ctrl-<C> gives errno.ECONNRESET;
+          # may also be EPIPE.
           written = os.write(self.write_slot.fd, data)
         except OSError, e:
           if e.errno == errno.EAGAIN:
@@ -171,20 +179,19 @@ class NonBlockingFile(object):
             raise
         if written == len(data):  # Everything flushed.
           break
-        elif written == 0:  # Nothing flushed.
-          self.write_buf.append(data)
+        else:
+          if written:  # Partially flushed. TODO(pts): better buffering.
+            data = data[written:]
           self.write_slots.add(self.write_slot)
-          self.write_slot.channel.receive()
-        else:  # Partially flushed.
-          # TODO(pts): Do less string copying to avoid O(n^2) complexity.
-          data = data[written:]
-          self.write_buf.append(data)
-          self.write_slots.add(self.write_slot)
+          self.write_slot.ready = False
           self.write_slot.channel.receive()
 
   def WaitForReadableTimeout(self, timeout=None, do_check_immediately=False):
     """Return a bool indicating if the channel is now readable."""
+    if self.read_slot.ready:
+      return True
     if do_check_immediately:
+      # TODO(pts): How does this interact with EPOLL_EDGE_TRIGGERED?
       poll = select.poll()  # TODO(pts): Pool the poll objects?
       poll.register(self.read_slot.fd, select.POLLIN)
       if poll.poll(0):
@@ -197,6 +204,8 @@ class NonBlockingFile(object):
 
   def WaitForWritableTimeout(self, timeout=None, do_check_immediately=False):
     """Return a bool indicating if the channel is now writable."""
+    if self.write_slot.ready:
+      return True
     if do_check_immediately:
       poll = select.poll()
       poll.register(self.write_slot.fd, select.POLLOUT)
@@ -211,6 +220,8 @@ class NonBlockingFile(object):
   def WaitForReadableExpiration(self, expiration=None,
                                 do_check_immediately=False):
     """Return a bool indicating if the channel is now readable."""
+    if self.read_slot.ready:
+      return True
     if do_check_immediately:
       poll = select.poll()
       poll.register(self.read_slot.fd, select.POLLIN)
@@ -225,6 +236,8 @@ class NonBlockingFile(object):
   def WaitForWritableExpiration(self, expiration=None,
                                 do_check_immediately=False):
     """Return a bool indicating if the channel is now writable."""
+    if self.write_slot.ready:
+      return True
     if do_check_immediately:
       poll = select.poll()
       poll.register(self.write_slot.fd, select.POLLOUT)
@@ -251,6 +264,8 @@ class NonBlockingFile(object):
           raise
       self.read_slots.add(self.read_slot)
       self.read_slot.channel.receive()
+    if got < size:
+      self.read_slot.ready = False
     # Don't raise EOFError, sys.stdin.read() doesn't raise that either.
     #if not got:
     #  raise EOFError('end-of-file on fd %d' % self.read_slot.fd)
@@ -356,6 +371,7 @@ class NonBlockingSocket(NonBlockingFile):
         if e.errno != errno.EAGAIN:
           raise
       self.read_slots.add(self.read_slot)
+      self.read_slot.ready = False
       self.read_slot.channel.receive()
     return (NonBlockingFile(accepted_socket, accepted_socket), peer_name)
 
@@ -368,6 +384,7 @@ class NonBlockingSocket(NonBlockingFile):
         if e.errno != errno.EAGAIN:
           raise
       self.read_slots.add(self.read_slot)
+      self.read_slot.ready = False
       self.read_slot.channel.receive()
 
   def recvfrom(self, bufsize, flags=0):
@@ -379,6 +396,7 @@ class NonBlockingSocket(NonBlockingFile):
         if e.errno != errno.EAGAIN:
           raise
       self.read_slots.add(self.read_slot)
+      self.read_slot.ready = False
       self.read_slot.channel.receive()
 
   def connect(self):
@@ -391,6 +409,7 @@ class NonBlockingSocket(NonBlockingFile):
         if e.errno != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
+      self.write_slot.ready = False
       self.write_slot.channel.receive()
 
   def send(self, data, flags=0):
@@ -401,6 +420,7 @@ class NonBlockingSocket(NonBlockingFile):
         if e.errno != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
+      self.write_slot.ready = False
       self.write_slot.channel.receive()
 
   def sendto(self, *args):
@@ -411,6 +431,7 @@ class NonBlockingSocket(NonBlockingFile):
         if e.errno != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
+      self.write_slot.ready = False
       self.write_slot.channel.receive()
 
   def sendall(self, data, flags=0):
@@ -466,6 +487,7 @@ class MainLoop(object):
                'read_wake_up_slots', 'read_slots',
                'write_wake_up_slots', 'write_slots']
 
+
   def __init__(self):
     # TODO(pts): Don't we have a circular reference here?
     self.closed_wait_slots = set()
@@ -507,6 +529,7 @@ class MainLoop(object):
     # TODO(pts): Make EPOLLIN etc. local to speed up the loop.
     epoll_fh = self.epoll_fh
     epoll_fds = self.epoll_fds
+    epoll_et = select.EPOLLIN | select.EPOLLOUT | select.EPOLLET
     reinsert_tasklet = self.reinsert_tasklet
     closed_wait_slots = self.closed_wait_slots
     read_wake_up_slots = self.read_wake_up_slots
@@ -526,7 +549,7 @@ class MainLoop(object):
             read_slots.remove(wait_slot)
           if wait_slot in write_slots:
             write_slots.remove(wait_slot)
-        if epoll_fh:
+        if epoll_fh and epoll_fds:
           for wait_slot in closed_wait_slots:
             fd = wait_slot.fd
             assert fd != -1
@@ -563,7 +586,65 @@ class MainLoop(object):
             # We increase the timeout by 1 ms (1/1024 s) to prevent select()
             # from waking up 1ms too early.
             timeout = max(0, earliest_wake_up_at - time.time() + 0.0009765625)
-        if epoll_fh:
+        if epoll_fh and EPOLL_EDGE_TRIGGERED:
+          # TODO(pts): Add fd in another channel.
+          for read_slot in read_slots:
+            fd = read_slot.fd
+            value = epoll_fds.get(fd)
+            if value:
+              if value[2] is None:  # TODO(pts): 2 --> 0.
+                value[2] = read_slot
+              else:
+                assert value[2] == read_slot
+            else:
+              # We register for more than what we want to handle, but that
+              # overhead is small enough.
+              # TODO(pts): Don't register for writing if read-only.
+              epoll_fds[fd] = [(), (), read_slot, None]
+              epoll_fh.register(fd, epoll_et)
+          for write_slot in write_slots:
+            fd = write_slot.fd
+            value = epoll_fds.get(fd)
+            if value:
+              if value[3] is None:
+                value[3] = write_slot
+              else:
+                assert value[3] == write_slot
+            else:
+              epoll_fds[fd] = [(), (), None, write_slot]
+              epoll_fh.register(fd, epoll_et)
+          while True:
+            if VERBOSE:
+              LogDebug('epoll_et mainc=%d fds=%r timeout=%r' % (
+                  mainc, epoll_fds, timeout))
+            try:
+              if timeout is None:
+                epoll_events = epoll_fh.poll()
+              else:
+                epoll_events = epoll_fh.poll(timeout)
+              break
+            except select.error, e:
+              if e.errno != errno.EAGAIN:
+                raise
+
+          read_available = []
+          write_available = []
+          for fd, mode in epoll_events:
+            value = epoll_fds[fd]
+            if mode & select.EPOLLIN:
+              read_slot = value[2]
+              if read_slot:
+                read_slot.ready = True  # TODO(pts): Get rid of .ready.
+              if read_slot.channel.balance < 0:  # There is a receiver waiting.
+                read_available.append(read_slot)
+            if mode & select.EPOLLOUT:
+              write_slot = value[3]
+              if write_slot:
+                write_slot.ready = True
+                if write_slot.channel.balance < 0:  # There is a receiver waiting.
+                  write_available.append(write_slot)
+          epoll_events = None  # Release references.
+        elif epoll_fh:
           # SUXX: we get StopIteration ``the main tasklet is receiving without
           # a sender available'' on a NameError here.
           # TODO(pts): Compare epoll() speed to select(), Tornado and Twisted.
@@ -572,6 +653,7 @@ class MainLoop(object):
           # TODO(pts): Study how we could make epoll() faster? Maybe
           #            edge-triggered?
           # TODO(pts): Implement poll() as well (for FreeBSD?)
+          # TODO(pts): EPOLLERR | EPOLLHUP on wget /infinite Ctrl-<C>
           for fd in epoll_fds:
             epoll_fds[fd][1] = 0
           for read_slot in read_slots:
@@ -627,14 +709,25 @@ class MainLoop(object):
               if e.errno != errno.EAGAIN:
                 raise
 
+          if VERBOSE:
+            LogDebug('epoll events=%r' % epoll_events)
           read_available = []
           write_available = []
           for fd, mode in epoll_events:
             value = epoll_fds[fd]
             if mode & select.EPOLLIN:
               read_available.append(value[2])
-            if mode & select.EPOLLOUT:
+              if mode & select.EPOLLOUT:
+                write_available.append(value[3])
+            elif mode & select.EPOLLOUT:
               write_available.append(value[3])
+            elif mode & select.EPOLLHUP:
+              # If wget(1) /infinity is aborted, we get EPOLLERR|EPOLLHUP even
+              # if we are registered for EPOLLOUT only.
+              if value[2] in read_slots:
+                read_available.append(value[2])
+              elif value[3] in write_slots:
+                write_available.append(value[3])
           epoll_events = None  # Release references.
         else:  # Use select(2).
           while True:
