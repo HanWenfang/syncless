@@ -36,7 +36,6 @@ TODO(pts): Move the main loop to another tasklet (?) so async operations can
            work even at initialization.
 TODO(pts): Implement an async DNS resolver HTTP interface.
            (This will demonstrate asynchronous socket creation.)
-TODO(pts): Use epoll (as in tornado--twisted).
 TODO(pts): Document that scheduling is not fair if there are multiple readers
            on the same fd.
 TODO(pts): Implement broadcasting chatbot.
@@ -263,21 +262,20 @@ class NonBlockingFile(object):
     # TODO(pts): Add unregister functionality without closing.
     # TODO(pts): Can an os.close() block on Linux (on the handshake)?
     read_fd = self.read_slot.fd
-    if read_fd != -1:
+    if read_fd >= 0:
       # The contract is that self.read_fh.close() must call
-      # os.close(self.read_slot.fd) -- otherwise the fd wouldn't be removed from the
-      # epoll set.
+      # os.close(self.read_slot.fd) -- otherwise the fd wouldn't be removed
+      # from the epoll set.
       self.read_fh.close()
-      self.read_slot.fd = -1
+      self.read_slot.fd = -2 - read_fd
+      self.closed_wait_slots.add(self.read_slot)
     write_fd = self.write_slot.fd
-    if write_fd == read_fd:
-      self.write_slot.fd = -1
-    elif write_fd != -1:
-      self.write_fh.close()
-      self.write_slot.fd = -1
-    # TODO(pts): Split closed_wait_slots to reads and writes.
-    self.closed_wait_slots.add(self.read_slot)
-    self.closed_wait_slots.add(self.write_slot)
+    if write_fd >= 0:
+      if write_fd != read_fd:
+        self.write_fh.close()
+      self.write_slot.fd = -2 - write_fd
+      # TODO(pts): Split closed_wait_slots to reads and writes.
+      self.closed_wait_slots.add(self.write_slot)
 
   def __del__(self):
     self.close()
@@ -463,7 +461,8 @@ MAIN_LOOP_BY_MAIN = {}
 """Maps stackless.main (per thread) objects to MainLoop objects."""
 
 class MainLoop(object):
-  __slots__ = ['closed_wait_slots', 'run_tasklet', 'reinsert_tasklet', 'epoll',
+  __slots__ = ['closed_wait_slots', 'run_tasklet', 'reinsert_tasklet',
+               'epoll_fh', 'epoll_fds',
                'read_wake_up_slots', 'read_slots',
                'write_wake_up_slots', 'write_slots']
 
@@ -479,9 +478,12 @@ class MainLoop(object):
     self.reinsert_tasklet = stackless.tasklet(self.DoReinsert)()
     self.reinsert_tasklet.remove()
     try:
-      self.epoll = select.epoll()
+      self.epoll_fh = select.epoll()
+      # Maps file descriptors to [mode, read_slot, write_slot].
+      self.epoll_fds = {}
     except (OSError, IOError, select.error, NameError, socket.error):
-      self.epoll = None
+      self.epoll_fh = None
+      self.epoll_fds = None
 
   def DoReinsert(self):
     while True:
@@ -502,6 +504,9 @@ class MainLoop(object):
       old_run_tasklet.kill()
     old_run_tasklet = None
 
+    # TODO(pts): Make EPOLLIN etc. local to speed up the loop.
+    epoll_fh = self.epoll_fh
+    epoll_fds = self.epoll_fds
     reinsert_tasklet = self.reinsert_tasklet
     closed_wait_slots = self.closed_wait_slots
     read_wake_up_slots = self.read_wake_up_slots
@@ -521,6 +526,14 @@ class MainLoop(object):
             read_slots.remove(wait_slot)
           if wait_slot in write_slots:
             write_slots.remove(wait_slot)
+        if epoll_fh:
+          for wait_slot in closed_wait_slots:
+            fd = wait_slot.fd
+            assert fd != -1
+            if fd < -1:  # This is usually true.
+              fd = -2 - fd
+            if fd in epoll_fds:
+              del epoll_fds[fd]
         closed_wait_slots.clear()
 
       if read_slots or write_slots:
@@ -550,30 +563,106 @@ class MainLoop(object):
             # We increase the timeout by 1 ms (1/1024 s) to prevent select()
             # from waking up 1ms too early.
             timeout = max(0, earliest_wake_up_at - time.time() + 0.0009765625)
-        while True:
-          if VERBOSE:
-            LogDebug('select mainc=%d read=%r write=%r timeout=%r' % (
-                mainc, read_slots, write_slots, timeout))
-          try:
-            # TODO(pts): Verify that there is no duplicate fd in WaitSlot. This
-            # is needed for correct operation of select.select() and
-            # selet.epoll().
-            got = select.select(read_slots, write_slots, (), timeout)
-            break
-          except select.error, e:
-            if e.errno != errno.EAGAIN:
-              raise
+        if epoll_fh:
+          # SUXX: we get StopIteration ``the main tasklet is receiving without
+          # a sender available'' on a NameError here.
+          # TODO(pts): Compare epoll() speed to select(), Tornado and Twisted.
+          # TODO(pts): Try edge-triggered mode (should work after EAGAIN). What
+          #            does Tornado do?
+          # TODO(pts): Study how we could make epoll() faster? Maybe
+          #            edge-triggered?
+          # TODO(pts): Implement poll() as well (for FreeBSD?)
+          for fd in epoll_fds:
+            epoll_fds[fd][1] = 0
+          for read_slot in read_slots:
+            fd = read_slot.fd
+            value = epoll_fds.get(fd)
+            if value is None:
+              # We won't clean up WaitSlot objects epool_fds[fd][1] and
+              # epoll_fds[fd][2] until the fd is closed.
+              epoll_fds[fd] = [select.EPOLLIN, select.EPOLLIN, read_slot, None]
+              epoll_fh.register(fd, select.EPOLLIN)
+            else:
+              if value[1] & select.EPOLLIN:
+                assert value[2] == read_slot
+              else:
+                value[1] |= select.EPOLLIN
+                value[2] = read_slot
+          for write_slot in write_slots:
+            fd = write_slot.fd
+            value = epoll_fds.get(fd)
+            if value is None:
+              epoll_fds[fd] = [select.EPOLLOUT, select.EPOLLOUT, None, write_slot]
+              epoll_fh.register(fd, select.EPOLLOUT)
+            else:
+              if value[1] & select.EPOLLOUT:
+                assert value[3] == write_slot
+              else:
+                value[1] |= select.EPOLLOUT
+                value[3] = write_slot
+          epoll_fds_to_delete = []
+          for fd in epoll_fds:
+            value = epoll_fds[fd]
+            if value[1]:
+              if value[0] != value[1]:
+                epoll_fh.modify(fd, value[1])
+                value[0] = value[1]
+            else:
+              epoll_fds_to_delete.append(fd)
+          for fd in epoll_fds_to_delete:
+            epoll_fh.unregister(fd)
+            del epoll_fds[fd]
+
+          while True:
+            if VERBOSE:
+              LogDebug('epoll mainc=%d fds=%r timeout=%r' % (
+                  mainc, epoll_fds, timeout))
+            try:
+              if timeout is None:
+                epoll_events = epoll_fh.poll()
+              else:
+                epoll_events = epoll_fh.poll(timeout)
+              break
+            except select.error, e:
+              if e.errno != errno.EAGAIN:
+                raise
+
+          read_available = []
+          write_available = []
+          for fd, mode in epoll_events:
+            value = epoll_fds[fd]
+            if mode & select.EPOLLIN:
+              read_available.append(value[2])
+            if mode & select.EPOLLOUT:
+              write_available.append(value[3])
+          epoll_events = None  # Release references.
+        else:  # Use select(2).
+          while True:
+            if VERBOSE:
+              LogDebug('select mainc=%d read=%r write=%r timeout=%r' % (
+                  mainc, read_slots, write_slots, timeout))
+            try:
+              # TODO(pts): Verify that there is no duplicate fd in WaitSlot. This
+              # is needed for correct operation of select.select() and
+              # selet.epoll().
+              read_available, write_available, _ = select.select(
+                  read_slots, write_slots, (), timeout)
+              break
+            except select.error, e:
+              if e.errno != errno.EAGAIN:
+                raise
         if VERBOSE:
-          LogDebug('select ret=%r' % (got,))
+          LogDebug('available read=%r write=%r' %
+                   (read_available, write_available))
         reinsert_tasklet.remove()
         # Insert reinsert_tasklet just before us to the queue.
         # The .send(...) calls below will insert woken-up tasklet between
         # reinsert_tasklet and us (self.run_tasklet).
         reinsert_tasklet.insert()  # Increases stackless.runcount.
-        for write_slot in got[1]:
+        for write_slot in write_available:
           write_slot.channel.send(True)
           write_slots.remove(write_slot)
-        for read_slot in got[0]:
+        for read_slot in read_available:
           read_slot.channel.send(True)
           read_slots.remove(read_slot)
         if timeout is not None and (write_wake_up_slots or read_wake_up_slots):
@@ -602,6 +691,7 @@ class MainLoop(object):
                 read_wake_up_slots[j] = read_wake_up_slots[i]
                 j += 1
           del read_wake_up_slots[j:]
+        read_available = write_available = None  # Release reference.
 
         mainc += 1
         if reinsert_tasklet.next == stackless.current:
