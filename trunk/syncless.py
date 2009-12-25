@@ -631,13 +631,13 @@ class MainLoop(object):
           write_available = []
           for fd, mode in epoll_events:
             value = epoll_fds[fd]
-            if mode & select.EPOLLIN:
+            if mode & (select.EPOLLIN | select.EPOLLHUP):
               read_slot = value[2]
               if read_slot:
                 read_slot.ready = True  # TODO(pts): Get rid of .ready.
               if read_slot.channel.balance < 0:  # There is a receiver waiting.
                 read_available.append(read_slot)
-            if mode & select.EPOLLOUT:
+            if mode & (select.EPOLLOUT | select.EPOLLHUP):
               write_slot = value[3]
               if write_slot:
                 write_slot.ready = True
@@ -726,7 +726,7 @@ class MainLoop(object):
               # if we are registered for EPOLLOUT only.
               if value[2] in read_slots:
                 read_available.append(value[2])
-              elif value[3] in write_slots:
+              if value[3] in write_slots:
                 write_available.append(value[3])
           epoll_events = None  # Release references.
         else:  # Use select(2).
