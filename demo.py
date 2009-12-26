@@ -28,7 +28,9 @@ def ChatWorker(nbf, nbf_to_close):
         nbf.Write('resolved to %r\n' % (rdata,))
     nbf.Write('Type something!\n')  # TODO(pts): Handle EPIPE.
     while True:
+      print 'AAA'
       nbf.Flush()
+      print 'BBB'
       if not nbf.WaitForReadableTimeout(3.5):  # 3.5 second
         nbf.Write('Come on, type something, I\'m getting bored.\n')
         continue
