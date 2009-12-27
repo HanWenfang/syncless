@@ -10,13 +10,14 @@ import socket
 import sys
 import time
 
+import demo_wsgiapp
 import syncless
+import wsgi
+
 try:
   import syncless_dns
 except ImportError:  # Don't ignore inner ImportError{}s.
   syncless_dns = None
-import wsgi
-
 
 def ChatWorker(nbf, nbf_to_close):
   # TODO(pts): Let's select this from the command line.
@@ -45,58 +46,35 @@ def ChatWorker(nbf, nbf_to_close):
     nbf.close()
 
 
-def SimpleWsgiApp(env, start_response):
-  """Simplest possible application object"""
-  error_stream = env['wsgi.errors']
-  error_stream.write('Got env=%r\n' % env)
-  status = '200 OK'
-  response_headers = [('Content-type', 'text/html')]
-  start_response(status, response_headers)
-  if env['REQUEST_METHOD'] in ('POST', 'PUT'):
-    return ['Posted/put %s.' % env['wsgi.input'].read(10)]
-  elif env['PATH_INFO'] == '/hello':
-    return ['Hello, <i>World</i> @ %s!\n' % time.time()]
-  elif env['PATH_INFO'] == '/foobar':
-    return iter(['foo', 'bar'])
-  elif env['PATH_INFO'] == '/infinite':
-    s = 'x' * 99998 + '\n'
-    def InfiniteYield():
-      while True:
-        yield s
-    return InfiniteYield()
-  elif env['PATH_INFO'] == '/a':
-    if '=' not in env['QUERY_STRING']:
-      return 'Missing hostname!'
-    key, hostname = env['QUERY_STRING'].split('=', 2)
-    if not hostname:
-      return 'Empty hostname!'
-    if not syncless_dns:
-      return 'Missing DNS resolver!'
-    try:
-      result = syncless_dns.resolver.query(hostname, 'A')
-    except syncless_dns.DNSException, e:
-      # Example e.__class__.__name__: 'NXDOMAIN', 'Timeout' (after >20 sec).
-      return 'Resolve error: %s' % e.__class__.__name__
-    return '\n<br>'.join(map(cgi.escape, map(repr, result)))
-  else:
-    if syncless_dns:
-      dns_html = ('<form action="/a">Hostname: <input name=hostname>'
-                  '<input type=submit value=Resolve></form>')
-    else:
-      dns_html = '<p>Missing DNS resolver.'
-    return ['<a href="/hello">hello</a>\n', dns_html,
-            '<form method="post"><input name=foo><input name=bar>'
-            '<input type=submit></form>\n']
-
-
 if __name__ == '__main__':
-  if len(sys.argv) > 1:
-    syncless.VERBOSE = True
-  try:
-    import psyco
-    psyco.full()
-  except ImportError:
-    pass
+  wsgi_listener = wsgi.WsgiListener
+  use_psyco = False
+  do_verbose = False
+  for arg in sys.argv[1:]:
+    if arg in ('--cherrypy-wsgi', '-c'):
+      wsgi_listener = wsgi.CherryPyWsgiListener
+    elif arg in ('--verbose', '-v'):
+      do_verbose = True
+    elif arg in ('--psyco', '-p'):
+      use_psyco = True
+    elif arg in ('--no-psyco', '+p'):
+      use_psyco = False
+    else:
+      assert 0, 'invalid arg: %s' % arg
+    
+  syncless.VERBOSE = do_verbose
+
+  if use_psyco:
+    try:
+      import psyco
+      psyco.full()
+      syncless.LogInfo('using psyco')
+    except ImportError:
+      syncless.LogInfo('psyco not available')
+      pass
+  else:
+    syncless.LogInfo('not using psyco')
+
   if syncless_dns:
     #for rdata in syncless_dns.resolver.query('asd', 'A'):
     #  syncless.LogInfo(repr(rdata))
@@ -114,7 +92,7 @@ if __name__ == '__main__':
   # It increases the maximum Connect time from 8 to 9200 milliseconds.
   listener_nbs.listen(100)
   syncless.LogInfo('listening on %r' % (listener_nbs.getsockname(),))
-  stackless.tasklet(wsgi.WsgiListener)(listener_nbs, SimpleWsgiApp)
+  stackless.tasklet(wsgi_listener)(listener_nbs, demo_wsgiapp.WsgiApp)
   std_nbf = syncless.NonBlockingFile(sys.stdin, sys.stdout)
   stackless.tasklet(ChatWorker)(std_nbf, nbf_to_close=listener_nbs)
   syncless.RunMainLoop()

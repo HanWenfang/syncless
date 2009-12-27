@@ -555,6 +555,87 @@ def WsgiListener(nbs, wsgi_application):
   finally:
     nbf.close()
 
+
+class FakeServerSocket(object):
+  """A fake TCP server socket, used as CherryPyWSGIServer.socket."""
+
+  __attrs__ = ['accepted_nbs', 'accepted_addr']
+
+  def __init__(self):
+    self.accepted_nbs = None
+    self.accepted_addr = None
+
+  def accept(self):
+    """Return and clear self.accepted_nbs.
+
+    This method is called by CherryPyWSGIServer.tick().
+    """
+    accepted_nbs = self.accepted_nbs
+    assert accepted_nbs
+    accepted_addr = self.accepted_addr
+    self.accepted_nbs = None
+    self.accepted_addr = None
+    return accepted_nbs, accepted_addr
+
+  def ProcessAccept(self, accepted_nbs, accepted_addr):
+    assert accepted_nbs
+    assert self.accepted_nbs is None
+    self.accepted_nbs = accepted_nbs
+    self.accepted_addr = accepted_addr
+
+
+class FakeRequests(object):
+  """A list of HTTPConnection objects, for CherryPyWSGIServer.requests."""
+
+  __slots__ = 'requests'
+
+  def __init__(self):
+    self.requests = []
+
+  def put(self, request):
+    # Called by CherryPyWSGIServer.tick().
+    self.requests.append(request)
+
+
+def CherryPyWsgiListener(nbs, wsgi_application):
+  """HTTP server serving WSGI, using CherryPy's implementation."""
+  # TODO(pts): Why is CherryPy's /infinite twice as fast as ours?
+  # Only sometimes.
+  if not isinstance(nbs, syncless.NonBlockingSocket):
+    raise TypeError
+  if not callable(wsgi_application):
+    raise TypeError
+  try:
+    from cherrypy import wsgiserver
+  except ImportError:
+    from web import wsgiserver  # Another implementation in (web.py).
+  wsgi_server = wsgiserver.CherryPyWSGIServer(
+      nbs.getsockname(), wsgi_application)
+  wsgi_server.ready = True
+  wsgi_server.socket = FakeServerSocket()
+  wsgi_server.requests = FakeRequests()
+  wsgi_server.timeout = None  # TODO(pts): Fix once implemented.
+
+  try:
+    while True:
+      accepted_nbs, peer_name = nbs.accept()
+      if syncless.VERBOSE:
+        syncless.LogDebug('connection accepted from=%r nbf=%x' %
+                 (peer_name, id(accepted_nbs)))
+      wsgi_server.socket.ProcessAccept(accepted_nbs, peer_name)
+      assert not wsgi_server.requests.requests
+      wsgi_server.tick()
+      assert len(wsgi_server.requests.requests) == 1
+      http_connection = wsgi_server.requests.requests.pop()
+      # !! TODO(pts): Why are stdin and other tasklets suspended while
+      # this is running /infinite? Not suspended for our WsgiServer.
+      stackless.tasklet(http_connection.communicate)()
+      # Help the garbage collector.
+      http_connection = accepted_nbs = peer_name = None
+  finally:
+    nbf.close()
+
+
 def CanBeCherryPyApp(app):
   # Since CherryPy applications can be of any type, the only way for us to
   # detect such an application is to look for an exposed method (or class?).
