@@ -32,6 +32,7 @@ Info: In interactive stackless, repeated invocations of stackless.current may
   return different objects.
 
 TODO(pts): Specify TCP socket timeout. Verify it.
+TODO(pts): Specify total HTTP write timeout.
 TODO(pts): Move the main loop to another tasklet (?) so async operations can
            work even at initialization.
 TODO(pts): Implement an async DNS resolver HTTP interface.
@@ -43,7 +44,8 @@ TODO(pts): Close connection on 413 Request Entity Too Large.
 TODO(pts): Prove that there is no memory leak over a long running time.
 TODO(pts): Use socket.recv_into() for buffering.
 TODO(pts): Handle signals (at least KeyboardInterrupt).
-TODO(pts): Handle errno.EPIPE etc.
+TODO(pts): Handle errno.EPIPE.
+TODO(pts): Handle errno.EINTR. (Do we need this in Python?)
 TODO(pts): /infinite 100K buffer on localhost is much faster than 10K.
 """
 
@@ -60,9 +62,16 @@ import time
 
 VERBOSE = False
 
+# TODO(pts): Let the user specify the full ioloop-mode.
 EPOLL_EDGE_TRIGGERED = True
 
 EPOLL_ET_FLAGS = select.EPOLLIN | select.EPOLLOUT | select.EPOLLET
+
+# TODO(pts): Ignore missing constants.
+# TODO(pts): Copy more constants from the CherryPy WSGI server.
+ERRLIST_ACCEPT_RAISE = [
+    errno.EBADF, errno.EINVAL, errno.ENOTSOCK, errno.EOPNOTSUPP, errno.EFAULT]
+"""Errnos to be raised in socket.accept()."""
 
 FLOAT_INF = float('inf')
 """The ``infinity'' float value."""
@@ -166,7 +175,11 @@ class NonBlockingFile(object):
     self.write_buf.append(str(data))
 
   def Flush(self):
-    """Flush self.write_buf to self.write_fh, doing as many bytes as needed."""
+    """Flush self.write_buf to self.write_fh, doing as many bytes as needed.
+
+    Raises:
+      IOError, anything other than EAGAIN.
+    """
     if self.write_buf:
       # TODO(pts): Measure special-casing of len(self.write_buf) == 1.
       data = ''.join(self.write_buf)
@@ -179,8 +192,10 @@ class NonBlockingFile(object):
         except OSError, e:
           if e.errno == errno.EAGAIN:
             written = 0
+          elif e.filename is None:
+            raise IOError(*e.args)
           else:
-            raise
+            raise IOError(e.args[0], e.args[1], e.filename)
         if written == len(data):  # Everything flushed.
           break
         else:
@@ -246,7 +261,11 @@ class NonBlockingFile(object):
     return self.write_slot.channel.receive()
 
   def ReadAtMost(self, size):
-    """Read at most size bytes (unlike `read', which reads all)."""
+    """Read at most size bytes (unlike `read', which reads all).
+
+    Raises:
+      IOError, anything other than EAGAIN.
+    """
     if size <= 0:
       return ''
     # TODO(pts): Implement reading exacly `size' bytes.
@@ -256,7 +275,9 @@ class NonBlockingFile(object):
         break
       except OSError, e:
         if e.errno != errno.EAGAIN:
-          raise
+          if e.filename is None:
+            raise IOError(*e.args)
+          raise IOError(e.args[0], e.args[1], e.filename)
       self.read_slots.add(self.read_slot)
       self.read_slot.channel.receive()
     # Don't raise EOFError, sys.stdin.read() doesn't raise that either.
@@ -364,14 +385,20 @@ class NonBlockingSocket(NonBlockingFile):
 
     Return:
       (accepted_nbf, peer_name)
+    Raises:
+      socket.error: Only in ERRLIST_ACCEPT_RAISE. Other errnos are ignored.
     """
     while True:
       try:
         accepted_socket, peer_name = self.read_fh.accept()
         break
       except socket.error, e:
-        if e.errno != errno.EAGAIN:
+        if e.errno == errno.EAGAIN:
+          pass
+        elif e.errno in ERRLIST_ACCEPT_RAISE:
           raise
+        else:
+          continue
       self.read_slots.add(self.read_slot)
       self.read_slot.channel.receive()
     return (NonBlockingFile(accepted_socket, accepted_socket), peer_name)
@@ -380,7 +407,6 @@ class NonBlockingSocket(NonBlockingFile):
     """Read at most size bytes."""
     while True:
       try:
-        # !! set ready to False if len(retval) == bufsize.
         return self.read_fh.recv(bufsize, flags)
       except socket.error, e:
         if e.errno != errno.EAGAIN:
@@ -447,7 +473,12 @@ def LogDebug(msg):
 
 
 def Log(msg):
-  """Write blockingly to stderr."""
+  """Write log message blockingly to stderr.
+
+  This call blocks so it is possible to log from MainLoop.Run.
+
+  TODO(pts): Make this call non-blocking if called from outside MainLoop.Run.
+  """
   msg = str(msg)
   if msg and msg != '\n':
     if msg[-1] != '\n':
@@ -459,7 +490,7 @@ def Log(msg):
         if e.errno == errno.EAGAIN:
           written = 0
         else:
-          raise
+          raise IOError(*e.args)
       if written == len(msg):
         break
       elif written != 0:
@@ -504,7 +535,8 @@ class MainLoop(object):
       self.epoll_fds = {}
       if self.epoll_is_et:
         self.register_wait_slot = self.RegisterWaitSlot
-    except (OSError, IOError, select.error, NameError, socket.error):
+    except (OSError, IOError, select.error, socket.error,
+            NameError, AttributeError):
       self.epoll_is_et = False
       self.epoll_fh = None
       self.epoll_fds = ()
@@ -545,7 +577,29 @@ class MainLoop(object):
       stackless.schedule_remove()
 
   def Run(self):
-    """Run the main loop until there are no tasklets left."""
+    """Run the main loop until there are no tasklets left, propagate exc."""
+    if stackless.current.is_main:
+      self.RunWrapped()
+    else:
+      try:
+        self.RunWrapped()
+      except TaskletExit:
+        raise
+      except:
+        # Propagate the exception to the main thread, so we don't get a
+        # StopIteration instead.
+        bomb = stackless.bomb(*sys.exc_info())
+        if stackless.main.blocked:
+          stackless.main._channel.send(bomb)
+        else:
+          stackless.main.tempval = bomb
+          stackless.main.run()
+
+  def RunWrapped(self):
+    """Run the main loop until there are no tasklets left.
+    
+    Please call MainLoop.Run instead.
+    """
     # Kill the old main loop tasklet if necessary.
     old_run_tasklet = self.run_tasklet
     self.run_tasklet = stackless.current
@@ -745,11 +799,20 @@ class MainLoop(object):
         # reinsert_tasklet and us (self.run_tasklet).
         reinsert_tasklet.insert()  # Increases stackless.runcount.
         for write_slot in write_available:
-          write_slot.channel.send(True)
+          # TODO(pts): Wake up all waiting tasklets in random or round-robin
+          # order to make it more fair.
+          c = write_slot.channel
+          for i in xrange(-c.balance):
+            c.send(True)
           write_slots.remove(write_slot)
         for read_slot in read_available:
-          read_slot.channel.send(True)
+          # TODO(pts): Wake up the waiting tasklets in random or round-robin
+          # order to make it more fair.
+          c = read_slot.channel
+          for i in xrange(-c.balance):
+            c.send(True)
           read_slots.remove(read_slot)
+        c = None
         if timeout is not None and (write_wake_up_slots or read_wake_up_slots):
           now = time.time()
           # TODO(pts): Use a heap for write_wake_up_slots and
@@ -793,7 +856,6 @@ class MainLoop(object):
       else:
         mainc += 1
         stackless.schedule()
-
 
 def HasCurrentMainLoop():
   return stackless.main in MAIN_LOOP_BY_MAIN
