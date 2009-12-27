@@ -590,10 +590,15 @@ class MainLoop(object):
         # StopIteration instead.
         bomb = stackless.bomb(*sys.exc_info())
         if stackless.main.blocked:
-          stackless.main._channel.send(bomb)
+          c = stackless.main._channel
+          old_preference = c.preference
+          c.preference = 1  # Prefer the sender.
+          for i in xrange(-c.balance):
+            c.send(bomb)
+          c.preference = old_preference
         else:
           stackless.main.tempval = bomb
-          stackless.main.run()
+        stackless.main.run()
 
   def RunWrapped(self):
     """Run the main loop until there are no tasklets left.
