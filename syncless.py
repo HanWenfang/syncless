@@ -363,7 +363,8 @@ class NonBlockingSocket(NonBlockingFile):
     return self.read_fh.getpeername()
 
   def settimeout(self, timeout):
-    raise NotImplementedError
+    if timeout is not None:
+      raise NotImplementedError
 
   def gettimeout(self, timeout):
     return None
@@ -401,7 +402,7 @@ class NonBlockingSocket(NonBlockingFile):
           continue
       self.read_slots.add(self.read_slot)
       self.read_slot.channel.receive()
-    return (NonBlockingFile(accepted_socket, accepted_socket), peer_name)
+    return (NonBlockingSocket(accepted_socket), peer_name)
 
   def recv(self, bufsize, flags=0):
     """Read at most size bytes."""
