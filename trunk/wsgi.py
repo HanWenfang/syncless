@@ -13,6 +13,7 @@ GNU General Public License for more details.
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
+import errno
 import re
 import sys
 import socket
@@ -21,6 +22,18 @@ import time
 import types
 
 import syncless
+
+
+# TODO(pts): Use this.
+ERRLIST_REQHEAD_RAISE = [
+    errno.EBADF, errno.EINVAL, errno.EFAULT]
+"""Errnos to be raised when reading the HTTP request headers."""
+
+# TODO(pts): Use this.
+ERRLIST_REQBODY_RAISE = [
+    errno.EBADF, errno.EINVAL, errno.EFAULT]
+"""Errnos to be raised when reading the HTTP request headers."""
+
 
 class WsgiErrorsStream(object):
   @classmethod
