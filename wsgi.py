@@ -9,6 +9,9 @@ This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
+
+Doc: WSGI: http://www.python.org/dev/peps/pep-0333/
+Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
 """
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
@@ -346,6 +349,8 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
         req_new = None
 
       # TODO(pts): Speed up this splitting?
+      # TODO(pts): Support CherryPy comma_separated_headers and continuations
+      #            (as in HTTPRequest.read_headers).
       req_lines = req_head.rstrip('\r').replace('\r\n', '\n').split('\n')
       req_line1_items = req_lines.pop(0).split(' ', 2)
       if len(req_line1_items) != 3:
@@ -515,6 +520,9 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
             input.ReadAndDiscardRemaining()
         if input.bytes_remaining:
           input.ReadAndDiscardRemaining()
+      # TODO(pts): Call close() in a finally block.
+      if hasattr(items, 'close'):  # CherryPyWSGIServer does this.
+        items.close()
   finally:
     nbf.close()
     syncless.LogDebug('connection closed nbf=%x' % id(nbf))
@@ -620,15 +628,13 @@ def CherryPyWsgiListener(nbs, wsgi_application):
     while True:
       accepted_nbs, peer_name = nbs.accept()
       if syncless.VERBOSE:
-        syncless.LogDebug('connection accepted from=%r nbf=%x' %
+        syncless.LogDebug('cpw connection accepted from=%r nbf=%x' %
                  (peer_name, id(accepted_nbs)))
       wsgi_server.socket.ProcessAccept(accepted_nbs, peer_name)
       assert not wsgi_server.requests.requests
       wsgi_server.tick()
       assert len(wsgi_server.requests.requests) == 1
       http_connection = wsgi_server.requests.requests.pop()
-      # !! TODO(pts): Why are stdin and other tasklets suspended while
-      # this is running /infinite? Not suspended for our WsgiServer.
       stackless.tasklet(http_connection.communicate)()
       # Help the garbage collector.
       http_connection = accepted_nbs = peer_name = None
