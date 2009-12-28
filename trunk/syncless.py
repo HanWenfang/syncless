@@ -17,8 +17,6 @@ GNU General Public License for more details.
 Doc: http://www.disinterest.org/resource/stackless/2.6.4-docs-html/library/stackless/channels.html
 Doc: http://wiki.netbsd.se/kqueue_tutorial
 Doc: http://stackoverflow.com/questions/554805/stackless-python-network-performance-degrading-over-time
-Doc: WSGI: http://www.python.org/dev/peps/pep-0333/
-Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
 
 Asynchronous DNS for Python:
 
@@ -76,6 +74,10 @@ ERRLIST_ACCEPT_RAISE = [
 FLOAT_INF = float('inf')
 """The ``infinity'' float value."""
 
+CREDITS_PER_ITERATION = 32
+"""Number of non-blocking I/O operations for a tasklet before schedule()."""
+
+
 def SetFdBlocking(fd, is_blocking):
   """Set a file descriptor blocking or nonblocking.
 
@@ -100,7 +102,7 @@ class WaitSlot(object):
   """A file descriptor a MainLoop can wait for and wake up tasklets."""
 
   __slots__ = ['mode', # 0 for read, 1 for write
-               'fd', 'channel', 'wake_up_at']
+               'fd', 'channel', 'wake_up_at', 'credit']
 
   def fileno(self):
     return self.fd
@@ -143,6 +145,7 @@ class NonBlockingFile(object):
     read_slot.channel = stackless.channel()
     read_slot.channel.preference = 1  # Prefer the sender (main tasklet).
     read_slot.wake_up_at = FLOAT_INF
+    read_slot.credit = CREDITS_PER_ITERATION
 
     write_slot = self.write_slot = WaitSlot()
     write_slot.mode = 1
@@ -151,6 +154,7 @@ class NonBlockingFile(object):
     write_slot.channel = stackless.channel()
     write_slot.channel.preference = 1  # Prefer the sender (main tasklet).
     write_slot.wake_up_at = FLOAT_INF
+    write_slot.credit = CREDITS_PER_ITERATION
 
     main_loop = CurrentMainLoop()
     self.need_poll = main_loop.epoll_is_et
@@ -184,11 +188,16 @@ class NonBlockingFile(object):
       # TODO(pts): Measure special-casing of len(self.write_buf) == 1.
       data = ''.join(self.write_buf)
       del self.write_buf[:]
+      write_slot = self.write_slot
       while data:
+        write_slot.credit -= 1
+        if write_slot.credit < 0:
+          write_slot.credit = CREDITS_PER_ITERATION
+          stackless.schedule()
         try:
           # TODO(pts): wget + Ctrl-<C> gives errno.ECONNRESET;
           # may also be EPIPE.
-          written = os.write(self.write_slot.fd, data)
+          written = os.write(write_slot.fd, data)
         except OSError, e:
           if e.errno == errno.EAGAIN:
             written = 0
@@ -202,7 +211,8 @@ class NonBlockingFile(object):
           if written:  # Partially flushed. TODO(pts): better buffering.
             data = data[written:]
           self.write_slots.add(self.write_slot)
-          self.write_slot.channel.receive()
+          write_slot.credit = CREDITS_PER_ITERATION
+          write_slot.channel.receive()
 
   def WaitForReadableTimeout(self, timeout=None, do_check_immediately=False):
     """Return a bool indicating if the channel is now readable."""
@@ -269,9 +279,14 @@ class NonBlockingFile(object):
     if size <= 0:
       return ''
     # TODO(pts): Implement reading exacly `size' bytes.
+    read_slot = self.read_slot
     while True:
+      read_slot.credit -= 1
+      if read_slot.credit < 0:
+        read_slot.credit = CREDITS_PER_ITERATION
+        stackless.schedule()
       try:
-        got = os.read(self.read_slot.fd, size)
+        got = os.read(read_slot.fd, size)
         break
       except OSError, e:
         if e.errno != errno.EAGAIN:
@@ -279,7 +294,8 @@ class NonBlockingFile(object):
             raise IOError(*e.args)
           raise IOError(e.args[0], e.args[1], e.filename)
       self.read_slots.add(self.read_slot)
-      self.read_slot.channel.receive()
+      read_slot.credit = CREDITS_PER_ITERATION
+      read_slot.channel.receive()
     # Don't raise EOFError, sys.stdin.read() doesn't raise that either.
     #if not got:
     #  raise EOFError('end-of-file on fd %d' % self.read_slot.fd)
@@ -389,8 +405,13 @@ class NonBlockingSocket(NonBlockingFile):
     Raises:
       socket.error: Only in ERRLIST_ACCEPT_RAISE. Other errnos are ignored.
     """
+    read_slot = self.read_slot
     while True:
       try:
+        read_slot.credit -= 1
+        if read_slot.credit < 0:
+          read_slot.credit = CREDITS_PER_ITERATION
+          stackless.schedule()
         accepted_socket, peer_name = self.read_fh.accept()
         break
       except socket.error, e:
@@ -401,34 +422,52 @@ class NonBlockingSocket(NonBlockingFile):
         else:
           continue
       self.read_slots.add(self.read_slot)
-      self.read_slot.channel.receive()
+      read_slot.credit = CREDITS_PER_ITERATION
+      read_slot.channel.receive()
     return (NonBlockingSocket(accepted_socket), peer_name)
 
   def recv(self, bufsize, flags=0):
     """Read at most size bytes."""
+    read_slot = self.read_slot
     while True:
+      read_slot.credit -= 1
+      if read_slot.credit < 0:
+        read_slot.credit = CREDITS_PER_ITERATION
+        stackless.schedule()
       try:
         return self.read_fh.recv(bufsize, flags)
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
       self.read_slots.add(self.read_slot)
-      self.read_slot.channel.receive()
+      read_slot.credit = CREDITS_PER_ITERATION
+      read_slot.channel.receive()
 
   def recvfrom(self, bufsize, flags=0):
     """Read at most size bytes, return (data, peer_address)."""
+    read_slot = self.read_slot
     while True:
+      read_slot.credit -= 1
+      if read_slot.credit < 0:
+        read_slot.credit = CREDITS_PER_ITERATION
+        stackless.schedule()
       try:
         return self.read_fh.recvfrom(bufsize, flags)
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
       self.read_slots.add(self.read_slot)
-      self.read_slot.channel.receive()
+      read_slot.credit = CREDITS_PER_ITERATION
+      read_slot.channel.receive()
 
   def connect(self):
     """Non-blocking version of socket self.write_fh.connect()."""
+    write_slot = self.write_slot
     while True:
+      write_slot.credit -= 1
+      if write_slot.credit < 0:
+        write_slot.credit = CREDITS_PER_ITERATION
+        stackless.schedule()
       try:
         self.write_fh.connect()
         return
@@ -436,27 +475,40 @@ class NonBlockingSocket(NonBlockingFile):
         if e.errno != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
-      self.write_slot.channel.receive()
+      write_slot.credit = CREDITS_PER_ITERATION
+      write_slot.channel.receive()
 
   def send(self, data, flags=0):
+    write_slot = self.write_slot
     while True:
+      write_slot.credit -= 1
+      if write_slot.credit < 0:
+        write_slot.credit = CREDITS_PER_ITERATION
+        stackless.schedule()
       try:
         return self.write_fh.send(data, flags)
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
-      self.write_slot.channel.receive()
+      write_slot.credit = CREDITS_PER_ITERATION
+      write_slot.channel.receive()
 
   def sendto(self, *args):
+    write_slot = self.write_slot
     while True:
+      write_slot.credit -= 1
+      if write_slot.credit < 0:
+        write_slot.credit = CREDITS_PER_ITERATION
+        stackless.schedule()
       try:
         return self.write_fh.sendto(*args)
       except socket.error, e:
         if e.errno != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
-      self.write_slot.channel.receive()
+      write_slot.credit = CREDITS_PER_ITERATION
+      write_slot.channel.receive()
 
   def sendall(self, data, flags=0):
     assert not self.write_buf, 'unexpected use of write buffer'
