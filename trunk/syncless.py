@@ -75,7 +75,10 @@ FLOAT_INF = float('inf')
 """The ``infinity'' float value."""
 
 CREDITS_PER_ITERATION = 32
-"""Number of non-blocking I/O operations for a tasklet before schedule()."""
+"""Number of non-blocking I/O operations for a tasklet before schedule().
+
+TODO(pts): Decrease this if latency is high.
+"""
 
 
 def SetFdBlocking(fd, is_blocking):

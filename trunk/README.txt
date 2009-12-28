@@ -1,6 +1,7 @@
 README for Syncless
 ~~~~~~~~~~~~~~~~~~~
 by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
+-- Mon Dec 28 00:40:30 CET 2009
 
 Syncless is an experimental, lightweight, non-blocking (asynchronous) client
 and server socket network communication library implemented in Stackless
@@ -9,6 +10,22 @@ and a HTTP server capable of serving WSGI applications. Syncless aims to be
 a coroutine-based alternative of event-driven networking engines (such as
 Twisted and FriendFeed's Tornado). Syncless is already about that fast, but
 it has less features and it's less stable now.
+
+Features
+~~~~~~~~
+* handling multiple TCP connections concurrently in a single Python process,
+  using cooperative multitasking provided by Stackless Python (without
+  the need for callbacks, threads, subprocesses or locking)
+* non-intruisive I/O multiplexing, easy to integrate with existing code (can
+  be as easy as changing the socket constructor socket.socket to
+  syncless.NonBlockingSocket)
+* timeout on individual socket operation (needs changing existing code)
+* I/O event detection using epoll() (if available) or select()
+* built-in WSGI server, but can use CherryPy's WSGI server as well
+* non-blocking DNS resolver using dnspython
+* non-blocking stdin/stdout support (can be useful for implementing an
+  interactive server console)
+* pure Python implementation, requires Stackless Python 2.6 only
 
 Requirements
 ~~~~~~~~~~~~
@@ -41,8 +58,9 @@ The WSGI-capable HTTP server in Syncless can run any framework with WSGI
 support. Examples:
 
 * pure WSGI application, without a framework: see SimpleWsgiApp in demo.py
+  and demo_wsgiapp.py
 * (web.py): see demo_syncless_web_py.py
-* CherrpyPy: see demo_syncless_cherrypy.py
+* CherryPy: see demo_syncless_cherrypy.py
 
 Please note that Syncless is not a web framework.
 
@@ -53,7 +71,6 @@ framework), and report problems.
 
 Planned features
 ~~~~~~~~~~~~~~~~
-* epoll() support on Linux
 * TCP communication error handling in the WSGI server
 * HTTP client library (making urllib non-blocking?)
 * Twisted integration
