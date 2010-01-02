@@ -14,6 +14,7 @@ Doc: WSGI: http://www.python.org/dev/peps/pep-0333/
 Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
 
 TODO(pts): Validate this implementation with wsgiref.validate.
+TODO(pts): Write access.log like BaseHTTPServer and CherryPy
 """
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
@@ -722,6 +723,12 @@ def RunHttpServer(app, server_address=None):
     pass
   if len(sys.argv) > 1:  # TODO(pts): Use getopt.
     syncless.VERBOSE = True
+  webapp = (sys.modules.get('google.appengine.ext.webapp') or
+            sys.modules.get('webapp'))
+  if webapp and isinstance(app, type) and issubclass(
+      app, webapp.RequestHandler):
+    app = webapp.WSGIApplication([('/', app)], debug=bool(syncless.VERBOSE))
+    assert callable(app)  # A WSGI application.
   if (not callable(app) and
       hasattr(app, 'handle') and hasattr(app, 'request') and
       hasattr(app, 'run') and hasattr(app, 'wsgifunc') and
@@ -731,6 +738,7 @@ def RunHttpServer(app, server_address=None):
     if server_address is None:
       server_address = ('0.0.0.0', 8080)  # (web.py) default
   elif CanBeCherryPyApp(app):
+    # TODO(pts): instantiate app.
     syncless.LogInfo('running CherryPy application')
     import cherrypy
     # See http://www.cherrypy.org/wiki/WSGI
@@ -739,7 +747,10 @@ def RunHttpServer(app, server_address=None):
       server_address = ('127.0.01', 8080)  # CherryPy default
     # TODO(pts): Use CherryPy config files.
   elif callable(app):
-    syncless.LogInfo('running WSGI application')
+    if webapp and isinstance(app, webapp.WSGIApplication):
+      syncless.LogInfo('running webapp WSGI application')
+    else:
+      syncless.LogInfo('running WSGI application')
     wsgi_application = app
     if server_address is None:
       server_address = ('127.0.0.1', 6666)

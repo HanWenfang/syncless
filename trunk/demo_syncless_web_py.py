@@ -5,7 +5,6 @@
 #
 
 import web
-import wsgi  # from syncless
 
 urls = (
     '/(.*)', 'hello',
@@ -21,4 +20,5 @@ class hello:
 app = web.application(urls, globals())
 
 if __name__ == '__main__':
+  import wsgi  # from syncless
   wsgi.RunHttpServer(app)
