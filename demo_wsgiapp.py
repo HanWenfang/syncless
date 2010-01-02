@@ -18,13 +18,17 @@ def WsgiApp(env, start_response):
   error_stream.write('Got env=%r\n' % env)
   status = '200 OK'
   response_headers = [('Content-type', 'text/html')]
-  start_response(status, response_headers)
+  write = start_response(status, response_headers)
   if env['REQUEST_METHOD'] in ('POST', 'PUT'):
     return ['Posted/put %s.' % env['wsgi.input'].read(10)]
   elif env['PATH_INFO'] == '/hello':
     return ['Hello, <i>World</i> @ %s!\n' % time.time()]
   elif env['PATH_INFO'] == '/foobar':
     return iter(['foo', 'bar'])
+  elif env['PATH_INFO'] == '/foobarbaz':
+    write('foo')
+    write('bar')
+    return 'baz'
   elif env['PATH_INFO'] == '/infinite':
     s = 'x' * 99998 + '\n'
     def InfiniteYield():
