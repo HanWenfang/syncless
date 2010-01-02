@@ -61,6 +61,7 @@ support. Examples:
   and demo_wsgiapp.py
 * (web.py): see demo_syncless_web_py.py
 * CherryPy: see demo_syncless_cherrypy.py
+* Google AppEngine webapp: see demo_syncless_webapp.py
 
 Please note that Syncless is not a web framework.
 
@@ -74,6 +75,7 @@ Planned features
 * TCP communication error handling in the WSGI server
 * HTTP client library (making urllib non-blocking?)
 * Twisted integration
+* support webob as a web framework
 * productionization
 
 __EOF__

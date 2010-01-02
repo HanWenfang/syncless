@@ -5,7 +5,6 @@
 #
 
 import cherrypy
-import wsgi  # from syncless
 
 class HelloWorld(object):
   def index(self, name='World'):
@@ -13,4 +12,5 @@ class HelloWorld(object):
   index.exposed = True
 
 if __name__ == '__main__':
+  import wsgi  # from syncless
   wsgi.RunHttpServer(HelloWorld())
