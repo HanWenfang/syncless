@@ -12,6 +12,8 @@ GNU General Public License for more details.
 
 Doc: WSGI: http://www.python.org/dev/peps/pep-0333/
 Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
+
+TODO(pts): Validate this implementation with wsgiref.validate.
 """
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
@@ -277,7 +279,7 @@ MON = ('', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep',
 
 def GetHttpDate(at):
   now = time.gmtime(at)
-  return '%s, %2d %s %d %2d:%02d:%02d GMT' % (
+  return '%s, %02d %s %4d %02d:%02d:%02d GMT' % (
       WDAY[now[6]], now[2], MON[now[1]], now[0], now[3], now[4], now[5])
       
 def RespondWithBadRequest(date, server_software, nbf, reason):
@@ -298,12 +300,13 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
   if not isinstance(date, str):
     raise TypeError
   req_buf = ''
-  do_keep_alive = True
+  do_keep_alive_ary = [True]
+  headers_sent_ary = [False]
   server_software = default_env['SERVER_SOFTWARE']
   full_input = WsgiInputStream(nbf, content_length=0)
   try:
-    while do_keep_alive:
-      do_keep_alive = False
+    while do_keep_alive_ary[0]:
+      do_keep_alive_ary[0] = False
       env = dict(default_env)
       env['wsgi.errors'] = WsgiErrorsStream
       if date is None:  # Reusing a keep-alive socket.
@@ -439,7 +442,44 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
 
       is_not_head = method != 'HEAD'
       res_content_length = None
+      headers_sent_ary[0] = False
       assert not nbf.write_buf
+
+      def WriteHead(data):
+        """HEAD callback returned by StartResponse, the app may call it."""
+        data = str(data)
+        if not data:
+          return
+        data = None  # Save memory.
+        if not headers_sent_ary[0]:
+          do_keep_alive_ary[0] = do_req_keep_alive
+          nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
+          nbf.Write('\r\n')
+          nbf.Flush()
+          if not do_keep_alive_ary[0]:
+            nbf.close()
+          headers_sent_ary[0] = True
+          if input.bytes_remaining:
+            input.ReadAndDiscardRemaining()
+
+      def WriteNotHead(data):
+        """Non-HEAD callback returned by StartResponse, the app may call it."""
+        data = str(data)
+        if not data:
+          return
+        if headers_sent_ary[0]:
+          nbf.Write(data)
+          nbf.Flush()
+        else:
+          do_keep_alive_ary[0] = (
+              do_req_keep_alive and res_content_length is not None)
+          nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
+          nbf.Write('\r\n')
+          nbf.Write(data)
+          nbf.Flush()
+          headers_sent_ary[0] = True
+          if input.bytes_remaining:
+            input.ReadAndDiscardRemaining()
 
       def StartResponse(status, response_headers, exc_info=None):
         """Callback called by wsgi_application."""
@@ -471,6 +511,10 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
             # TODO(pts): Eliminate duplicate keys (except for set-cookie).
             nbf.Write('%s: %s\r\n' % (key_capitalized, value))
         # Don't flush yet.
+        if is_not_head:
+          return WriteNotHead
+        else:
+          return WriteHead
 
       # TODO(pts): Handle application-level exceptions here.
       items = wsgi_application(env, StartResponse)
@@ -485,42 +529,51 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
         else:
           data = ''
         items = None
-        if input.bytes_remaining:
-          input.ReadAndDiscardRemaining()
-        if res_content_length is not None:
-          # TODO(pts): Pad or truncate.
-          assert len(data) == res_content_length
-        if is_not_head:
-          nbf.Write('Content-Length: %d\r\n' % len(data))
-        do_keep_alive = do_req_keep_alive
-        nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
-        nbf.Write('\r\n')
+        if not headers_sent_ary[0]:
+          if input.bytes_remaining:
+            input.ReadAndDiscardRemaining()
+          if res_content_length is not None:
+            # TODO(pts): Pad or truncate.
+            assert len(data) == res_content_length
+          if is_not_head:
+            nbf.Write('Content-Length: %d\r\n' % len(data))
+          do_keep_alive_ary[0] = do_req_keep_alive
+          nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
+          nbf.Write('\r\n')
         nbf.Write(data)
         nbf.Flush()
       elif is_not_head:
-        do_keep_alive = do_req_keep_alive and res_content_length is not None
-        nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
-        nbf.Write('\r\n')
+        if not headers_sent_ary[0]:
+          do_keep_alive_ary[0] = (
+              do_req_keep_alive and res_content_length is not None)
+          nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
+          nbf.Write('\r\n')
         for data in items:
           if input.bytes_remaining:  # TODO(pts): Check only once.
             input.ReadAndDiscardRemaining()
-          nbf.Write(data)  # TODO(pts): Don't write if HEAD request.
+          nbf.Write(data)
           nbf.Flush()
         if input.bytes_remaining:
           input.ReadAndDiscardRemaining()
       else:  # HTTP HEAD request.
-        do_keep_alive = do_req_keep_alive
-        nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive])
-        nbf.Write('\r\n')
-        nbf.Flush()
-        if not do_keep_alive:
-          nbf.close()
+        if not headers_sent_ary[0]:
+          do_keep_alive_ary[0] = do_req_keep_alive
+          nbf.Write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
+          nbf.Write('\r\n')
+          nbf.Flush()
+          if not do_keep_alive_ary[0]:
+            nbf.close()
+        # If tasklets could run in parellel, we could iterate over `items'
+        # below in another tasklet,, so the HTTP client could reuse the
+        # connection for another request before the iteration finishes.
         for data in items:  # Run the generator function through.
           if input.bytes_remaining:  # TODO(pts): Check only once.
             input.ReadAndDiscardRemaining()
         if input.bytes_remaining:
           input.ReadAndDiscardRemaining()
       # TODO(pts): Call close() in a finally block.
+      # TODO(pts): Look up the WSGI specification again. What should we be
+      # closing?
       if hasattr(items, 'close'):  # CherryPyWSGIServer does this.
         items.close()
   finally:
