@@ -57,4 +57,4 @@ def WsgiApp(env, start_response):
       dns_html = '<p>Missing DNS resolver.'
     return ['<a href="/hello">hello</a>\n', dns_html,
             '<form method="post"><input name=foo><input name=bar>'
-            '<input type=submit></form>\n']
+            '<input type=submit></form>\n', env['REMOTE_HOST']]
