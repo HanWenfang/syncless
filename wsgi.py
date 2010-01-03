@@ -375,7 +375,8 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
         return  # Don't reuse the connection.
       env['REQUEST_METHOD'] = method
       env['SERVER_PROTOCOL'] = http_version
-      # TODO(pts): What does appengine set here?
+      # TODO(pts): What does appengine set here? wsgiref.validate recommends
+      # the empty string (not starting with '.').
       env['SCRIPT_NAME'] = ''
       i = suburl.find('?')
       if i >= 0:
@@ -697,9 +698,14 @@ def CherryPyWsgiListener(nbs, wsgi_application):
 
 
 def CanBeCherryPyApp(app):
+  """Return True if app is a CherryPy app class or object."""
   # Since CherryPy applications can be of any type, the only way for us to
   # detect such an application is to look for an exposed method (or class?).
-  if not isinstance(app, object) and not isinstance(app, types.InstanceType):
+  if isinstance(app, type) or isinstance(app, types.ClassType):
+    pass
+  elif isinstance(app, object) or isinstance(app, types.InstanceType):
+    app = type(app)
+  else:
     return False
   for name in dir(app):
     value = getattr(app, name)
@@ -727,9 +733,13 @@ def RunHttpServer(app, server_address=None):
             sys.modules.get('webapp'))
   if webapp and isinstance(app, type) and issubclass(
       app, webapp.RequestHandler):
-    app = webapp.WSGIApplication([('/', app)], debug=bool(syncless.VERBOSE))
-    assert callable(app)  # A WSGI application.
-  if (not callable(app) and
+    syncless.LogInfo('running webapp RequestHandler')
+    wsgi_application = webapp.WSGIApplication(
+        [('/', app)], debug=bool(syncless.VERBOSE))
+    assert callable(wsgi_application)
+    if server_address is None:
+      server_address = ('127.0.0.1', 6666)
+  elif (not callable(app) and
       hasattr(app, 'handle') and hasattr(app, 'request') and
       hasattr(app, 'run') and hasattr(app, 'wsgifunc') and
       hasattr(app, 'cgirun') and hasattr(app, 'handle')):
@@ -738,8 +748,9 @@ def RunHttpServer(app, server_address=None):
     if server_address is None:
       server_address = ('0.0.0.0', 8080)  # (web.py) default
   elif CanBeCherryPyApp(app):
-    # TODO(pts): instantiate app.
     syncless.LogInfo('running CherryPy application')
+    if isinstance(app, type) or isinstance(app, types.ClassType):
+      app = app()
     import cherrypy
     # See http://www.cherrypy.org/wiki/WSGI
     wsgi_application = cherrypy.tree.mount(app, '/')
