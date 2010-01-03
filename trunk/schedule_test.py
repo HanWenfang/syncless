@@ -22,7 +22,7 @@ class ScheduleTest(unittest.TestCase):
       self.assertEqual(1 + int(main_loop.run_tasklet != stackless.current),
                        stackless.runcount)
       main_loop.Run()
-      self.assertEqual(0, len(main_loop.nbfs))
+      #self.assertEqual(0, len(main_loop.nbfs))
     self.assertEqual(1, stackless.runcount)
 
   def testFairAAANothing(self):
@@ -65,12 +65,12 @@ class ScheduleTest(unittest.TestCase):
       syncless.RunMainLoop()
 
       self.assertEqual('ABCABCABCABCABCBCBCBB', ''.join(events))
-      self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
+      #self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
     finally:
       nbf.close()
-    self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
+    #self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
     syncless.RunMainLoop()
-    self.assertEqual([], syncless.CurrentMainLoop().nbfs)
+    #self.assertEqual([], syncless.CurrentMainLoop().nbfs)
 
   def testFairSchedulingBlockedOnFile(self):
     events = []
@@ -118,11 +118,11 @@ class ScheduleTest(unittest.TestCase):
           'C'
           'C',
           ''.join(events))
-      self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
+      #self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
       nbf.close()
-      self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
+      #self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
       syncless.RunMainLoop()
-      self.assertEqual([], syncless.CurrentMainLoop().nbfs)
+      #self.assertEqual([], syncless.CurrentMainLoop().nbfs)
     finally:
       nbf.close()
 
