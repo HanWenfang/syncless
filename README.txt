@@ -62,7 +62,7 @@ support. Examples:
 * (web.py): see demo_syncless_web_py.py
 * CherryPy: see demo_syncless_cherrypy.py
 * Google AppEngine webapp: see demo_syncless_webapp.py
-* Python built-in BaseHttpRequestHandler: see demo_syncless_basehttp.py
+* Python built-in BaseHTTPRequestHandler: see demo_syncless_basehttp.py
 
 Please note that Syncless is not a web framework.
 
@@ -71,6 +71,16 @@ communication error handling and robust recovery from exceptions are not
 written). Feel free to try it, however, with your web application (using any
 framework), and report problems.
 
+Related projects
+~~~~~~~~~~~~~~~~
+* Spawning (WSGI server) http://pypi.python.org/pypi/Spawning
+* Eventlet (instead of Stackless Python) http://eventlet.net/
+  slides http://soundfarmer.com/content/slides/coroutines-nonblocking-io-eventlet-spawning/coros,%20nonblocking%20i:o,%20eventlet,%20spawning.pdf
+* stacklessocket
+  http://code.google.com/p/stacklessexamples/wiki/StacklessNetworking
+* stacklesswsgi
+  http://code.google.com/p/stacklessexamples/wiki/StacklessWSGI
+
 Planned features
 ~~~~~~~~~~~~~~~~
 * TCP communication error handling in the WSGI server
@@ -78,5 +88,6 @@ Planned features
 * Twisted integration
 * support webob as a web framework
 * productionization
+* http://pypi.python.org/ and easy_install integration
 
 __EOF__

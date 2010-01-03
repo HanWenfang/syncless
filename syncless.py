@@ -45,6 +45,7 @@ TODO(pts): Handle signals (at least KeyboardInterrupt).
 TODO(pts): Handle errno.EPIPE.
 TODO(pts): Handle errno.EINTR. (Do we need this in Python?)
 TODO(pts): /infinite 100K buffer on localhost is much faster than 10K.
+TODO(pts): Consider alternative implementation with eventlet.
 """
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'

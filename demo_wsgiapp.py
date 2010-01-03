@@ -56,5 +56,6 @@ def WsgiApp(env, start_response):
     else:
       dns_html = '<p>Missing DNS resolver.'
     return ['<a href="/hello">hello</a>\n', dns_html,
+            '<p>%s</p>' % cgi.escape(env['HTTP_IF_NONE_MATCH']),
             '<form method="post"><input name=foo><input name=bar>'
             '<input type=submit></form>\n', env['REMOTE_HOST']]
