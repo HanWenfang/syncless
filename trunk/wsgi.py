@@ -762,6 +762,25 @@ def RunHttpServer(app, server_address=None):
       syncless.LogInfo('running webapp WSGI application')
     else:
       syncless.LogInfo('running WSGI application')
+
+    # Check that app accepts the proper number of arguments.
+    has_self = False
+    if isinstance(app, type) or isinstance(app, types.ClassType):
+      func = getattr(app, '__init__', None)
+      assert isinstance(func, types.UnboundMethodType)
+      func = func.im_func
+      has_self = True
+    elif isinstance(app, object) or isinstance(app, types.InstanceType):
+      func = getattr(app, '__call__', None)
+      assert isinstance(func, types.MethodType)
+      func = func.im_func
+      has_self = True
+    else:
+      func = app
+    expected_argcount = int(has_self) + 2  # self, environ, start_response
+    assert func.func_code.co_argcount == expected_argcount, (
+        'invalid argument count -- maybe not a WSGI application: %r' % app)
+    func = None
     wsgi_application = app
     if server_address is None:
       server_address = ('127.0.0.1', 6666)
