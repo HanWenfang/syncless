@@ -62,6 +62,7 @@ support. Examples:
 * (web.py): see demo_syncless_web_py.py
 * CherryPy: see demo_syncless_cherrypy.py
 * Google AppEngine webapp: see demo_syncless_webapp.py
+* Python built-in BaseHttpRequestHandler: see demo_syncless_basehttp.py
 
 Please note that Syncless is not a web framework.
 

@@ -1,3 +1,5 @@
+#! /usr/local/bin/stackless2.6
+
 """Asynchronous DNS lookups using dnspython and Syncless.
 
 This program is free software; you can redistribute it and/or modify

@@ -1,3 +1,5 @@
+#! /usr/local/bin/stackless2.6
+
 """WSGI server library for the Syncless server framework.
 
 This program is free software; you can redistribute it and/or modify
@@ -39,6 +41,9 @@ ERRLIST_REQHEAD_RAISE = [
 ERRLIST_REQBODY_RAISE = [
     errno.EBADF, errno.EINVAL, errno.EFAULT]
 """Errnos to be raised when reading the HTTP request headers."""
+
+
+HTTP_REQUEST_METHODS_WITH_BODY = ['POST', 'PUT', 'OPTIONS', 'TRACE']
 
 
 class WsgiErrorsStream(object):
@@ -258,6 +263,18 @@ class WsgiEmptyInputStream(object):
     return iter(())
 
 
+class FixedReadLineInputStream(object):
+  def __init__(self, lines):
+    self.lines_rev = list(lines)
+    self.lines_rev.reverse()
+
+  def readline(self):
+    if self.lines_rev:
+      return self.lines_rev.pop()
+    else:
+      return ''
+
+
 HEADER_WORD_LOWER_LETTER_RE = re.compile(r'(?:\A|-)[a-z]')
 
 # TODO(pts): Get it form the HTTP RFC.
@@ -295,7 +312,7 @@ def RespondWithBadRequest(date, server_software, nbf, reason):
             (server_software, date, len(msg) + 1, msg))
   nbf.Flush()
 
-def WsgiWorker(nbf, wsgi_application, default_env, date):
+def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
   if not isinstance(date, str):
@@ -309,6 +326,8 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
     while do_keep_alive_ary[0]:
       do_keep_alive_ary[0] = False
       env = dict(default_env)
+      env['REMOTE_HOST'] = env['REMOTE_ADDR'] = peer_name[0]
+      env['REMOTE_PORT'] = str(peer_name[1])
       env['wsgi.errors'] = WsgiErrorsStream
       if date is None:  # Reusing a keep-alive socket.
         items = data = input
@@ -493,7 +512,7 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
           res_content_length = None
 
         # TODO(pts): Send `Date:' header: Date: Sun, 20 Dec 2009 12:48:56 GMT
-        nbf.Write('HTTP/1.0 %s\r\n' % status)
+        nbf.Write('%s %s\r\n' % (http_version, status))  # HTTP/1.0
         nbf.Write('Server: %s\r\n' % server_software)
         nbf.Write('Date: %s\r\n' % date)
         for key, value in response_headers:
@@ -520,6 +539,9 @@ def WsgiWorker(nbf, wsgi_application, default_env, date):
 
       # TODO(pts): Handle application-level exceptions here.
       items = wsgi_application(env, StartResponse)
+      # TODO(pts): Handle this error robustly.
+      assert nbf.write_buf or headers_sent_ary[0], (
+          'WSGI app must have called start_response by now')
       date = None
       if (isinstance(items, list) or isinstance(items, tuple) or
           isinstance(items, str)):
@@ -613,11 +635,11 @@ def WsgiListener(nbs, wsgi_application):
       if syncless.VERBOSE:
         syncless.LogDebug('connection accepted from=%r nbf=%x' %
                  (peer_name, id(accepted_nbs)))
-      stackless.tasklet(WsgiWorker)(accepted_nbs, wsgi_application, env, date)
+      stackless.tasklet(WsgiWorker)(
+          accepted_nbs, peer_name, wsgi_application, env, date)
       accepted_nbs = peer_name = None  # Help the garbage collector.
   finally:
     nbf.close()
-
 
 class FakeServerSocket(object):
   """A fake TCP server socket, used as CherryPyWSGIServer.socket."""
@@ -697,6 +719,177 @@ def CherryPyWsgiListener(nbs, wsgi_application):
     nbf.close()
 
 
+class FakeBaseHttpWFile(object):
+  def __init__(self, env, start_response):
+    self.env = env
+    self.start_response = start_response
+    self.wsgi_write_callback = None
+    self.write_buf = []
+    self.closed = False
+
+  def write(self, data):
+    data = str(data)
+    if not data:
+      return
+    write_buf = self.write_buf
+    if self.wsgi_write_callback:
+      write_buf.append(data)
+    else:
+      assert data.endswith('\r\n')
+      data = data.rstrip('\n\r')
+      if data:
+        write_buf.append(data)  # Buffer status and headers.
+      else:
+        assert len(write_buf) > 2  # HTTP/..., Server:, Date:
+        assert write_buf[0].startswith('HTTP/')
+        status = write_buf[0][write_buf[0].find(' ') + 1:]
+        write_buf.pop(0)
+        response_headers = [
+            tuple(header_line.split(': ', 1)) for header_line in write_buf]
+        self.wsgi_write_callback = self.start_response(
+            status, response_headers)
+        assert callable(self.wsgi_write_callback)
+        del self.write_buf[:]
+
+  def close(self):
+    if not self.closed:
+      self.flush()
+    self.closed = True
+
+  def flush(self):
+    if self.wsgi_write_callback:
+      if self.write_buf:
+        data = ''.join(self.write_buf)
+        del self.write_buf[:]
+        if data:
+          self.wsgi_write_callback(data)
+
+
+def CloseMethod(self):
+  self.closed = True
+
+
+class ConstantReadLineInputStream(object):
+  def __init__(self, lines):
+    self.lines_rev = list(lines)
+    self.lines_rev.reverse()
+    self.closed = False
+
+  def readline(self):
+    if self.lines_rev:
+      return self.lines_rev.pop()
+    else:
+      return ''
+
+  def read(self, size):
+    assert not self.lines_rev
+    return ''  
+
+  def close(self):
+    # We don't clear self.lines_rev[:], the hacked
+    # WsgiInputStream doesn't do that eiter.
+    self.closed = True
+
+
+class FakeBaseHttpConnection(object):
+  def __init__(self, env, start_response, request_lines):
+    self.env = env
+    self.start_response = start_response
+    self.request_lines = request_lines
+
+  def makefile(self, mode, bufsize):
+    if mode.startswith('r'):
+      rfile = self.env['wsgi.input']
+      if isinstance(rfile, WsgiInputStream):
+        rfile.close = types.MethodType(CloseMethod, rfile)
+        if rfile.lines_rev:
+          rfile.lines_rev.extend(reversed(self.request_lines))
+        else:
+          rfile.lines_rev = list(self.request_lines)
+          rfile.lines_rev.reverse()
+      elif rfile is WsgiEmptyInputStream:
+        rfile = ConstantReadLineInputStream(self.request_lines)
+      else:
+        assert 0, rfile
+      self.request_lines = None  # Save memory.
+      return rfile
+    elif mode.startswith('w'):
+      return FakeBaseHttpWFile(self.env, self.start_response)
+
+
+class FakeBaseHttpServer(object):
+  pass
+
+
+def HttpRequestFromEnv(env, connection=None):
+  """Convert a CGI or WSGI environment to a HTTP request header.
+
+  Returns:
+    A list of lines, all ending with '\r\n', the last being '\r\n' for
+    HTTP/1.x.
+  """
+  # TODO(pts): Add unit test.
+  if not isinstance(env, dict):
+    raise TypeError
+  output = []
+  path = (env['SCRIPT_NAME'] + env['PATH_INFO']) or '/'
+  if env['QUERY_STRING']:
+    path += '?'
+    path += env['QUERY_STRING']
+  if env['SERVER_PROTOCOL'] == 'HTTP/0.9':
+    output.append('%s %s\r\n' % (env['REQUEST_METHOD'], path))
+  else:
+    output.append(
+        '%s %s %s\r\n' %
+        (env['REQUEST_METHOD'], path, env['SERVER_PROTOCOL']))
+    for key in sorted(env):
+      if key.startswith('HTTP_') and key not in (
+          'HTTP_CONTENT_TYPE', 'HTTP_CONTENT_LENGTH', 'HTTP_CONNECTION'):
+        name = re.sub(
+            r'[a-z0-9]+', lambda match: match.group(0).capitalize(),
+            key[5:].lower().replace('_', '-'))
+        output.append('%s: %s\r\n' % (name, env[key]))
+    if env['REQUEST_METHOD'] in HTTP_REQUEST_METHODS_WITH_BODY:
+      # It should be CONTENT_LENGTH, not HTTP_CONTENT_LENGTH.
+      content_length = env.get(
+          'CONTENT_LENGTH', env.get('HTTP_CONTENT_LENGTH'))
+      if content_length is not None:
+        output.append('Content-Length: %s\r\n' % content_length)
+      # It should be CONTENT_TYPE, not HTTP_CONTENT_TYPE.
+      content_type = env.get('CONTENT_TYPE', env.get('HTTP_CONTENT_TYPE'))
+      if content_type:
+        output.append('Content-Type: %s\r\n' % content_type)
+    if connection is not None:
+      output.append('Connection: %s\r\n' % connection)
+    output.append('\r\n')
+  return output
+
+
+def BaseHttpWsgiWrapper(bhrh_class):
+  """Return a WSGI application running a BaseHttpRequestHandler."""
+  BaseHTTPServer = sys.modules['BaseHTTPServer']
+  if not ((isinstance(bhrh_class, type) or
+           isinstance(bhrh_class, types.ClassType)) and
+          issubclass(bhrh_class, BaseHTTPServer.BaseHTTPRequestHandler)):
+    raise TypeError
+
+  def WsgiApplication(env, start_response):
+    request_lines = HttpRequestFromEnv(env, connection='close')
+    connection = FakeBaseHttpConnection(env, start_response, request_lines)
+    server = FakeBaseHttpServer(env, start_response)
+    client_address = (env['REMOTE_ADDR'], int(env['REMOTE_PORT']))
+    # The constructor calls bhrh.handle_one_request() automatically.
+    bhrh = bhrh_class(connection, client_address, server)
+    # If there is an exception in the bhrh_class creation above, then these
+    # assertions are not reached, and bhrh.wfile and bhrh.rfile remain
+    # unclosed, but that's OK.
+    assert bhrh.wfile.wsgi_write_callback
+    assert not bhrh.wfile.write_buf
+    return ''
+
+  return WsgiApplication
+
+
 def CanBeCherryPyApp(app):
   """Return True if app is a CherryPy app class or object."""
   # Since CherryPy applications can be of any type, the only way for us to
@@ -731,6 +924,8 @@ def RunHttpServer(app, server_address=None):
     syncless.VERBOSE = True
   webapp = (sys.modules.get('google.appengine.ext.webapp') or
             sys.modules.get('webapp'))
+  # Use if already loaded.
+  BaseHTTPServer = sys.modules.get('BaseHTTPServer')
   if webapp and isinstance(app, type) and issubclass(
       app, webapp.RequestHandler):
     syncless.LogInfo('running webapp RequestHandler')
@@ -755,8 +950,15 @@ def RunHttpServer(app, server_address=None):
     # See http://www.cherrypy.org/wiki/WSGI
     wsgi_application = cherrypy.tree.mount(app, '/')
     if server_address is None:
-      server_address = ('127.0.01', 8080)  # CherryPy default
+      server_address = ('127.0.0.1', 8080)  # CherryPy default
     # TODO(pts): Use CherryPy config files.
+  elif (BaseHTTPServer and
+        (isinstance(app, type) or isinstance(app, types.ClassType)) and
+        issubclass(app, BaseHTTPServer.BaseHTTPRequestHandler)):
+    syncless.LogInfo('running BaseHTTPRequestHandler application')
+    wsgi_application = BaseHttpWsgiWrapper(app)
+    if server_address is None:
+      server_address = ('127.0.0.1', 6666)
   elif callable(app):
     if webapp and isinstance(app, webapp.WSGIApplication):
       syncless.LogInfo('running webapp WSGI application')
@@ -777,10 +979,11 @@ def RunHttpServer(app, server_address=None):
       has_self = True
     else:
       func = app
-    expected_argcount = int(has_self) + 2  # self, environ, start_response
+    expected_argcount = int(has_self) + 2  # self, env, start_response
     assert func.func_code.co_argcount == expected_argcount, (
         'invalid argument count -- maybe not a WSGI application: %r' % app)
     func = None
+
     wsgi_application = app
     if server_address is None:
       server_address = ('127.0.0.1', 6666)
