@@ -44,6 +44,21 @@ ERRLIST_REQBODY_RAISE = [
 
 
 HTTP_REQUEST_METHODS_WITH_BODY = ['POST', 'PUT', 'OPTIONS', 'TRACE']
+"""HTTP request methods which can have a body (Content-Length)."""
+
+COMMA_SEPARATED_REQHEAD = set(['ACCEPT', 'ACCEPT-CHARSET', 'ACCEPT-ENCODING',
+    'ACCEPT-LANGUAGE', 'ACCEPT-RANGES', 'ALLOW', 'CACHE-CONTROL',
+    'CONNECTION', 'CONTENT-ENCODING', 'CONTENT-LANGUAGE', 'EXPECT',
+    'IF-MATCH', 'IF-NONE-MATCH', 'PRAGMA', 'PROXY-AUTHENTICATE', 'TE',
+    'TRAILER', 'TRANSFER-ENCODING', 'UPGRADE', 'VARY', 'VIA', 'WARNING',
+    'WWW-AUTHENTICATE'])
+"""HTTP request headers which will be joined by comma + space.
+
+The list was taken from cherrypy.wsgiserver.comma_separated_headers.
+"""
+
+REQHEAD_CONTINUATION_RE = re.compile(r'\n[ \t]+')
+"""Matches HTTP request header line continuation."""
 
 
 class WsgiErrorsStream(object):
@@ -322,6 +337,7 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
   headers_sent_ary = [False]
   server_software = default_env['SERVER_SOFTWARE']
   full_input = WsgiInputStream(nbf, content_length=0)
+  reqhead_continuation_re = REQHEAD_CONTINUATION_RE
   try:
     while do_keep_alive_ary[0]:
       do_keep_alive_ary[0] = False
@@ -372,9 +388,9 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
         req_new = None
 
       # TODO(pts): Speed up this splitting?
-      # TODO(pts): Support CherryPy comma_separated_headers and continuations
-      #            (as in HTTPRequest.read_headers).
-      req_lines = req_head.rstrip('\r').replace('\r\n', '\n').split('\n')
+      req_head = reqhead_continuation_re.sub(
+          ', ', req_head.rstrip('\r').replace('\r\n', '\n'))
+      req_lines = req_head.split('\n')
       req_line1_items = req_lines.pop(0).split(' ', 2)
       if len(req_line1_items) != 3:
         RespondWithBadRequest(date, server_software, nbf, 'bad line1')
@@ -417,22 +433,32 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
           value = line[i + 2:]
         else:
           value = line[i + 1:]
-        key = line[:i].lower()
-        if key == 'connection':
+        name = line[:i].lower()
+        if name == 'connection':
           do_req_keep_alive = value.lower() == 'keep-alive'
-        elif key == 'keep-alive':
+        elif name == 'keep-alive':
           pass  # TODO(pts): Implement keep-alive timeout.
-        elif key == 'content-length':
+        elif name == 'content-length':
           try:
             content_length = int(value)
           except ValueError:
             RespondWithBadRequest(date, server_software, nbf, 'bad content-length')
             return
           env['CONTENT_LENGTH'] = value
-        elif key == 'content-type':
+        elif name == 'content-type':
           env['CONTENT_TYPE'] = value
-        elif not key.startswith('proxy-'):
-          env['HTTP_' + key.upper().replace('-', '_')] = value
+        elif not name.startswith('proxy-'):
+          name_upper = name.upper()
+          key = 'HTTP_' + name_upper.replace('-', '_')
+          if key in env and name_upper in COMMA_SEPARATED_REQHEAD:
+            # Fast (linear) version of the quadratic env[key] += ', ' + value.
+            s = env[key]
+            env[key] = ''
+            s += ', '
+            s += value
+            env[key] = s
+          else:
+            env[key] = value
           # TODO(pts): Maybe override SERVER_NAME and SERVER_PORT from HTTP_HOST?
           # Does Apache do this?
 
