@@ -25,7 +25,7 @@ application = webapp.WSGIApplication([
 if __name__ == '__main__':
   import sys
   import wsgi  # from syncless
-  if len(sys.argv) > 1 and sys.argv[1] == 'demo':
+  if len(sys.argv) > 1 and sys.argv[1] == 'hello':
     del sys.argv[1]
     # self.request.path would be '' or '/' instead of '/hello' in application
     # below.

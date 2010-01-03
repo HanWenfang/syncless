@@ -1,6 +1,6 @@
 #! /usr/local/bin/stackless2.6
 #
-# demo_web.py: demo for running a web.py application under Syncless WSGI.
+# demo_syncless_web_py.py: running a (web.py) application under Syncless WSGI
 # by pts@fazekas.hu at Tue Dec 22 12:16:22 CET 2009
 #
 

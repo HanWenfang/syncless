@@ -13,4 +13,4 @@ class HelloWorld(object):
 
 if __name__ == '__main__':
   import wsgi  # from syncless
-  wsgi.RunHttpServer(HelloWorld())
+  wsgi.RunHttpServer(HelloWorld)
