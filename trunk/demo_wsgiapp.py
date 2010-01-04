@@ -1,6 +1,6 @@
 #! /usr/local/bin/stackless2.6
 
-"""Code of a simple demo WSGI application."""
+"""Simple demo WSGI application code."""
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
