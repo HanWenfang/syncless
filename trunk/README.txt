@@ -102,7 +102,6 @@ Planned features
 * TODO(pts): Twisted integration
 * TODO(pts): support webob as a web framework
 * TODO(pts): productionization
-* TODO(pts): http://pypi.python.org/ and easy_install integration
 * TODO(pts): timeout on socket and SSLSocket operations
 * TODO(pts): monkey-patching socket and SSLSocket
 
