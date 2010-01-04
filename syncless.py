@@ -17,6 +17,7 @@ GNU General Public License for more details.
 Doc: http://www.disinterest.org/resource/stackless/2.6.4-docs-html/library/stackless/channels.html
 Doc: http://wiki.netbsd.se/kqueue_tutorial
 Doc: http://stackoverflow.com/questions/554805/stackless-python-network-performance-degrading-over-time
+Doc: speed benchmark: http://muharem.wordpress.com/2007/07/31/erlang-vs-stackless-python-a-first-benchmark/
 
 Asynchronous DNS for Python:
 
@@ -46,6 +47,7 @@ TODO(pts): Handle errno.EPIPE.
 TODO(pts): Handle errno.EINTR. (Do we need this in Python?)
 TODO(pts): /infinite 100K buffer on localhost is much faster than 10K.
 TODO(pts): Consider alternative implementation with eventlet.
+TODO(pts): Implement an SSL-capable HTTP proxy as a referenc
 """
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
@@ -58,6 +60,11 @@ import socket
 import stackless
 import sys
 import time
+
+try:
+  import ssl
+except ImportError:
+  ssl = None
 
 VERBOSE = False
 
@@ -350,6 +357,8 @@ class NonBlockingSocket(NonBlockingFile):
 
   __slots__ = NonBlockingFile.__slots__ + ['family', 'type', 'proto']
 
+  _sslobj = None  # SSLSocket compatibility.
+
   def __init__(self, sock, sock_type=None, proto=0):
     """Create a new NonBlockingSocket.
     
@@ -464,8 +473,9 @@ class NonBlockingSocket(NonBlockingFile):
       read_slot.credit = CREDITS_PER_ITERATION
       read_slot.channel.receive()
 
-  def connect(self):
+  def connect(self, addr):
     """Non-blocking version of socket self.write_fh.connect()."""
+    # TODO(pts): Test this.
     write_slot = self.write_slot
     while True:
       write_slot.credit -= 1
@@ -473,10 +483,11 @@ class NonBlockingSocket(NonBlockingFile):
         write_slot.credit = CREDITS_PER_ITERATION
         stackless.schedule()
       try:
-        self.write_fh.connect()
+        self.write_fh.connect(addr)
         return
       except socket.error, e:
-        if e.errno != errno.EAGAIN:
+        # errno.EINPROGRESS on Linux 2.6.
+        if e.errno not in (errno.EAGAIN, errno.EINPROGRESS):
           raise
       self.write_slots.add(self.write_slot)
       write_slot.credit = CREDITS_PER_ITERATION
@@ -519,6 +530,185 @@ class NonBlockingSocket(NonBlockingFile):
     self.write_buf.append(str(data))
     self.Flush()
 
+  # TODO(pts): Raise a NotImplementedError for makefile().
+
+if ssl:
+  class NonBlockingSslSocket(NonBlockingSocket):
+    """A NonBlockingFile wrapping an SSL client socket.
+
+    TODO(pts): Wrap SSL server sockets.
+    TODO(pts): Do signature validation.
+    """
+
+    __slots__ = NonBlockingSocket.__slots__ + ['_sslobj', 'sslsock']
+
+    def __init__(self, sock, sock_type=None, proto=0):
+      """Create a new NonBlockingSslSocket.
+      
+      Usage 1: NonBlockingSslSocket(sock)
+
+      Usage 2: NonBlockingSslSocket(family, type[, proto])
+      """
+      if sock_type is not None:
+        may_be_connected = False
+        sock = socket.socket(sock, sock_type, proto)  # family, type, proto
+      else:
+        may_be_connected = True
+      if isinstance(sock, socket.socket):
+        pass
+      elif isinstance(sock, socket._realsocket):
+        # SSLSocket needs a socket.socket, so we wrap it here.
+        sock = socket.socket(_sock=sock)
+      else:
+        raise TypeError('cannot create an SSL socket from %r' % (sock,))
+      sock.setblocking(False)  # Makybe this is not needed.
+      # self.read_fh becomes sock._sock.
+      NonBlockingSocket.__init__(self, sock)
+      self.sslsock = ssl.SSLSocket(sock, do_handshake_on_connect=False)
+      self.sslsock.setblocking(False)
+      self._sslobj = self.sslsock._sslobj
+      if may_be_connected:  # Do the SSL handshake on a connected socket.
+        try:
+          self.read_fh.getpeername()
+        except socket.error:
+          may_be_connected = False
+        if may_be_connected:
+          self.do_handshake()
+
+    def connect(self, addr):
+      """Non-blocking version of socket self.write_fh.connect()."""
+      NonBlockingSocket.connect(self, addr)
+      if not self._sslobj:
+        sslsock = self.sslsock
+        # This assignment was copied from the code of ssl.SSLSocket.connect().
+        self._sslobj = sslsock._sslobj = ssl._ssl.sslwrap(
+           sslsock._sock, False, sslsock.keyfile, sslsock.certfile,
+           sslsock.cert_reqs, sslsock.ssl_version,
+           sslsock.ca_certs)
+      self.do_handshake()
+
+    def do_handshake(self):
+      """Do the SSL handshake.
+      
+      This method must be called >= 1 times after a connect().
+      """
+      read_slot = self.read_slot
+      write_slot = self.write_slot
+      while True:
+        read_slot.credit -= 1
+        if read_slot.credit < 0:
+          read_slot.credit = CREDITS_PER_ITERATION
+          stackless.schedule()
+        try:
+          self._sslobj.do_handshake()
+          return
+        except ssl.SSLError, e:
+          if e.errno == ssl.SSL_ERROR_WANT_READ:
+            self.read_slots.add(read_slot)
+            read_slot.credit = CREDITS_PER_ITERATION
+            read_slot.channel.receive()
+          elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
+            self.write_slots.add(write_slot)
+            write_slot.credit = CREDITS_PER_ITERATION
+            write_slot.channel.receive()
+          else:
+            raise
+
+    def bind(self, address):
+      raise NotImplementedError
+
+    def listen(self, backlog):
+      raise NotImplementedError
+
+    def accept(self):
+      raise NotImplementedError
+
+    def recv(self, bufsize, flags=0):
+      """Read at most size bytes."""
+      if flags:
+        raise ValueError('flags must be 0 for SSL socket recv()')
+      read_slot = self.read_slot
+      while True:
+        read_slot.credit -= 1
+        if read_slot.credit < 0:
+          read_slot.credit = CREDITS_PER_ITERATION
+          stackless.schedule()
+        try:
+          # self._sslobj.read wouldn't check for SSL_ERROR_EOF.
+          return self.sslsock.read(bufsize)
+        except ssl.SSLError, e:
+          if e.errno == ssl.SSL_ERROR_WANT_READ:
+            self.read_slots.add(read_slot)
+            read_slot.credit = CREDITS_PER_ITERATION
+            read_slot.channel.receive()
+          elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
+            self.write_slots.add(self.write_slot)
+            self.write_slot.credit = CREDITS_PER_ITERATION
+            self.write_slot.channel.receive()
+          else:
+            raise
+
+    def recvfrom(self, bufsize, flags=0):
+      """Read at most size bytes, return (data, peer_address)."""
+      return (self.recv(bufsize, flags), self.read_fh.getpeername())
+
+    def send(self, data, flags=0):
+      read_slot = self.read_slot
+      write_slot = self.write_slot
+      while True:
+        write_slot.credit -= 1
+        if write_slot.credit < 0:
+          write_slot.credit = CREDITS_PER_ITERATION
+          stackless.schedule()
+        try:
+          return self._sslobj.write(data)
+        except socket.error, e:
+          if e.errno == ssl.SSL_ERROR_WANT_READ:
+            self.read_slots.add(read_slot)
+            read_slot.credit = CREDITS_PER_ITERATION
+            read_slot.channel.receive()
+          elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
+            self.write_slots.add(write_slot)
+            write_slot.credit = CREDITS_PER_ITERATION
+            write_slot.channel.receive()
+          else:
+            raise
+
+    def sendto(self, data, addr, flags=0):
+      if flags:
+        raise ValueError('flags must be 0 for SSL socket sendto()')
+      return self.send(data, flags)
+
+    def sendall(self, data, flags=0):
+      if flags:
+        raise ValueError('flags must be 0 for SSL socket sendall()')
+      write_slot = self.write_slot
+      read_slot = self.read_slot
+      while data:
+        write_slot.credit -= 1
+        if write_slot.credit < 0:
+          write_slot.credit = CREDITS_PER_ITERATION
+          stackless.schedule()
+        try:
+          got = self._sslobj.write(data)
+        except socket.error, e:
+          if e.errno == ssl.SSL_ERROR_WANT_READ:
+            self.read_slots.add(read_slot)
+            read_slot.credit = CREDITS_PER_ITERATION
+            read_slot.channel.receive()
+          elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
+            self.write_slots.add(write_slot)
+            write_slot.credit = CREDITS_PER_ITERATION
+            write_slot.channel.receive()
+          else:
+            raise
+          got = 0
+        if got:
+          if got == len(data):
+            break
+          data = data[got:]  # TODO(pts): Make this faster (less data copy).
+else:
+  NonBlockingSslSocket = None
 
 def LogInfo(msg):
   Log('info: ' + str(msg))

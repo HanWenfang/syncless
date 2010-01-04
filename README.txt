@@ -83,11 +83,13 @@ Related projects
 
 Planned features
 ~~~~~~~~~~~~~~~~
-* TCP communication error handling in the WSGI server
-* HTTP client library (making urllib non-blocking?)
-* Twisted integration
-* support webob as a web framework
-* productionization
-* http://pypi.python.org/ and easy_install integration
+* TODO(pts): TCP communication error handling in the WSGI server
+* TODO(pts): HTTP client library (making urllib non-blocking?)
+* TODO(pts): Twisted integration
+* TODO(pts): support webob as a web framework
+* TODO(pts): productionization
+* TODO(pts): http://pypi.python.org/ and easy_install integration
+* TODO(pts): timeout on socket and SSLSocket operations
+* TODO(pts): monkey-patching socket and SSLSocket
 
 __EOF__
