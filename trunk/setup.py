@@ -33,4 +33,5 @@ setup(name='syncless',
           "Topic :: Software Development :: Libraries :: Application Frameworks",
           "Topic :: Software Development :: Libraries :: Python Modules",
       ],
+      requires=['stackless'],
      )
