@@ -11,21 +11,21 @@ import sys
 import time
 
 import demo_wsgiapp
-import syncless
-import wsgi
+from syncless import nbio
+from syncless import wsgi
 
 try:
-  import syncless_dns
+  from syncless import dns
 except ImportError:  # Don't ignore inner ImportError{}s.
-  syncless_dns = None
+  dns = None
 
 def ChatWorker(nbf, nbf_to_close):
   # TODO(pts): Let's select this from the command line.
   try:
-    if syncless_dns:
+    if dns:
       nbf.Write('resolving\n')
       nbf.Flush()
-      for rdata in syncless_dns.resolver.query('www.google.com', 'A'):
+      for rdata in dns.resolver.query('www.google.com', 'A'):
         nbf.Write('resolved to %r\n' % (rdata,))
     nbf.Write('Type something!\n')  # TODO(pts): Handle EPIPE.
     while True:
@@ -62,28 +62,28 @@ if __name__ == '__main__':
     else:
       assert 0, 'invalid arg: %s' % arg
     
-  syncless.VERBOSE = do_verbose
+  nbio.VERBOSE = do_verbose
 
   if use_psyco:
     try:
       import psyco
       psyco.full()
-      syncless.LogInfo('using psyco')
+      nbio.LogInfo('using psyco')
     except ImportError:
-      syncless.LogInfo('psyco not available')
+      nbio.LogInfo('psyco not available')
       pass
   else:
-    syncless.LogInfo('not using psyco')
+    nbio.LogInfo('not using psyco')
 
-  if syncless_dns:
-    #for rdata in syncless_dns.resolver.query('asd', 'A'):
-    #  syncless.LogInfo(repr(rdata))
-    #syncless.LogInfo('Query1 done.')
-    for rdata in syncless_dns.resolver.query('en.wikipedia.org', 'A'):
-      syncless.LogInfo(repr(rdata))
-    syncless.LogInfo('Query2 done.')
+  if dns:
+    #for rdata in dns.resolver.query('asd', 'A'):
+    #  nbio.LogInfo(repr(rdata))
+    #nbio.LogInfo('Query1 done.')
+    for rdata in dns.resolver.query('en.wikipedia.org', 'A'):
+      nbio.LogInfo(repr(rdata))
+    nbio.LogInfo('Query2 done.')
     pass
-  listener_nbs = syncless.NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
+  listener_nbs = nbio.NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
   listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   listener_nbs.bind(('127.0.0.1', 6666))
   # Reducing this has a strong negative effect on ApacheBench worst-case
@@ -91,9 +91,9 @@ if __name__ == '__main__':
   # ab -n 100000 -c 50 http://127.0.0.1:6666/ >ab.stackless3.txt
   # It increases the maximum Connect time from 8 to 9200 milliseconds.
   listener_nbs.listen(100)
-  syncless.LogInfo('listening on %r' % (listener_nbs.getsockname(),))
+  nbio.LogInfo('listening on %r' % (listener_nbs.getsockname(),))
   stackless.tasklet(wsgi_listener)(listener_nbs, demo_wsgiapp.WsgiApp)
-  std_nbf = syncless.NonBlockingFile(sys.stdin, sys.stdout)
+  std_nbf = nbio.NonBlockingFile(sys.stdin, sys.stdout)
   stackless.tasklet(ChatWorker)(std_nbf, nbf_to_close=listener_nbs)
-  syncless.RunMainLoop()
+  nbio.RunMainLoop()
   # We reach this after 'Bye!' in ChatWorker.

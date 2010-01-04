@@ -36,5 +36,5 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
   do_PUT = do_GET
 
 if __name__ == '__main__':
-  import wsgi  # from syncless
+  from syncless import wsgi
   wsgi.RunHttpServer(MyHandler)

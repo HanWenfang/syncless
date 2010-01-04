@@ -15,22 +15,22 @@ GNU General Public License for more details.
 Example usage:
 
   import stackless
-  import syncless
-  import syncless_dns
+  from syncless import nbio
+  from syncless import dns
 
   def MyTasklet():
     ...
     try:
-      for rdata syncless_dns.resolver.query('www.google.com', 'A'):
+      for rdata dns.resolver.query('www.google.com', 'A'):
         print repr(rdata)
-    except syncless_dns.DNSException:
+    except dns.DNSException:
       ...
     ...
 
   ...
   stackless.tasklet(MyTasklet)()
   ...
-  syncless.RunMainLoop()
+  nbio.RunMainLoop()
 
 TODO(pts): Create a copy of dns.query (and other dns.* modules), don't
 monkeypatch the original.
@@ -44,12 +44,13 @@ import sys
 import stackless
 import struct
 
-import dns  # http://www.dnspython.org/
+# `import dns' would do a relative import (`from . import dns'), but we want
+# an absolute import.
+dns = __import__('dns')  # http://www.dnspython.org/
 
-import syncless
+import syncless.nbio as nbio
 
 # Use /dev/urandom for dns.entropy instead of the default /dev/random.
-import dns
 dns.entropy = sys.modules['dns.entropy'] = type(sys)('dns.entropy')
 dns.entropy.__builtins__ = __builtins__
 dns.entropy.__doc__ = 'Fake dns.entropy module using /dev/urandom'
@@ -61,9 +62,9 @@ def Random16():
 dns.entropy.random_16 = Random16
 
 # Import these after we've faked dns.entropy.
-import dns.query
-import dns.resolver
-import dns.exception
+__import__('dns.query')
+__import__('dns.resolver')
+__import__('dns.exception')
 
 def OurWaitFor(*args):
   raise NotImplementedError
@@ -85,7 +86,7 @@ dns.query._wait_for_readable = OurWaitForReadable
 fake_socket = type(sys)('fake_socket')
 fake_socket.__builtins__ = __builtins__
 fake_socket.__doc__ = 'Fake socket module replacement for dns.query.'
-fake_socket.socket = syncless.NonBlockingSocket
+fake_socket.socket = nbio.NonBlockingSocket
 for name in dir(socket):
   if (name.startswith('AF_') or
       name.startswith('INADDR_') or

@@ -12,5 +12,5 @@ class HelloWorld(object):
   index.exposed = True
 
 if __name__ == '__main__':
-  import wsgi  # from syncless
+  from syncless import wsgi
   wsgi.RunHttpServer(HelloWorld)

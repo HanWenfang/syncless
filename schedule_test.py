@@ -7,7 +7,7 @@ import stackless
 import sys
 import unittest
 
-import syncless
+from syncless import nbio
 
 class ScheduleTest(unittest.TestCase):
 
