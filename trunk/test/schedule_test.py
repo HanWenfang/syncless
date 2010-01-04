@@ -13,12 +13,12 @@ class ScheduleTest(unittest.TestCase):
 
   def setUp(self):
     # TODO(pts): Detect self.verbosity in one of the unittest.py callers.
-    syncless.VERBOSE = '-v' in sys.argv[1:]
+    nbio.VERBOSE = '-v' in sys.argv[1:]
     self.assertEqual(1, stackless.runcount)
 
   def tearDown(self):
-    if syncless.HasCurrentMainLoop():
-      main_loop = syncless.CurrentMainLoop()
+    if nbio.HasCurrentMainLoop():
+      main_loop = nbio.CurrentMainLoop()
       self.assertEqual(1 + int(main_loop.run_tasklet != stackless.current),
                        stackless.runcount)
       main_loop.Run()
@@ -32,7 +32,7 @@ class ScheduleTest(unittest.TestCase):
     pass
 
   def testEmptyMainLoop(self):
-    syncless.RunMainLoop()
+    nbio.RunMainLoop()
 
   def testFairSchedulingWithoutFile(self):
     events = []
@@ -45,7 +45,7 @@ class ScheduleTest(unittest.TestCase):
     stackless.tasklet(Worker)('A', 5)
     stackless.tasklet(Worker)('B', 9)
     stackless.tasklet(Worker)('C', 7)
-    syncless.RunMainLoop()
+    nbio.RunMainLoop()
 
     self.assertEqual('ABCABCABCABCABCBCBCBB', ''.join(events))
 
@@ -57,20 +57,20 @@ class ScheduleTest(unittest.TestCase):
         stackless.schedule()
         count -= 1
 
-    nbf = syncless.NonBlockingFile(*os.pipe())
+    nbf = nbio.NonBlockingFile(*os.pipe())
     try:
       stackless.tasklet(Worker)('A', 5)
       stackless.tasklet(Worker)('B', 9)
       stackless.tasklet(Worker)('C', 7)
-      syncless.RunMainLoop()
+      nbio.RunMainLoop()
 
       self.assertEqual('ABCABCABCABCABCBCBCBB', ''.join(events))
-      #self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
+      #self.assertEqual([nbf], nbio.CurrentMainLoop().nbfs)
     finally:
       nbf.close()
-    #self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
-    syncless.RunMainLoop()
-    #self.assertEqual([], syncless.CurrentMainLoop().nbfs)
+    #self.assertEqual([nbf], nbio.CurrentMainLoop().nbfs)
+    nbio.RunMainLoop()
+    #self.assertEqual([], nbio.CurrentMainLoop().nbfs)
 
   def testFairSchedulingBlockedOnFile(self):
     events = []
@@ -82,7 +82,7 @@ class ScheduleTest(unittest.TestCase):
         if count > 0:
           stackless.schedule()
 
-    nbf = syncless.NonBlockingFile(*os.pipe())
+    nbf = nbio.NonBlockingFile(*os.pipe())
 
     try:
       def SenderWorker(name, count):
@@ -105,7 +105,7 @@ class ScheduleTest(unittest.TestCase):
       stackless.tasklet(Worker)('B', 6)
       stackless.tasklet(ReceiverWorker)('W')
       stackless.tasklet(Worker)('C', 9)
-      syncless.RunMainLoop()
+      nbio.RunMainLoop()
 
       self.assertEqual(
           'ABWC'  # First iteration, in tasklet clreation order.
@@ -118,11 +118,11 @@ class ScheduleTest(unittest.TestCase):
           'C'
           'C',
           ''.join(events))
-      #self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
+      #self.assertEqual([nbf], nbio.CurrentMainLoop().nbfs)
       nbf.close()
-      #self.assertEqual([nbf], syncless.CurrentMainLoop().nbfs)
-      syncless.RunMainLoop()
-      #self.assertEqual([], syncless.CurrentMainLoop().nbfs)
+      #self.assertEqual([nbf], nbio.CurrentMainLoop().nbfs)
+      nbio.RunMainLoop()
+      #self.assertEqual([], nbio.CurrentMainLoop().nbfs)
     finally:
       nbf.close()
 

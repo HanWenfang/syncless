@@ -1,5 +1,6 @@
-README for Syncless
-~~~~~~~~~~~~~~~~~~~
+README for Syncless: asynchronous client and server library using
+Stackless Python
+~~~~~~~~~~~~~~~~
 by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
 -- Mon Dec 28 00:40:30 CET 2009
 
@@ -54,14 +55,15 @@ How to use
 
      $ stackless2.6 ./demo.py
 
-6. Have a look at demo_*.py in the source directory to study the examples.
+6. Have a look at examples/demo_*.py in the source directory to study the
+   examples.
 
 The original blog announcement of Syncless' precedessor:
 http://ptspts.blogspot.com/2009/12/experimental-http-server-using.html
 
 Example code
 ~~~~~~~~~~~~
-See demo_*.py in the Syncless source directory.
+See examples/demo_*.py in the Syncless source directory.
 
 Using Syncless with web frameworks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -69,11 +71,12 @@ The WSGI-capable HTTP server in Syncless can run any framework with WSGI
 support. Examples:
 
 * pure WSGI application, without a framework: see SimpleWsgiApp in demo.py
-  and demo_wsgiapp.py
-* (web.py): see demo_syncless_web_py.py
-* CherryPy: see demo_syncless_cherrypy.py
-* Google AppEngine webapp: see demo_syncless_webapp.py
-* Python built-in BaseHTTPRequestHandler: see demo_syncless_basehttp.py
+  and examples/demo_wsgiapp.py
+* (web.py): see examples/demo_syncless_web_py.py
+* CherryPy: see examples/demo_syncless_cherrypy.py
+* Google AppEngine webapp: see examples/demo_syncless_webapp.py
+* Python built-in BaseHTTPRequestHandler: see
+  examples/demo_syncless_basehttp.py
 
 Please note that Syncless is not a web framework.
 
