@@ -45,12 +45,23 @@ How to use
 
 3. Download and extract Syncless.
 
-4. In the Syncless directory, run
+4. Optionally, install Syncless:
+
+     $ stackless2.6 ./setup.py build
+     $ sudo stackless2.6 ./setup.py install
+
+5. In the Syncless directory, run
 
      $ stackless2.6 ./demo.py
 
+6. Have a look at demo_*.py in the source directory to study the examples.
+
 The original blog announcement of Syncless' precedessor:
 http://ptspts.blogspot.com/2009/12/experimental-http-server-using.html
+
+Example code
+~~~~~~~~~~~~
+See demo_*.py in the Syncless source directory.
 
 Using Syncless with web frameworks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

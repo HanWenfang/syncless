@@ -6,9 +6,9 @@ __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import socket
 
-import syncless
+from syncless import nbio
 
-s = syncless.NonBlockingSslSocket(socket.AF_INET, socket.SOCK_STREAM)
+s = nbio.NonBlockingSslSocket(socket.AF_INET, socket.SOCK_STREAM)
 addr = ('mail.google.com', 443)
 s.connect(addr)
 s.sendall('GET / HTTP/1.0\r\nHost: %s:%s\r\n\r\n' % addr)

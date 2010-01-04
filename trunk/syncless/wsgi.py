@@ -29,7 +29,7 @@ import stackless
 import time
 import types
 
-import syncless
+from syncless import nbio
 
 
 # TODO(pts): Use this.
@@ -69,7 +69,7 @@ class WsgiErrorsStream(object):
   @classmethod
   def write(cls, msg):
     # TODO(pts): Buffer on newline.
-    syncless.LogDebug(msg)
+    nbio.LogDebug(msg)
 
   @classmethod
   def writelines(cls, msgs):
@@ -92,7 +92,7 @@ class WsgiInputStream(object):
   # TODO(pts): Make the buffering faster.
 
   def __init__(self, nbf, content_length):
-    if not isinstance(nbf, syncless.NonBlockingFile):
+    if not isinstance(nbf, nbio.NonBlockingFile):
       raise TypeError
     if type(content_length) not in (int, long) or content_length < 0:
       raise TypeError
@@ -356,7 +356,7 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
         
       # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
       # req_buf may contain some bytes after the previous request.
-      syncless.LogDebug('reading HTTP request on nbf=%x' % id(nbf))
+      nbio.LogDebug('reading HTTP request on nbf=%x' % id(nbf))
       while True:
         if req_buf:
           # TODO(pts): Support HTTP/0.9 requests without headers.
@@ -628,12 +628,12 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
         items.close()
   finally:
     nbf.close()
-    syncless.LogDebug('connection closed nbf=%x' % id(nbf))
+    nbio.LogDebug('connection closed nbf=%x' % id(nbf))
 
 
 def WsgiListener(nbs, wsgi_application):
   """HTTP server serving WSGI, listing on nbs, to be run in a tasklet."""
-  if not isinstance(nbs, syncless.NonBlockingSocket):
+  if not isinstance(nbs, nbio.NonBlockingSocket):
     raise TypeError
   if not callable(wsgi_application):
     raise TypeError
@@ -658,8 +658,8 @@ def WsgiListener(nbs, wsgi_application):
     while True:
       accepted_nbs, peer_name = nbs.accept()
       date = GetHttpDate(time.time())
-      if syncless.VERBOSE:
-        syncless.LogDebug('connection accepted from=%r nbf=%x' %
+      if nbio.VERBOSE:
+        nbio.LogDebug('connection accepted from=%r nbf=%x' %
                  (peer_name, id(accepted_nbs)))
       stackless.tasklet(WsgiWorker)(
           accepted_nbs, peer_name, wsgi_application, env, date)
@@ -712,7 +712,7 @@ def CherryPyWsgiListener(nbs, wsgi_application):
   """HTTP server serving WSGI, using CherryPy's implementation."""
   # TODO(pts): Why is CherryPy's /infinite twice as fast as ours?
   # Only sometimes.
-  if not isinstance(nbs, syncless.NonBlockingSocket):
+  if not isinstance(nbs, nbio.NonBlockingSocket):
     raise TypeError
   if not callable(wsgi_application):
     raise TypeError
@@ -730,8 +730,8 @@ def CherryPyWsgiListener(nbs, wsgi_application):
   try:
     while True:
       accepted_nbs, peer_name = nbs.accept()
-      if syncless.VERBOSE:
-        syncless.LogDebug('cpw connection accepted from=%r nbf=%x' %
+      if nbio.VERBOSE:
+        nbio.LogDebug('cpw connection accepted from=%r nbf=%x' %
                  (peer_name, id(accepted_nbs)))
       wsgi_server.socket.ProcessAccept(accepted_nbs, peer_name)
       assert not wsgi_server.requests.requests
@@ -947,16 +947,16 @@ def RunHttpServer(app, server_address=None):
   except ImportError:
     pass
   if len(sys.argv) > 1:  # TODO(pts): Use getopt.
-    syncless.VERBOSE = True
+    nbio.VERBOSE = True
   webapp = (sys.modules.get('google.appengine.ext.webapp') or
             sys.modules.get('webapp'))
   # Use if already loaded.
   BaseHTTPServer = sys.modules.get('BaseHTTPServer')
   if webapp and isinstance(app, type) and issubclass(
       app, webapp.RequestHandler):
-    syncless.LogInfo('running webapp RequestHandler')
+    nbio.LogInfo('running webapp RequestHandler')
     wsgi_application = webapp.WSGIApplication(
-        [('/', app)], debug=bool(syncless.VERBOSE))
+        [('/', app)], debug=bool(nbio.VERBOSE))
     assert callable(wsgi_application)
     if server_address is None:
       server_address = ('127.0.0.1', 6666)
@@ -964,12 +964,12 @@ def RunHttpServer(app, server_address=None):
       hasattr(app, 'handle') and hasattr(app, 'request') and
       hasattr(app, 'run') and hasattr(app, 'wsgifunc') and
       hasattr(app, 'cgirun') and hasattr(app, 'handle')):
-    syncless.LogInfo('running (web.py) web.application')
+    nbio.LogInfo('running (web.py) web.application')
     wsgi_application = app.wsgifunc()
     if server_address is None:
       server_address = ('0.0.0.0', 8080)  # (web.py) default
   elif CanBeCherryPyApp(app):
-    syncless.LogInfo('running CherryPy application')
+    nbio.LogInfo('running CherryPy application')
     if isinstance(app, type) or isinstance(app, types.ClassType):
       app = app()
     import cherrypy
@@ -981,15 +981,15 @@ def RunHttpServer(app, server_address=None):
   elif (BaseHTTPServer and
         (isinstance(app, type) or isinstance(app, types.ClassType)) and
         issubclass(app, BaseHTTPServer.BaseHTTPRequestHandler)):
-    syncless.LogInfo('running BaseHTTPRequestHandler application')
+    nbio.LogInfo('running BaseHTTPRequestHandler application')
     wsgi_application = BaseHttpWsgiWrapper(app)
     if server_address is None:
       server_address = ('127.0.0.1', 6666)
   elif callable(app):
     if webapp and isinstance(app, webapp.WSGIApplication):
-      syncless.LogInfo('running webapp WSGI application')
+      nbio.LogInfo('running webapp WSGI application')
     else:
-      syncless.LogInfo('running WSGI application')
+      nbio.LogInfo('running WSGI application')
 
     # Check that app accepts the proper number of arguments.
     has_self = False
@@ -1017,7 +1017,7 @@ def RunHttpServer(app, server_address=None):
     print type(app)
     assert 0, 'unsupported application type for %r' % (app,)
     
-  listener_nbs = syncless.NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
+  listener_nbs = nbio.NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
   listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   listener_nbs.bind(server_address)
   # Reducing this has a strong negative effect on ApacheBench worst-case
@@ -1025,7 +1025,7 @@ def RunHttpServer(app, server_address=None):
   # ab -n 100000 -c 50 http://127.0.0.1:6666/ >ab.stackless3.txt
   # It increases the maximum Connect time from 8 to 9200 milliseconds.
   listener_nbs.listen(100)
-  syncless.LogInfo('listening on %r' % (listener_nbs.getsockname(),))
+  nbio.LogInfo('listening on %r' % (listener_nbs.getsockname(),))
   # From http://webpy.org/install (using with mod_wsgi).
   stackless.tasklet(WsgiListener)(listener_nbs, wsgi_application)
-  syncless.RunMainLoop()
+  nbio.RunMainLoop()
