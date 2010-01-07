@@ -12,6 +12,7 @@ concurrence_wsgi            1591.80   1234.72
 concurrence_wsgi_greenlet   1019.02    963.39
 eventlet                    4385.39   2787.06
 eventlet_wsgi               1857.89   1442.58   
+node_js                     4370.64   3450.65
 syncless                    8313.59   4249.89
 syncless_wsgi               4281.65   2836.07
 tornado                     3228.51   2287.28
@@ -25,13 +26,16 @@ Conclusions and remarks
   inherent limitation in an I/O library that prevents it from scaling up.
 * See a similar, but more comprehensive benchmark with graphs at
   http://nichol.as/asynchronous-servers-in-python .
-* Syncless is the clear winner for the parallel case, and it also wins
-  (although by only a little) in the sequential case.
+* Syncless is the clear winner for the non-WSGI parallel case, it also wins
+  (although by only a little) in the sequential case, and it is good at the
+  parallell WSGI case as well.
 * As expected, Stackless Python is faster than greenlet, especially when
   there are lots of parallel requests.
 * The huge difference between syncless and syncless_wsgi suggests that the
   WSGI server of Syncless is a good candidate for optimization (possibly in
   Cython and Pyrex, because the Python code already looks optimized).
+* node.js has a very fast HTTP server protocol implementation (partially in
+  C).
 
 Environment
 ~~~~~~~~~~~
@@ -68,6 +72,7 @@ The following I/O libraries were tested:
   Python and with greenlet)
 * speed_eventlet.py: eventlet-0.9.2 TCP
 * speed_eventlet_wsgi.py: eventlet-0.9.2 WSGI server
+* speed_node_js.js: node.js-0.1.24 custome web server
 * speed_syncless.py: Syncless-v42 TCP
 * speed_syncless_wsgi.py: Syncless-v42 WSGI server
 * speed_tornado.py: Tornado-0.2 custom web server

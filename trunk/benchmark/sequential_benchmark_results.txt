@@ -42,3 +42,8 @@
 # doing 10000 fetches
 # final num=2845218640
 # ./client_seq.py  0.39s user 0.68s system 10% cpu 10.380 total
+
+# to speed_node_js.js
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.49s user 0.68s system 40% cpu 2.898 total
