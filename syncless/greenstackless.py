@@ -180,7 +180,7 @@ class scheduler(object):
             sender = channel.queue.popleft()
             sender.blocked = False
             data, sender.data = sender.data, None
-            if preference == 1:
+            if preference >= 0:
                 #sender preference
                 self._runnable.rotate(-1)
                 self._runnable.appendleft(sender)
@@ -229,7 +229,7 @@ class scheduler(object):
             receiver.data = data
             receiver.blocked = False
             #put receiver just after current task in runnable and schedule (which will pick it up)
-            if preference == -1: #receiver pref
+            if preference < 0: #receiver pref
                 self._runnable.rotate(-1)
                 self._runnable.appendleft(receiver)
                 self._runnable.rotate(1)
