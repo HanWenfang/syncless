@@ -1,0 +1,44 @@
+# to speed_concurrence.py
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.51s user 0.68s system 33% cpu 3.600 total
+#
+# to speed_tornado.py
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.56s user 0.66s system 27% cpu 4.372 total
+#
+# to speed_concurrence.py with greenlet and Python 2.5
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.45s user 0.66s system 27% cpu 3.972 total
+#
+# to speed_syncless.py
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.50s user 0.56s system 44% cpu 2.353 total
+#
+# to speed_concurrence_wsgi.py
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.60s user 0.64s system 15% cpu 8.099 total
+#
+# to speed_syncless_wsgi.py
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.56s user 0.57s system 32% cpu 3.526 total
+#
+# to speed_eventlet_wsgi.py
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.56s user 0.66s system 17% cpu 6.932 total
+#
+# to speed_eventlet.py
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.45s user 0.59s system 28% cpu 3.588 total
+
+# to speed_concurrence_wsgi.py with greenlet and Python 2.5
+# doing 10000 fetches
+# final num=2845218640
+# ./client_seq.py  0.39s user 0.68s system 10% cpu 10.380 total
