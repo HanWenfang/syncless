@@ -27,6 +27,8 @@ Features
 * non-blocking stdin/stdout support (can be useful for implementing an
   interactive server console)
 * pure Python implementation, requires Stackless Python 2.6 only
+* fast (comparable and sometimes faster than Concurrency, eventlet, node.js
+  and eventlet), see benchmark/README.txt
 
 Requirements
 ~~~~~~~~~~~~
