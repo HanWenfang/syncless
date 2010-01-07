@@ -158,6 +158,38 @@ class tasklet(object):
         if self not in _scheduler._runnable:
             _scheduler._runnable.append(self)
 
+    @property
+    def next(self):
+        """Return the next tasklet in the doubly-linked list.
+
+        Stackless implements this method for all tasklets. This implementation
+        raises a NotImplementedError unless self is scheduler.getcurrent() or
+        self is the last runnable tasklet.
+        """
+        runnable = _scheduler._runnable
+        if self is runnable[0]:
+            return runnable[len(runnable) > 1]
+        elif self is runnable[-1]:
+            return runnable[0]
+        else:
+            raise NotImplementedError('tasklet.next for not current or last')
+
+    @property
+    def prev(self):
+        """Return the next tasklet in the doubly-linked list.
+
+        Stackless implements this method for all tasklets. This implementation
+        raises a NotImplementedError unless self is scheduler.getcurrent() or
+        self is the last runnable tasklet.
+        """
+        runnable = _scheduler._runnable
+        if self is runnable[0]:
+            return runnable[-1]
+        elif self is runnable[-1]:
+            return runnable[-2]
+        else:
+            raise NotImplementedError('tasklet.prev for not current or last')
+
 class scheduler(object):
     def __init__(self):
         self._main_task = tasklet(greenlet = greenlet.getcurrent(), alive = True)
