@@ -127,6 +127,37 @@ class tasklet(object):
             _id = str(self.func)
         return '<tasklet %s at %0x>' % (_id, id(self))
 
+    def remove(self):
+        """Remove self from the main scheduler queue.
+
+        Please note that this implementation has O(r) complexity, where r is
+        the number or runnable (non-blocked) tasklets. The implementation in
+        Stackless has O(1) complexity.
+        """
+        if self.blocked:
+            raise RuntimeError('You cannot remove a blocked tasklet.')
+        i = 0
+        for tasklet_obj in _scheduler._runnable:
+            if tasklet_obj is self:
+                del _scheduler._runnable[i]
+                return self
+            i += 1
+        return self
+
+    def insert(self):
+        """Add self to the end of the scheduler queue, unless already in.
+
+        Please note that this implementation has O(r) complexity, where r is
+        the number or runnable (non-blocked) tasklets. The implementation in
+        Stackless has O(1) complexity.
+        """
+        if not self.alive:
+            raise RuntimeError('You cannot run an unbound(dead) tasklet')
+        if self.blocked:
+            raise RuntimeError('You cannot run a blocked tasklet')
+        if self not in _scheduler._runnable:
+            _scheduler._runnable.append(self)
+
 class scheduler(object):
     def __init__(self):
         self._main_task = tasklet(greenlet = greenlet.getcurrent(), alive = True)
