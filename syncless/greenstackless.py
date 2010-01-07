@@ -190,6 +190,30 @@ class tasklet(object):
         else:
             raise NotImplementedError('tasklet.prev for not current or last')
 
+    def run(self):
+        """Switch execution to self, make it stackless.getcurrent().
+
+        Please note that this implementation has O(r) complexity, where r is
+        the number or runnable (non-blocked) tasklets. The implementation in
+        Stackless has O(1) complexity.
+        """
+        if self.blocked:
+            raise RuntimeError('You cannot run a blocked tasklet')
+        if not self.alive:
+            raise RuntimeError('You cannot run an unbound(dead) tasklet')
+        runnable = _scheduler._runnable
+        i = 0
+        for tasklet_obj in runnable:
+            if tasklet_obj is self:
+                if i:
+                    runnable.rotate(-i)
+                    self.greenlet.switch()
+                return
+            i += 1
+        runnable.appendleft(self)
+        self.greenlet.switch()
+
+
 class scheduler(object):
     def __init__(self):
         self._main_task = tasklet(greenlet = greenlet.getcurrent(), alive = True)
