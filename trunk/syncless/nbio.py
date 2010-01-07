@@ -852,7 +852,9 @@ class MainLoop(object):
         # TODO(pts): Use epoll(2) or poll(2) instead of select(2).
         # TODO(pts): Do a wake up without a file descriptor on timeout.
         # TODO(pts): Allow one tasklet to wait for `or' of multiple events.
-        if stackless.runcount > 1:
+        # Please note that stackless.runcount instead of
+        # stackless.getruncount() wouldn't work in greenlet.
+        if stackless.getruncount() > 1:
           # Don't wait if we have some cooperative tasklets.
           timeout = 0
         else:
@@ -1058,7 +1060,7 @@ class MainLoop(object):
         read_available = write_available = None  # Release reference.
 
         mainc += 1
-        if reinsert_tasklet.next == stackless.current:
+        if reinsert_tasklet is stackless.current.prev:
           # It would be OK just to call reinsert_tasklet.run() here
           # (just like in the else branch), but this one seems to be faster.
           reinsert_tasklet.remove()
@@ -1066,7 +1068,7 @@ class MainLoop(object):
         else:
           # Run the tasklets inserted above.
           reinsert_tasklet.run()
-      elif stackless.runcount <= 1:
+      elif stackless.getruncount() <= 1:
         LogDebug('no more files open, nothing to do, end of main loop')
         break
       else:
