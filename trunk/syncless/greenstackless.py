@@ -105,9 +105,10 @@ class tasklet(object):
             except TaskletExit:
                 pass #let it pass silently
             except:
-                import logging
-                logging.exception('unhandled exception in greenlet')
-                #don't propagate to parent
+                assert self is not main
+                # Stackless aborts the whole process upon an unhandled
+                # exception in the tasklet, so do we.
+                main.throw(*sys.exc_info())
             finally:
                 assert _scheduler.current == self
                 _scheduler.remove(self)
