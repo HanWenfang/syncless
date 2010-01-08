@@ -60,8 +60,8 @@ class channel(object):
     def send(self, data):
         return _scheduler._send(self, data, self.preference)
 
-    def send_exception(self, exp_type, *args):
-        self.send(bomb(exp_type, exp_type(*args)))
+    def send_exception(self, exc_type, *args):
+        self.send(bomb(exc_type, exc_type(*args)))
 
     def send_sequence(self, iterable):
         for item in iterable:
@@ -118,8 +118,18 @@ class tasklet(object):
     def kill(self):
         _scheduler.throw(self, TaskletExit)
 
-    def raise_exception(self, *args):
-        _scheduler.throw(self, *args)
+    def raise_exception(self, exc_class, *args):
+        _scheduler.throw(self, exc_class(*args))
+
+    def throw(self, typ, val, tb):
+        """Raise the specified exception with the specified traceback.
+
+        Please note there is no such method tasklet.throw in Stackless. In
+        stackless, one can use tasklet_obj.tempval = stackless.bomb(...), and
+        then tasklet_obj.run() -- or send the bomb in a channel if the
+        target tasklet is blocked on receiving from.
+        """
+        _scheduler.throw(self, typ, val, tb)
 
     def __str__(self):
         return repr(self)
@@ -244,31 +254,32 @@ class scheduler(object):
         next_task = self._runnable[0]
         next_task.greenlet.switch()
 
-    def throw(self, task, *args):
+    def throw(self, task, typ, val=None, tb=None):
         """Raise an exception in the tasklet, and run it.
 
         Please note that this implementation has O(r) complexity, where r is
         the number or runnable (non-blocked) tasklets. The implementation in
         Stackless has O(1) complexity.
         """
-        assert args
         if not task.alive: return #this is what stackless does
         runnable = self._runnable
-        task.greenlet.parent = runnable[0].greenlet
+        # TODO(pts): Avoid cyclic parent chain exception here.
+        if (task is not runnable[0] and
+            runnable[0].greenlet.parent is not task.greenlet):
+            task.greenlet.parent = runnable[0].greenlet
         if not task.blocked:
             i = 0
             for task2 in runnable:
                 if task2 is task:
                     if i:
                         runnable.rotate(-i)
-                        task.greenlet.throw(*args)
+                        task.greenlet.throw(typ, val, tb)
                         return
                     else:
-                        exc_class = args.pop(0)
-                        raise exc_class(*args)
+                        raise typ, val, tb
                 i += 1
         runnable.appendleft(task)
-        task.greenlet.throw(*args)
+        task.greenlet.throw(typ, val, tb)
 
     def _receive(self, channel, preference):
         #Receiving 1):
