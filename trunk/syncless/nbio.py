@@ -799,17 +799,19 @@ class MainLoop(object):
       except:
         # Propagate the exception to the main thread, so we don't get a
         # StopIteration instead.
-        bomb = stackless.bomb(*sys.exc_info())
-        if stackless.main.blocked:
-          c = stackless.main._channel
-          old_preference = c.preference
-          c.preference = 1  # Prefer the sender.
-          for i in xrange(-c.balance):
-            c.send(bomb)
-          c.preference = old_preference
-        else:
-          stackless.main.tempval = bomb
-        stackless.main.run()
+        stackless.main.raise_exception(
+            sys.exc_info()[0], *sys.exc_info()[1].args)
+        #bomb = stackless.bomb(*sys.exc_info())
+        #if stackless.main.blocked:
+        #  c = stackless.main._channel
+        #  old_preference = c.preference
+        #  c.preference = 1  # Prefer the sender.
+        #  for i in xrange(-c.balance):
+        #    c.send(bomb)
+        #  c.preference = old_preference
+        #else:
+        #  stackless.main.tempval = bomb
+        #stackless.main.run()
 
   def RunWrapped(self):
     """Run the main loop until there are no tasklets left.
