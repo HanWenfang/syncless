@@ -38,6 +38,8 @@ assert hasattr(greenlet, 'throw'), (
     'wrong version of greenlet loaded; please get greenlet from svn co '
     'http://codespeak.net/svn/py/release/0.9.x/py/c-extension/greenlet')
 
+import sys
+
 from collections import deque
 
 class TaskletExit(SystemExit):pass
