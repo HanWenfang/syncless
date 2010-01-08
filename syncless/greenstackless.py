@@ -25,6 +25,10 @@ try:
 except ImportError:
     from greenlet import greenlet #there is an older package containing just the greenlet lib
 
+assert hasattr(greenlet, 'throw'), (
+    'wrong version of greenlet loaded; please get greenlet from svn co '
+    'http://codespeak.net/svn/py/release/0.9.x/py/c-extension/greenlet')
+
 from collections import deque
 
 class TaskletExit(SystemExit):pass
@@ -137,8 +141,8 @@ class tasklet(object):
         if self.blocked:
             raise RuntimeError('You cannot remove a blocked tasklet.')
         i = 0
-        for tasklet_obj in _scheduler._runnable:
-            if tasklet_obj is self:
+        for task in _scheduler._runnable:
+            if task is self:
                 del _scheduler._runnable[i]
                 return self
             i += 1
@@ -203,8 +207,8 @@ class tasklet(object):
             raise RuntimeError('You cannot run an unbound(dead) tasklet')
         runnable = _scheduler._runnable
         i = 0
-        for tasklet_obj in runnable:
-            if tasklet_obj is self:
+        for task in runnable:
+            if task is self:
                 if i:
                     runnable.rotate(-i)
                     self.greenlet.switch()
@@ -225,8 +229,14 @@ class scheduler(object):
     def schedule(self):
         """schedules the next tasks and puts the current task back at the queue of runnables"""
         self._runnable.rotate(-1)
-        next_task = self._runnable[0]
-        next_task.greenlet.switch()
+        self._runnable[0].greenlet.switch()
+
+    def schedule_remove(self):
+        """makes stackless.getcurrent() not runnable, schedules next tasks"""
+        runnable = self._runnable
+        if len(runnable) > 1:
+            runnable.popleft()
+            self._runnable[0].greenlet.switch()
 
     def schedule_block(self):
         """blocks the current task and schedules next"""
@@ -235,19 +245,30 @@ class scheduler(object):
         next_task.greenlet.switch()
 
     def throw(self, task, *args):
+        """Raise an exception in the tasklet, and run it.
+
+        Please note that this implementation has O(r) complexity, where r is
+        the number or runnable (non-blocked) tasklets. The implementation in
+        Stackless has O(1) complexity.
+        """
+        assert args
         if not task.alive: return #this is what stackless does
-
-        assert task.blocked or task in self._runnable
-
-        task.greenlet.parent = self._runnable[0].greenlet
-        if task.blocked:
-            self._runnable.appendleft(task)
-        else:
-            self._runnable.remove(task)
-            self._runnable.appendleft(task)
-
+        runnable = self._runnable
+        task.greenlet.parent = runnable[0].greenlet
+        if not task.blocked:
+            i = 0
+            for task2 in runnable:
+                if task2 is task:
+                    if i:
+                        runnable.rotate(-i)
+                        task.greenlet.throw(*args)
+                        return
+                    else:
+                        exc_class = args.pop(0)
+                        raise exc_class(*args)
+                i += 1
+        runnable.appendleft(task)
         task.greenlet.throw(*args)
-
 
     def _receive(self, channel, preference):
         #Receiving 1):
@@ -367,4 +388,5 @@ def getcurrent():
 def schedule():
     return _scheduler.schedule()
 
-
+def schedule_remove():
+    return _scheduler.schedule_remove()
