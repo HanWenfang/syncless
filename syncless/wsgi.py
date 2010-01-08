@@ -25,7 +25,6 @@ import errno
 import re
 import sys
 import socket
-import stackless
 import time
 import types
 
@@ -352,7 +351,7 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
 
         # Let other tasklets make some progress before we serve our next
         # request.
-        stackless.schedule()
+        nbio.stackless.schedule()
         
       # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
       # req_buf may contain some bytes after the previous request.
@@ -646,7 +645,7 @@ def WsgiListener(nbs, wsgi_application):
   env['HTTPS']             = 'off'  # could be 'on'; Apache sets this
   server_ipaddr, server_port = nbs.getsockname()
   env['SERVER_PORT'] = str(server_port)
-  env['SERVER_SOFTWARE'] = 'pts-stackless-wsgi'
+  env['SERVER_SOFTWARE'] = 'pts-syncless-wsgi'
   if server_ipaddr:
     # TODO(pts): Do a canonical name lookup.
     env['SERVER_ADDR'] = env['SERVER_NAME'] = server_ipaddr
@@ -661,11 +660,11 @@ def WsgiListener(nbs, wsgi_application):
       if nbio.VERBOSE:
         nbio.LogDebug('connection accepted from=%r nbf=%x' %
                  (peer_name, id(accepted_nbs)))
-      stackless.tasklet(WsgiWorker)(
+      nbio.stackless.tasklet(WsgiWorker)(
           accepted_nbs, peer_name, wsgi_application, env, date)
       accepted_nbs = peer_name = None  # Help the garbage collector.
   finally:
-    nbf.close()
+    nbs.close()
 
 class FakeServerSocket(object):
   """A fake TCP server socket, used as CherryPyWSGIServer.socket."""
@@ -738,7 +737,7 @@ def CherryPyWsgiListener(nbs, wsgi_application):
       wsgi_server.tick()
       assert len(wsgi_server.requests.requests) == 1
       http_connection = wsgi_server.requests.requests.pop()
-      stackless.tasklet(http_connection.communicate)()
+      nbio.stackless.tasklet(http_connection.communicate)()
       # Help the garbage collector.
       http_connection = accepted_nbs = peer_name = None
   finally:
@@ -943,7 +942,7 @@ def RunHttpServer(app, server_address=None):
   """
   try:
     import psyco
-    psyco.full()  # TODO(pts): Measure the speed in stackless Python.
+    psyco.full()  # TODO(pts): Measure the speed in Stackless Python.
   except ImportError:
     pass
   if len(sys.argv) > 1:  # TODO(pts): Use getopt.
@@ -1027,5 +1026,5 @@ def RunHttpServer(app, server_address=None):
   listener_nbs.listen(100)
   nbio.LogInfo('listening on %r' % (listener_nbs.getsockname(),))
   # From http://webpy.org/install (using with mod_wsgi).
-  stackless.tasklet(WsgiListener)(listener_nbs, wsgi_application)
+  nbio.stackless.tasklet(WsgiListener)(listener_nbs, wsgi_application)
   nbio.RunMainLoop()

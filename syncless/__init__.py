@@ -21,6 +21,27 @@ Please import submodules to get the actual functionality. Example:
   s.connect(addr)
   s.sendall('GET / HTTP/1.0\r\nHost: %s\r\n\r\n' % addr[0])
   print s.recv(4096)
+  print nbio.stackless.current.is_main  # True
+
+Syncless needs Python 2.5 or Python 2.6 (recommended).
+
+Please note that Syncless works with non-Stackless Python if the greenlet
+module is installed. Get the sources of greenlet with
+
+  $ svn co http://codespeak.net/svn/py/release/0.9.x/py/c-extension/greenlet
+
+Please note that http://www.undefined.org/python/#greenlet contains an old
+version (without greenlet.greenlet.throw).
+
+Syncless provides an emulation of Stackless (the `stackless' module):
+
+  # Use the emulation if Stackless is not available (recommended).
+  from syncless import nbio
+  print nbio.stackless.tasklet
+
+  # Always use the emulation (not recommended).
+  from syncless import greenstackless
+  print greenstackless.tasklet
 
 See more examples in the demo_*.py files in the Syncless source distribution.
 

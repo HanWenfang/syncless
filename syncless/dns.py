@@ -41,7 +41,6 @@ __author__ = 'pts@fazekas.hu (Peter Szabo)'
 import os
 import socket
 import sys
-import stackless
 import struct
 
 # `import dns' would do a relative import (`from . import dns'), but we want

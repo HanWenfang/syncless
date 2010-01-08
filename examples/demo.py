@@ -5,7 +5,6 @@
 #
 
 import cgi
-import stackless
 import socket
 import sys
 import time
@@ -92,8 +91,8 @@ if __name__ == '__main__':
   # It increases the maximum Connect time from 8 to 9200 milliseconds.
   listener_nbs.listen(100)
   nbio.LogInfo('listening on %r' % (listener_nbs.getsockname(),))
-  stackless.tasklet(wsgi_listener)(listener_nbs, demo_wsgiapp.WsgiApp)
+  nbio.stackless.tasklet(wsgi_listener)(listener_nbs, demo_wsgiapp.WsgiApp)
   std_nbf = nbio.NonBlockingFile(sys.stdin, sys.stdout)
-  stackless.tasklet(ChatWorker)(std_nbf, nbf_to_close=listener_nbs)
+  nbio.stackless.tasklet(ChatWorker)(std_nbf, nbf_to_close=listener_nbs)
   nbio.RunMainLoop()
   # We reach this after 'Bye!' in ChatWorker.
