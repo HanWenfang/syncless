@@ -400,8 +400,8 @@ class NonBlockingSocket(NonBlockingFile):
         break
       except socket.error, e:
         # In Python 2.5, socket.error doesn't have the errno attribute, so
-        # we use e.args[1] instead.
-        err = e.args[1]
+        # we use e.args[0] instead.
+        err = e.args[0]
         if err == errno.EAGAIN:
           pass
         elif err in ERRLIST_ACCEPT_RAISE:
@@ -424,7 +424,7 @@ class NonBlockingSocket(NonBlockingFile):
       try:
         return self.read_fh.recv(bufsize, flags)
       except socket.error, e:
-        if e.args[1] != errno.EAGAIN:
+        if e.args[0] != errno.EAGAIN:
           raise
       self.read_slots.add(self.read_slot)
       read_slot.credit = CREDITS_PER_ITERATION
@@ -441,7 +441,7 @@ class NonBlockingSocket(NonBlockingFile):
       try:
         return self.read_fh.recvfrom(bufsize, flags)
       except socket.error, e:
-        if e.args[1] != errno.EAGAIN:
+        if e.args[0] != errno.EAGAIN:
           raise
       self.read_slots.add(self.read_slot)
       read_slot.credit = CREDITS_PER_ITERATION
@@ -461,7 +461,7 @@ class NonBlockingSocket(NonBlockingFile):
         return
       except socket.error, e:
         # errno.EINPROGRESS on Linux 2.6.
-        if e.args[1] not in (errno.EAGAIN, errno.EINPROGRESS):
+        if e.args[0] not in (errno.EAGAIN, errno.EINPROGRESS):
           raise
       self.write_slots.add(self.write_slot)
       write_slot.credit = CREDITS_PER_ITERATION
@@ -477,7 +477,7 @@ class NonBlockingSocket(NonBlockingFile):
       try:
         return self.write_fh.send(data, flags)
       except socket.error, e:
-        if e.args[1] != errno.EAGAIN:
+        if e.args[0] != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
       write_slot.credit = CREDITS_PER_ITERATION
@@ -493,7 +493,7 @@ class NonBlockingSocket(NonBlockingFile):
       try:
         return self.write_fh.sendto(*args)
       except socket.error, e:
-        if e.args[1] != errno.EAGAIN:
+        if e.args[0] != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
       write_slot.credit = CREDITS_PER_ITERATION
@@ -636,13 +636,12 @@ if ssl:
           stackless.schedule()
         try:
           return self._sslobj.write(data)
-        except socket.error, e:
-          err = e.args[1]
-          if err == ssl.SSL_ERROR_WANT_READ:
+        except ssl.SSLError, e:  # issubclass(ssl.SSLError, socket.error)
+          if e.errno == ssl.SSL_ERROR_WANT_READ:
             self.read_slots.add(read_slot)
             read_slot.credit = CREDITS_PER_ITERATION
             read_slot.channel.receive()
-          elif err == ssl.SSL_ERROR_WANT_WRITE:
+          elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
             self.write_slots.add(write_slot)
             write_slot.credit = CREDITS_PER_ITERATION
             write_slot.channel.receive()
@@ -666,13 +665,12 @@ if ssl:
           stackless.schedule()
         try:
           got = self._sslobj.write(data)
-        except socket.error, e:
-          err = e.args[1]
-          if err == ssl.SSL_ERROR_WANT_READ:
+        except ssl.SSLError, e:  # issubclass(ssl.SSLError, socket.error)
+          if e.errno == ssl.SSL_ERROR_WANT_READ:
             self.read_slots.add(read_slot)
             read_slot.credit = CREDITS_PER_ITERATION
             read_slot.channel.receive()
-          elif err == ssl.SSL_ERROR_WANT_WRITE:
+          elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
             self.write_slots.add(write_slot)
             write_slot.credit = CREDITS_PER_ITERATION
             write_slot.channel.receive()
@@ -910,7 +908,9 @@ class MainLoop(object):
                 epoll_events = epoll_fh.poll(timeout)
               break
             except select.error, e:
-              if e.args[1] != errno.EAGAIN:
+              # Python 2.5 doesn't have select.error(...).errno either.
+              # (But it has errno for IOError and OSError.)
+              if e.args[0] != errno.EAGAIN:
                 raise
 
           read_available = []
@@ -990,7 +990,7 @@ class MainLoop(object):
                 epoll_events = epoll_fh.poll(timeout)
               break
             except select.error, e:
-              if e.args[1] != errno.EAGAIN:
+              if e.args[0] != errno.EAGAIN:
                 raise
 
           if VERBOSE:
@@ -1026,7 +1026,7 @@ class MainLoop(object):
                   read_slots, write_slots, (), timeout)
               break
             except select.error, e:
-              if e.args[1] != errno.EAGAIN:
+              if e.args[0] != errno.EAGAIN:
                 raise
         if VERBOSE:
           LogDebug('available read=%r write=%r' %
