@@ -20,9 +20,13 @@ import fcntl
 import os
 import select
 import socket
-import stackless
 import sys
 import time
+
+try:
+  import stackless
+except ImportError:
+  from syncless import greenstackless as stackless
 
 try:
   import ssl  # Python 2.6 standard module using OpenSSL.
@@ -34,7 +38,10 @@ VERBOSE = False
 # TODO(pts): Let the user specify the full ioloop-mode.
 EPOLL_EDGE_TRIGGERED = True
 
-EPOLL_ET_FLAGS = select.EPOLLIN | select.EPOLLOUT | select.EPOLLET
+if hasattr(select, 'EPOLLIN'):
+  EPOLL_ET_FLAGS = select.EPOLLIN | select.EPOLLOUT | select.EPOLLET
+else:
+  EPOLL_ET_FLAGS = None
 
 # TODO(pts): Ignore missing constants.
 # TODO(pts): Copy more constants from the CherryPy WSGI server.
@@ -392,9 +399,12 @@ class NonBlockingSocket(NonBlockingFile):
         accepted_socket, peer_name = self.read_fh.accept()
         break
       except socket.error, e:
-        if e.errno == errno.EAGAIN:
+        # In Python 2.5, socket.error doesn't have the errno attribute, so
+        # we use e.args[1] instead.
+        err = e.args[1]
+        if err == errno.EAGAIN:
           pass
-        elif e.errno in ERRLIST_ACCEPT_RAISE:
+        elif err in ERRLIST_ACCEPT_RAISE:
           raise
         else:
           continue
@@ -414,7 +424,7 @@ class NonBlockingSocket(NonBlockingFile):
       try:
         return self.read_fh.recv(bufsize, flags)
       except socket.error, e:
-        if e.errno != errno.EAGAIN:
+        if e.args[1] != errno.EAGAIN:
           raise
       self.read_slots.add(self.read_slot)
       read_slot.credit = CREDITS_PER_ITERATION
@@ -431,7 +441,7 @@ class NonBlockingSocket(NonBlockingFile):
       try:
         return self.read_fh.recvfrom(bufsize, flags)
       except socket.error, e:
-        if e.errno != errno.EAGAIN:
+        if e.args[1] != errno.EAGAIN:
           raise
       self.read_slots.add(self.read_slot)
       read_slot.credit = CREDITS_PER_ITERATION
@@ -451,7 +461,7 @@ class NonBlockingSocket(NonBlockingFile):
         return
       except socket.error, e:
         # errno.EINPROGRESS on Linux 2.6.
-        if e.errno not in (errno.EAGAIN, errno.EINPROGRESS):
+        if e.args[1] not in (errno.EAGAIN, errno.EINPROGRESS):
           raise
       self.write_slots.add(self.write_slot)
       write_slot.credit = CREDITS_PER_ITERATION
@@ -467,7 +477,7 @@ class NonBlockingSocket(NonBlockingFile):
       try:
         return self.write_fh.send(data, flags)
       except socket.error, e:
-        if e.errno != errno.EAGAIN:
+        if e.args[1] != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
       write_slot.credit = CREDITS_PER_ITERATION
@@ -483,7 +493,7 @@ class NonBlockingSocket(NonBlockingFile):
       try:
         return self.write_fh.sendto(*args)
       except socket.error, e:
-        if e.errno != errno.EAGAIN:
+        if e.args[1] != errno.EAGAIN:
           raise
       self.write_slots.add(self.write_slot)
       write_slot.credit = CREDITS_PER_ITERATION
@@ -627,11 +637,12 @@ if ssl:
         try:
           return self._sslobj.write(data)
         except socket.error, e:
-          if e.errno == ssl.SSL_ERROR_WANT_READ:
+          err = e.args[1]
+          if err == ssl.SSL_ERROR_WANT_READ:
             self.read_slots.add(read_slot)
             read_slot.credit = CREDITS_PER_ITERATION
             read_slot.channel.receive()
-          elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
+          elif err == ssl.SSL_ERROR_WANT_WRITE:
             self.write_slots.add(write_slot)
             write_slot.credit = CREDITS_PER_ITERATION
             write_slot.channel.receive()
@@ -656,11 +667,12 @@ if ssl:
         try:
           got = self._sslobj.write(data)
         except socket.error, e:
-          if e.errno == ssl.SSL_ERROR_WANT_READ:
+          err = e.args[1]
+          if err == ssl.SSL_ERROR_WANT_READ:
             self.read_slots.add(read_slot)
             read_slot.credit = CREDITS_PER_ITERATION
             read_slot.channel.receive()
-          elif e.errno == ssl.SSL_ERROR_WANT_WRITE:
+          elif err == ssl.SSL_ERROR_WANT_WRITE:
             self.write_slots.add(write_slot)
             write_slot.credit = CREDITS_PER_ITERATION
             write_slot.channel.receive()
@@ -789,7 +801,7 @@ class MainLoop(object):
 
   def Run(self):
     """Run the main loop until there are no tasklets left, propagate exc."""
-    if stackless.current.is_main:
+    if stackless.getcurrent().is_main:
       self.RunWrapped()
     else:
       try:
@@ -826,7 +838,7 @@ class MainLoop(object):
     """
     # Kill the old main loop tasklet if necessary.
     old_run_tasklet = self.run_tasklet
-    self.run_tasklet = stackless.current
+    self.run_tasklet = stackless.getcurrent()
     if old_run_tasklet != self.run_tasklet:
       assert old_run_tasklet.alive
       assert not old_run_tasklet.blocked
@@ -898,7 +910,7 @@ class MainLoop(object):
                 epoll_events = epoll_fh.poll(timeout)
               break
             except select.error, e:
-              if e.errno != errno.EAGAIN:
+              if e.args[1] != errno.EAGAIN:
                 raise
 
           read_available = []
@@ -978,7 +990,7 @@ class MainLoop(object):
                 epoll_events = epoll_fh.poll(timeout)
               break
             except select.error, e:
-              if e.errno != errno.EAGAIN:
+              if e.args[1] != errno.EAGAIN:
                 raise
 
           if VERBOSE:
@@ -1014,7 +1026,7 @@ class MainLoop(object):
                   read_slots, write_slots, (), timeout)
               break
             except select.error, e:
-              if e.errno != errno.EAGAIN:
+              if e.args[1] != errno.EAGAIN:
                 raise
         if VERBOSE:
           LogDebug('available read=%r write=%r' %
@@ -1068,7 +1080,7 @@ class MainLoop(object):
         read_available = write_available = None  # Release reference.
 
         mainc += 1
-        if reinsert_tasklet is stackless.current.prev:
+        if reinsert_tasklet is stackless.getcurrent().prev:
           # It would be OK just to call reinsert_tasklet.run() here
           # (just like in the else branch), but this one seems to be faster.
           reinsert_tasklet.remove()

@@ -1,8 +1,8 @@
 README for Syncless: asynchronous client and server library using
-Stackless Python
-~~~~~~~~~~~~~~~~
+Stackless Python (or greenlet)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
--- Mon Dec 28 00:40:30 CET 2009
+-- Fri Jan  8 03:06:58 CET 2010
 
 Syncless is an experimental, lightweight, non-blocking (asynchronous) client
 and server socket network communication library implemented in Stackless
@@ -21,7 +21,7 @@ Features
   be as easy as changing the socket constructor socket.socket to
   syncless.NonBlockingSocket)
 * timeout on individual socket operation (needs changing existing code)
-* I/O event detection using epoll() (if available) or select()
+* I/O event detection using epoll(7) (if available) or select()
 * built-in WSGI server, but can use CherryPy's WSGI server as well
 * non-blocking DNS resolver using dnspython
 * non-blocking stdin/stdout support (can be useful for implementing an
@@ -34,11 +34,27 @@ Requirements
 ~~~~~~~~~~~~
 * A recent Unix system. Tested on Linux 2.6, should work on FreeBSD. Testers
   for other Unix variants are welcome.
+* Stackless Python (recommended) or normal (C)Python with greenlet (slow,
+  may leak memory, not recommended).
+* Python 2.6 (recommended, for epoll(7) support) or Python 2.5.
 
 How to use
 ~~~~~~~~~~
 1. Download and install Stackless Python 2.6.x from http://stackless.com/
-   For convenience, name the executable /usr/local/bin/stackless 
+   For convenience, name the executable /usr/local/bin/stackless2.6
+
+   As slow, less memory efficient (leaking) alternative of Stackless
+   Python, install greenlet. (Don't install greenlet if you already have
+   Stackless Python). greenlet installation:
+
+   $ sudo apt-get install libpython-dev
+   $ svn co http://codespeak.net/svn/py/release/0.9.x/py/c-extension/greenlet
+   $ cd greenlet
+   $ python ./setup.py build
+   $ sudo python ./setup.py install
+
+   Please note that http://www.undefined.org/python/#greenlet contains an old
+   version (without greenlet.greenlet.throw). Don't use that!
 
 2. Download and install dnspython from http://www.dnspython.org/
    Example compilation and installation:

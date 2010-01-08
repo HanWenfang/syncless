@@ -1,6 +1,12 @@
-# Original _suncless.py downloaded from
-# http://github.com/toymachine/concurrence/raw/master/lib/concurrence/_stackless.py
-# at Thu Jan  7 22:59:54 CET 2010
+#! /usr/bin/python2.5
+
+"""Partial emulation of the Stackless Python API using greenlet.
+
+Original _suncless.py downloaded from
+http://github.com/toymachine/concurrence/raw/master/lib/concurrence/_stackless.py
+at Thu Jan  7 22:59:54 CET 2010. Then modified and added unit test
+(test/stackless_test.py).
+"""
 
 # Copyright (C) 2009, Hyves (Startphone Ltd.)
 #
