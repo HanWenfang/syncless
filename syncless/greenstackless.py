@@ -237,13 +237,15 @@ class tasklet(object):
         self.greenlet.switch()
 
 
+main = tasklet(greenlet = greenlet.getcurrent(), alive = True)
+
+
 class scheduler(object):
     def __init__(self):
-        self._main_task = tasklet(greenlet = greenlet.getcurrent(), alive = True)
-        #all non blocked tast are in this queue
-        #all tasks are only onces in this queue
+        #all non blocked tasks are in this queue
+        #all tasks are only once in this queue
         #the current task is the first item in the queue
-        self._runnable = deque([self._main_task])
+        self._runnable = deque([main])
 
     def schedule(self):
         """schedules the next tasks and puts the current task back at the queue of runnables"""
@@ -404,6 +406,9 @@ def getruncount():
 
 def getcurrent():
     return _scheduler.current
+
+def getmain():
+    return main
 
 def schedule():
     return _scheduler.schedule()
