@@ -18,6 +18,15 @@ This code was inspired by:
 http://aigamedev.com/programming-tips/round-robin-multi-tasking and
 also by the pypy implementation of the same thing (buggy, not being maintained?) at
 https://codespeak.net/viewvc/pypy/dist/pypy/lib/stackless.py?view=markup
+
+Limitations of this module over real Stackless:
+
+* greenlet is slower than Stackless
+* greenlet has some memory leeks if greenlets reference each other
+* no stackless.current support (use stackless.getcurrent())
+* no multithreading support (don't use greenstackless in more than one
+  thread (not even sequentially) in your application)
+* no deadlock detection if the main tasklet gets stuck
 """
 
 try:
