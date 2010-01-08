@@ -799,6 +799,8 @@ class MainLoop(object):
       except:
         # Propagate the exception to the main thread, so we don't get a
         # StopIteration instead.
+
+        # This would work, but we'd lose the traceback.
         stackless.main.raise_exception(
             sys.exc_info()[0], *sys.exc_info()[1].args)
         #bomb = stackless.bomb(*sys.exc_info())
