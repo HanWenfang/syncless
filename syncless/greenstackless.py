@@ -150,6 +150,9 @@ class tasklet(object):
             _id = str(self.func)
         return '<tasklet %s at %0x>' % (_id, id(self))
 
+    def is_main(self):
+        return self is main
+
     def remove(self):
         """Remove self from the main scheduler queue.
 
