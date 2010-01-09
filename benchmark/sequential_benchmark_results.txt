@@ -47,3 +47,27 @@
 # doing 10000 fetches
 # final num=2845218640
 # ./client_seq.py  0.49s user 0.68s system 40% cpu 2.898 total
+
+# --- on pax:
+
+# to speed_syncless_wsgi.js
+# time ./client_seq.py 
+# doing 10000 fetches
+# final num=2845218640
+# real	0m4.698s user	0m0.608s sys	0m1.044s
+
+# to speed_gevent_wsgi.js
+# doing 10000 fetches
+# final num=2845218640
+# real	0m4.466s user	0m0.828s sys	0m0.948s
+
+# to speed_gevent_wsgi.js with greenlet, python2.5
+# doing 10000 fetches
+# final num=2845218640
+# real	0m3.975s user	0m0.704s sys	0m0.952s
+# surprise: greenlet is faster here (not emulated by stackless)
+
+# to speed_eventlet_wsgi.js with greenlet, python2.5
+# doing 10000 fetches
+# final num=2845218640
+# real	0m8.029s user	0m0.744s sys	0m0.988s
