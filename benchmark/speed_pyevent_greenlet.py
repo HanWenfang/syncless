@@ -1,5 +1,6 @@
 #! /usr/bin/python2.5
 # by pts@fazekas.hu at Sat Jan 23 21:32:48 CET 2010
+# TODO(pts): Diagnose why 1 request takes 4500 ms. (limitation of greenlet?)
 
 import event
 import errno
