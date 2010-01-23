@@ -9,6 +9,7 @@ import os
 import signal
 import socket
 import sys
+from collections import deque
 
 from greenlet_fix import greenlet
 import lprng
@@ -36,9 +37,10 @@ def SetFdBlocking(fd, is_blocking):
   return bool(old & os.O_NONBLOCK)
 
 
+runnable_greenlets = deque()
 main_greenlet = greenlet.getcurrent()
 main_loop_greenlet = None
-runnable_greenlets = [main_greenlet]
+runnable_greenlets.append(main_greenlet)
 
 def SendException(tasklet, exc_info):
   """Send exception to tasklet, even if it's blocked on a channel.
@@ -69,19 +71,13 @@ def SendException(tasklet, exc_info):
   tasklet.insert()
 
 def ScheduleRemove():
-  # TODO(pts): Make this faster with deque.
-  i = runnable_greenlets.index(greenlet.getcurrent())
-  del runnable_greenlets[i]
-  if i == len(runnable_greenlets):
-    i = 0
-  runnable_greenlets[i].switch()
+  assert greenlet.getcurrent() is runnable_greenlets.popleft()
+  runnable_greenlets[0].switch()
 
 def Schedule():
-  # TODO(pts): Make this faster with deque.
-  i = 1 + runnable_greenlets.index(greenlet.getcurrent())
-  if i == len(runnable_greenlets):
-    i = 0
-  runnable_greenlets[i].switch()
+  assert greenlet.getcurrent() is runnable_greenlets[0]
+  runnable_greenlets.rotate(-1)
+  runnable_greenlets[0].switch()
 
 def HandleWakeup(ev, fd, evtype, greenlet_obj):
   runnable_greenlets.append(greenlet_obj)
@@ -190,11 +186,8 @@ def Handler(cs, csaddr):
   cs.close()  # No need for event_del, nothing listening (?).
 
   # TODO(pts): In a finally: block for all greenlets.
-  i = runnable_greenlets.index(greenlet.getcurrent())
-  del runnable_greenlets[i]
-  if i == len(runnable_greenlets):
-    i = 0
-  greenlet.getcurrent().parent = runnable_greenlets[i]
+  assert greenlet.getcurrent() is runnable_greenlets.popleft()
+  greenlet.getcurrent().parent = runnable_greenlets[0]
 
 def SignalHandler(ev, sig, evtype, arg):
   assert 0000
@@ -205,7 +198,7 @@ if __name__ == '__main__':
   event.event(SignalHandler, handle=signal.SIGINT,
               evtype=event.EV_SIGNAL|event.EV_PERSIST).add()
   main_loop_greenlet = greenlet.greenlet(MainLoop)
-  runnable_greenlets[:0] = [main_loop_greenlet]
+  runnable_greenlets.appendleft(main_loop_greenlet)
   main_loop_greenlet.switch()
 
   ss = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -219,6 +212,7 @@ if __name__ == '__main__':
   while True:
     cs, csaddr = Accept(ss)
     handler_greenlet = greenlet.greenlet(Handler)
-    runnable_greenlets.append(handler_greenlet)
+    runnable_greenlets.rotate(-1)
+    runnable_greenlets.appendleft(handler_greenlet)
     handler_greenlet.switch(cs, csaddr)
     cs = None  # Save memory.
