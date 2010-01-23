@@ -98,6 +98,7 @@ See the results (time measurements) in *.ab.txt .
 The characteristics of the benchmarks:
 
 * ApacheBench (ab) used as a HTTP client
+* command line: ab -c 100 -n 100000 http://127.0.0.1:8080/ >speed_THIS.ab.txt
 * the main page fetched 100000 times
 * 100 concurrect requests
 * a new TCP connection created for each request (no keep-alive)
