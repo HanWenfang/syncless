@@ -170,6 +170,7 @@ def Handler(cs, csaddr):
 def SignalHandler(ev, sig, evtype, arg):
   SendException(stackless.main, (KeyboardInterrupt,))
   # TODO(pts): ev.delete()?
+  stackless.main.run()
 
 if __name__ == '__main__':
   event.event(SignalHandler, handle=signal.SIGINT,
