@@ -47,6 +47,8 @@ def SendExceptionAndRun(greenlet_obj, exc_info):
 
   The specified greenlet is moved to runnable_greenlets to ensure that it
   eventually gets scheduled.
+
+  Please note that this call is linear in the size of runnable_greenlets.
   """
   if not isinstance(exc_info, list) and not isinstance(exc_info, tuple):
     raise TypeError
