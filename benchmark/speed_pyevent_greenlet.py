@@ -42,42 +42,54 @@ main_greenlet = greenlet.getcurrent()
 main_loop_greenlet = None
 runnable_greenlets.append(main_greenlet)
 
-def SendException(tasklet, exc_info):
-  """Send exception to tasklet, even if it's blocked on a channel.
+def SendExceptionAndRun(greenlet_obj, exc_info):
+  """Send exception to greenlet, even if it's blocked on a channel.
 
-  To get the tasklet is activated (to handle the exception) after
-  SendException, call tasklet.run() after calling SendException.
-
-  tasklet.insert() is called automatically to ensure that it eventually gets
-  scheduled.
+  The specified greenlet is moved to runnable_greenlets to ensure that it
+  eventually gets scheduled.
   """
-  raise NotImplementedError  # TODO(pts): Implement this.
   if not isinstance(exc_info, list) and not isinstance(exc_info, tuple):
     raise TypeError
-  if tasklet == stackless.current:
-    if len(exc_info) < 3:
-      exc_info = list(exc_info) + [None, None]
+  if len(exc_info) < 3:
+    exc_info = list(exc_info) + [None, None]
+  if greenlet_obj is runnable_greenlets[0]:  # greenlet.getcurrent()
     raise exc_info[0], exc_info[1], exc_info[2]
-  bomb = stackless.bomb(*exc_info)
-  if tasklet.blocked:
-    c = tasklet._channel
-    old_preference = c.preference
-    c.preference = 1  # Prefer the sender.
-    for i in xrange(-c.balance):
-      c.send(bomb)
-    c.preference = old_preference
-  else:
-    tasklet.tempval = bomb
-  tasklet.insert()
+
+  i = 0
+  for found_greenlet in runnable_greenlets:
+    if found_greenlet is greenlet_obj:
+      runnable_greenlets.rotate(-i)  # This is also linear.
+      greenlet_obj.throw(*exc_info)
+      break
+    i += 1
+  runnable_greenlets.appendleft(greenlet_obj)
+  greenlet_obj.throw(*exc_info)
 
 def ScheduleRemove():
-  assert greenlet.getcurrent() is runnable_greenlets.popleft()
+  #assert greenlet.getcurrent() is runnable_greenlets.popleft()
+  runnable_greenlets.popleft()
   runnable_greenlets[0].switch()
 
 def Schedule():
-  assert greenlet.getcurrent() is runnable_greenlets[0]
+  #assert greenlet.getcurrent() is runnable_greenlets[0]
   runnable_greenlets.rotate(-1)
   runnable_greenlets[0].switch()
+
+def Run(greenlet_obj):
+  """Runs the specified greenlet.
+
+  Please note that this is quadratic in the size of runnable_greenlets.
+  """
+  i = 0
+  for found_greenlet in runnable_greenlets:
+    if found_greenlet is greenlet_obj:
+      if i:
+        runnable_greenlets.rotate(-i)  # This is also linear.
+        greenlet_obj.switch()
+      break
+    i += 1
+  runnable_greenlets.appendleft(greenlet_obj)
+  greenlet_obj.switch()
 
 def HandleWakeup(ev, fd, evtype, greenlet_obj):
   runnable_greenlets.append(greenlet_obj)
@@ -186,13 +198,12 @@ def Handler(cs, csaddr):
   cs.close()  # No need for event_del, nothing listening (?).
 
   # TODO(pts): In a finally: block for all greenlets.
-  assert greenlet.getcurrent() is runnable_greenlets.popleft()
+  #assert greenlet.getcurrent() is runnable_greenlets.popleft()
+  runnable_greenlets.popleft()
   greenlet.getcurrent().parent = runnable_greenlets[0]
 
 def SignalHandler(ev, sig, evtype, arg):
-  assert 0000
-  SendException(main_greenlet, (KeyboardInterrupt,))
-  # TODO(pts): ev.delete()?
+  SendExceptionAndRun(main_greenlet, (KeyboardInterrupt,))
 
 if __name__ == '__main__':
   event.event(SignalHandler, handle=signal.SIGINT,
