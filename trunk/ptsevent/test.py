@@ -1,13 +1,11 @@
-#!/usr/bin/env python
+#!/usr/local/bin/stackless2.6
+# TODO(pts): Make this succeed.
 
 import glob, os, signal, sys, thread, time, unittest
 sys.path.insert(0, glob.glob('./build/lib.*')[0])
-import event
+import ptsevent as event
 
 class EventTest(unittest.TestCase):
-    def setUp(self):
-        event.init()
-
     def test_timeout(self):
         def __timeout_cb(ev, handle, evtype, ts):
             now = time.time()

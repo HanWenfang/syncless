@@ -29,3 +29,4 @@ svn checkout http://pyevent.googlecode.com/svn/trunk/ pyevent-read-only
 * evdns.pxi
 * event.pyx
 * setup.py
+* test.py
