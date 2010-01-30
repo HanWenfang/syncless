@@ -1,0 +1,424 @@
+#### pts ####
+# !! there are still long requests, even with listen(2280)
+#Connection Times (ms)
+#              min  mean[+/-sd] median   max
+#Connect:        0   28 288.3      0    3002
+#Processing:     3   12  23.0     11    1868
+#Waiting:        2   12  23.0     11    1868
+#Total:          9   40 296.6     11    4547
+#
+#Percentage of the requests served within a certain time (ms)
+#  50%     11
+#  66%     11
+#  75%     11
+#  80%     11
+#  90%     12
+#  95%     13
+#  98%     21
+#  99%     60
+# 100%   4547 (longest request)
+
+#### pts ####
+import stackless
+import socket
+cdef extern from "unistd.h":
+    cdef int os_write "write"(int fd, char *p, int n)
+    cdef int os_read "read"(int fd, char *p, int n)
+cdef extern from "stdlib.h":
+    cdef void free(void *p)
+cdef extern from "errno.h":
+    cdef extern int errno
+    cdef extern char *strerror(int)
+    cdef enum errno_dummy:
+        EAGAIN
+cdef extern from "fcntl.h":
+    cdef int fcntl2 "fcntl"(int fd, int cmd)
+    cdef int fcntl3 "fcntl"(int fd, int cmd, long arg)
+    int O_NONBLOCK
+    int F_GETFL
+    int F_SETFL
+
+# bufferevent
+cdef extern from "event.h":
+    struct evbuffer:
+        char *buf "buffer"
+        char *orig_buffer
+        int misalign
+        int totallen
+        int off
+    struct event_watermark:
+        int low
+        int high
+    struct bufev_t "bufferevent":
+        evbuffer *input
+        event_watermark wm_read
+        event_watermark wm_write
+
+    #### pts ####
+    # These must match other declarations of the same name.
+    evbuffer *evbuffer_new()
+    void evbuffer_free(evbuffer *)
+    int evbuffer_expand(evbuffer *, int)
+    int evbuffer_add(evbuffer *, char *, int)
+    int evbuffer_remove(evbuffer *, void *, int)
+    char *evbuffer_readline(evbuffer *)
+    int evbuffer_add_buffer(evbuffer *, evbuffer *)
+    int evbuffer_drain(evbuffer *b, int size)
+    int evbuffer_write(evbuffer *, int)
+    int evbuffer_read(evbuffer *, int, int)
+    char *evbuffer_find(evbuffer *, void*, int)
+    # void evbuffer_setcb(evbuffer *, void (*)(struct evbuffer *, int, int, void *), void *)
+
+#### pts ####
+cdef extern from "stackless_api.h":
+    object PyStackless_Schedule(object retval, int remove)
+    int PyStackless_GetRunCount()
+    ctypedef class stackless.tasklet [object PyTaskletObject]:
+      pass
+    int PyTasklet_Insert(tasklet task)
+    tasklet PyStackless_GetCurrent()
+    #tasklet PyTasklet_New(type type_type, object func);
+
+#### pts ####
+#def Sayer(object name):
+#    while True:
+#        print name
+#        PyStackless_Schedule(None, 0)  # remove
+
+#### pts ####
+def HandleWakeup(ev, fd, evtype, object tasklet):
+    #print 'HandleWakeup', fd, evtype, tasklet
+    tasklet.insert()
+
+
+cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
+    PyTasklet_Insert(<tasklet>arg)  # No null or type checking.
+
+#### pts ####
+# TODO(pts) Experiment calling these from Python instead of C.
+def MainLoop():
+    while True:
+        #print 'MainLoop', PyStackless_GetRunCount()
+        # Exceptions (if any) in event handlers would propagate to here.
+        # Argument: nonblocking: don't block if nothing available.
+        # !! TODO(pts): what if nothing registered and we're running MainLoop
+        loop(PyStackless_GetRunCount() > 1)
+        PyStackless_Schedule(None, 0)  # remove=0
+
+#### pts #### TODO(pts): Don't import stackless
+stackless.tasklet(MainLoop)()
+
+#### pts ####
+def SetFdBlocking(int fd, is_blocking):
+  """Set a file descriptor blocking or nonblocking.
+
+  Please note that this may affect more than expected, for example it may
+  affect sys.stderr when called for sys.stdout.
+
+  Returns:
+    The old blocking value (True or False).
+  """
+  cdef int old
+  cdef int value
+  old = fcntl2(fd, F_GETFL)
+  if is_blocking:
+    value = old & ~O_NONBLOCK
+  else:
+    value = old | O_NONBLOCK
+  if old != value:
+    fcntl3(fd, F_SETFL, value)
+  return bool(old & O_NONBLOCK)
+
+
+#### pts ####
+cdef class evbufferobj:
+    """A Python wrapper around libevent's I/O buffer: struct evbuffer
+
+    Please note that this buffer wastes memory: after reading a very long
+    line, the buffer space won't be reclaimed until self.reset() is called.
+    """
+    cdef evbuffer *eb
+    # We must keep self.wakeup_ev on the heap, because
+    # Stackless scheduling swaps the C stack.
+    cdef event_t wakeup_ev
+
+    def __cinit__(evbufferobj self):
+        self.eb = evbuffer_new()
+
+    def __dealloc__(evbufferobj self):
+        evbuffer_free(self.eb)
+
+    def __repr__(evbufferobj self):
+        return '<evbufferobj misalign=%s, totallen=%s, off=%s at 0x%x>' % (
+            self.eb.misalign, self.eb.totallen, self.eb.off, <unsigned>self)
+
+    def __len__(evbufferobj self):
+        return self.eb.off
+
+    def reset(evbufferobj self):
+        """Clear the buffer and free associated memory."""
+        cdef evbuffer *eb
+        eb = self.eb
+        free(eb.orig_buffer)
+        # TODO(pts): Use memset().
+        eb.buf = NULL
+        eb.orig_buffer = NULL
+        eb.off = 0
+        eb.totallen = 0
+        eb.misalign = 0
+
+    def expand(evbufferobj self, int n):
+        """As a side effect, may discard consumed data.
+
+        Please note that 256 bytes will always be reserved. Call self.reset()
+        to get rid of everything.
+        """
+        return evbuffer_expand(self.eb, n)
+
+    def drain(evbufferobj self, int n):
+        evbuffer_drain(self.eb, n)
+
+    def append(evbufferobj self, buf):
+        cdef char *p
+        cdef int n
+        if PyObject_AsCharBuffer(buf, &p, &n) < 0:
+            raise TypeError
+        return evbuffer_add(self.eb, p, n)
+
+    def consume(evbufferobj self, int n=-1):
+        """Read, drain and return at most n (or all) from the beginning.
+
+        The corresponding C function is evbuffer_remove()."""
+        cdef int got
+        cdef char *p
+        if n > self.eb.off or n < 0:
+            n = self.eb.off
+        if n == 0:
+            return ''
+        buf = PyString_FromStringAndSize(self.eb.buf, n)
+        evbuffer_drain(self.eb, n)
+        return buf
+        #assert got == n  # Assertions turned on by default. Good.
+
+    def peek(evbufferobj self, int n=-1):
+        """Read and return at most n (or all) from the beginning, no drain."""
+        cdef int got
+        cdef char *p
+        if n > self.eb.off or n < 0:
+            n = self.eb.off
+        return PyString_FromStringAndSize(self.eb.buf, n)
+
+    def find(evbufferobj self, buf):
+        cdef int n
+        cdef char *p
+        cdef char *q
+        # TODO(pts): Intern n == 1 strings.
+        if PyObject_AsCharBuffer(buf, &p, &n) < 0:
+            raise TypeError
+        q = evbuffer_find(self.eb, p, n)
+        if q == NULL:
+            return -1
+        return q - <char*>self.eb.buf
+
+    def append_clear(evbufferobj self, evbufferobj source):
+        """Append source and clear source.
+
+        The corresponding C function is evbuffer_add_buffer().
+        """
+        if 0 != evbuffer_add_buffer(self.eb, source.eb):
+            raise RuntimeError
+
+    def consumeline(evbufferobj self):
+        """Read, drain and return string ending with '\\n', or ''.
+
+        An empty string is returned instead of a partial line at the end of
+        the buffer.
+
+        This method doesn't use evbuffer_readline(), which is not binary
+        (char 0) safe.
+        """
+        cdef int n
+        cdef char *q
+        q = evbuffer_find(self.eb, '\n', 1)
+        if q == NULL:
+            return ''
+        n = q - <char*>self.eb.buf + 1
+        buf = PyString_FromStringAndSize(self.eb.buf, n)
+        evbuffer_drain(self.eb, n)
+        return buf
+
+    def nb_accept(evbufferobj self, object sock):
+        cdef tasklet wakeup_tasklet
+        while True:
+            try:
+                return sock.accept()
+            except socket.error, e:
+                if e.errno != EAGAIN:
+                    raise
+                wakeup_tasklet = PyStackless_GetCurrent()
+                event_set(&self.wakeup_ev, sock.fileno(), c_EV_READ,
+                          HandleCWakeup, <void *>wakeup_tasklet)
+                event_add(&self.wakeup_ev, NULL)
+                PyStackless_Schedule(None, 1)  # remove=1
+
+    def nb_flush(evbufferobj self, int fd):
+        """Use self.append*, then self.nb_flush. Don't reuse self for reads."""
+        # Please note that this method may raise an error even if parts of the
+        # buffer has been flushed.
+        cdef tasklet wakeup_tasklet
+        cdef int n
+        while self.eb.off > 0:
+            n = evbuffer_write(self.eb, fd)
+            if n < 0:
+                if errno != EAGAIN:
+                    # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
+                    raise IOError(errno, strerror(errno))
+                wakeup_tasklet = PyStackless_GetCurrent()
+                event_set(&self.wakeup_ev, fd, c_EV_WRITE, HandleCWakeup,
+                          <void *>wakeup_tasklet)
+                event_add(&self.wakeup_ev, NULL)
+                PyStackless_Schedule(None, 1)  # remove=1
+
+    def nb_readline(evbufferobj self, int fd):
+        cdef tasklet wakeup_tasklet
+        cdef int n
+        cdef int got
+        cdef char *q
+        q = evbuffer_find(self.eb, '\n', 1)
+        while q == NULL:
+            # !! don't do ioctl(FIONREAD) if not necessary
+            # !! where do we get totallen=32768? evbuffer_read has a strange
+            # buffer growing behavior.
+            got = evbuffer_read(self.eb, fd, 8192)
+            if got < 0:
+                if errno != EAGAIN:
+                    # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
+                    raise IOError(errno, strerror(errno))
+                # event_add() requires that self.wakeup_ev is not free()d until
+                # the event handler gets called. We ensure this by the method
+                # (nb_readline) calling Py_INCREF(self) right at the beginning.
+                # Since self has a positive reference count, and it contains
+                # self.wakeup_ev, self.wakeup_ev won't be freed.
+                # !! what about garbage collection?
+                # !! We need self.wakeup_tasklet this just for the reference
+                # counting?
+                # !! test and fix reference counting
+                # PyStackless_GetCurrent() contains a Py_INCREF call.
+                wakeup_tasklet = PyStackless_GetCurrent()
+                event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
+                          <void *>wakeup_tasklet)
+                event_add(&self.wakeup_ev, NULL)
+                PyStackless_Schedule(None, 1)  # remove=1
+            elif got == 0:  # EOF, return remaining bytes ('' or partial line)
+                n = self.eb.off
+                buf = PyString_FromStringAndSize(self.eb.buf, n)
+                evbuffer_drain(self.eb, n)
+                return buf
+            else:
+                # TODO(pts): Find from later than the beginning (just as read).
+                q = evbuffer_find(self.eb, '\n', 1)
+        n = q - <char*>self.eb.buf + 1
+        buf = PyString_FromStringAndSize(self.eb.buf, n)
+        evbuffer_drain(self.eb, n)
+        return buf
+
+    def peekline(evbufferobj self):
+        """Read and return string ending with '\\n', or '', no draining.
+
+        An empty string is returned instead of a partial line at the end of
+        the buffer.
+        """
+        cdef int n
+        cdef char *q
+        q = evbuffer_find(self.eb, '\n', 1)
+        if q == NULL:
+            return ''
+        return PyString_FromStringAndSize(self.eb.buf,
+                                          q - <char*>self.eb.buf + 1)
+
+    def read_from_fd(evbufferobj self, int fd, int n):
+        """Read from file descriptor, append to self,
+
+        Does a ioctl(fd, FIONREAD, &c) before reading to limit the wasted
+        buffer space.
+
+        The corresponding C function is evbuffer_read().
+
+        Returns:
+          The number of bytes read.
+        Raises:
+          IOError: With the corresponding errno.
+        """
+        cdef int got
+        got = evbuffer_read(self.eb, fd, n)
+        if got < 0:
+            # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
+            raise IOError(errno, strerror(errno))
+        return got
+
+    def read_from_fd_again(evbufferobj self, int fd, int n):
+        """Read from file descriptor, append to self,
+
+        Does a ioctl(fd, FIONREAD, &c) before reading to limit the wasted
+        buffer space.
+
+        The corresponding C function is evbuffer_read().
+
+        Returns:
+          The number of bytes read, or None on EAGAIN.
+        Raises:
+          IOError: With the corresponding errno.
+        """
+        cdef int got
+        got = evbuffer_read(self.eb, fd, n)
+        if got < 0:
+            if errno == EAGAIN:
+                return None
+            # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
+            raise IOError(errno, strerror(errno))
+        return got
+
+    def write_to_fd(evbufferobj self, int fd, int n=-1):
+        """Write and drain n bytes to file descriptor fd.
+
+        A similar but weaker C function is evbuffer_write().
+
+        Returns:
+          The number of bytes written, which is not zero unless self is empty.
+        Raises:
+          IOError: With the corresponding errno.
+        """
+        if n > self.eb.off or n < 0:
+            n = self.eb.off
+        if n > 0:
+            # TODO(pts): Use send(...) or evbuffer_write() on Win32.
+            n = os_write(fd, self.eb.buf, n)
+            if n < 0:
+                # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
+                raise IOError(errno, strerror(errno))
+            evbuffer_drain(self.eb, n)
+        return n
+
+    def write_to_fd_again(evbufferobj self, int fd, int n=-1):
+        """Write and drain n bytes to file descriptor fd.
+
+        A similar but weaker C function is evbuffer_write().
+
+        Returns:
+          The number of bytes written, which is not zero unless self is empty;
+          or None on EAGAIN.
+        Raises:
+          IOError: With the corresponding errno.
+        """
+        if n > self.eb.off or n < 0:
+            n = self.eb.off
+        if n > 0:
+            # TODO(pts): Use send(...) or evbuffer_write() on Win32.
+            n = os_write(fd, self.eb.buf, n)
+            if n < 0:
+                if errno == EAGAIN:
+                    return None
+                # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
+                raise IOError(errno, strerror(errno))
+            evbuffer_drain(self.eb, n)
+        return n

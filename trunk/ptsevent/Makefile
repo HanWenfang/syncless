@@ -1,34 +1,20 @@
+PYTHON=stackless2.6
 
-PYTHON	= DISTUTILS_USE_SDK=1 MSSdk=1 python2.5
-PKGDIR	= pyevent-`egrep version setup.py | cut -f2 -d"'"`
-URL	= `egrep url setup.py | cut -f2 -d"'"`
+.PHONY: all install clean
 
-all: event.c
+all: ptsevent.c
 	$(PYTHON) setup.py build
-
-event.c: event.pyx bufferevent.pxi evdns.pxi evhttp.pxi simple.pxi
-	pyrexc event.pyx
 
 install:
 	$(PYTHON) setup.py install
 
+clean:
+	$(PYTHON) setup.py clean
+	rm -rf build
+
 test:
 	$(PYTHON) test.py
 
-doc:
-	epydoc -o doc -n event -u http://monkey.org/~dugsong/pyevent/ --docformat=plaintext event
-
-pkg_win32:
-	$(PYTHON) setup.py bdist_wininst
-
-pkg_osx:
-	bdist_mpkg --readme=README --license=LICENSE
-	mv dist $(PKGDIR)
-	hdiutil create -srcfolder $(PKGDIR) $(PKGDIR).dmg
-	mv $(PKGDIR) dist
-
-clean:
-	rm -rf build dist
-
-cleandir distclean: clean
-	rm -f *.c *~
+#ptsevent.c: event.pyx nbevent.pxi evdns.pxi evhttp.pxi simple.pxi
+ptsevent.c: ptsevent.pyx event.pxi nbevent.pxi evdns.pxi
+	$(PYTHON) -c "from Pyrex.Compiler.Main import main; main(command_line=1)" ptsevent.pyx
