@@ -1,6 +1,6 @@
 README for Syncless: asynchronous client and server library using
 Stackless Python (or greenlet)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+""""""""""""""""""""""""""""""
 by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
 -- Fri Jan  8 03:06:58 CET 2010
 

@@ -61,11 +61,30 @@ cdef extern from "event.h":
     int EVLOOP_ONCE
     int EVLOOP_NONBLOCK
 
-EV_TIMEOUT = 0x01
-EV_READ    = 0x02
-EV_WRITE   = 0x04
-EV_SIGNAL  = 0x08
-EV_PERSIST = 0x10
+    int c_EV_TIMEOUT "EV_TIMEOUT"
+    int c_EV_READ "EV_READ"
+    int c_EV_WRITE "EV_WRITE"
+    int c_EV_SIGNAL "EV_SIGNAL"
+    int c_EV_PERSIST "EV_PERSIST"
+
+EV_TIMEOUT = c_EV_TIMEOUT
+EV_READ = c_EV_READ
+EV_WRITE = c_EV_WRITE
+EV_SIGNAL = c_EV_SIGNAL
+EV_PERSIST = c_EV_PERSIST
+
+#cdef enum:
+#    EV_TIMEOUT = 0x01
+#    EV_READ    = 0x02
+#    EV_WRITE   = 0x04
+#    EV_SIGNAL  = 0x08
+#    EV_PERSIST = 0x10
+#cdef extern enum:
+#    EV_TIMEOUT
+#    EV_READ
+#    EV_WRITE
+#    EV_SIGNAL
+#    EV_PERSIST
 
 __event_exc = None
 
@@ -130,8 +149,8 @@ cdef class event:
         except:
             __event_abort()
         # XXX - account for event.signal() EV_PERSIST
-        if not (evtype & EV_SIGNAL) and \
-           not event_pending(&self.ev, EV_READ|EV_WRITE|EV_SIGNAL|EV_TIMEOUT, NULL):
+        if not (evtype & c_EV_SIGNAL) and \
+           not event_pending(&self.ev, c_EV_READ|c_EV_WRITE|c_EV_SIGNAL|c_EV_TIMEOUT, NULL):
             Py_DECREF(self)
     
     def __callback(self, short evtype):
@@ -139,7 +158,7 @@ cdef class event:
             self.callback(self, self.handle, evtype, self.args)
         except:
             __event_abort()
-        if not event_pending(&self.ev, EV_READ|EV_WRITE|EV_SIGNAL|EV_TIMEOUT, NULL):
+        if not event_pending(&self.ev, c_EV_READ|c_EV_WRITE|c_EV_SIGNAL|c_EV_TIMEOUT, NULL):
             Py_DECREF(self)
 
     def add(self, float timeout=-1):
@@ -149,7 +168,7 @@ cdef class event:
         
         timeout -- seconds after which the event will be executed
         """
-        if not event_pending(&self.ev, EV_READ|EV_WRITE|EV_SIGNAL|EV_TIMEOUT,
+        if not event_pending(&self.ev, c_EV_READ|c_EV_WRITE|c_EV_SIGNAL|c_EV_TIMEOUT,
                              NULL):
             Py_INCREF(self)
         self.timeout = timeout
@@ -163,7 +182,7 @@ cdef class event:
 
     def pending(self):
         """Return 1 if the event is scheduled to run, or else 0."""
-        return event_pending(&self.ev, EV_TIMEOUT|EV_SIGNAL|EV_READ|EV_WRITE, NULL)
+        return event_pending(&self.ev, c_EV_TIMEOUT|c_EV_SIGNAL|c_EV_READ|c_EV_WRITE, NULL)
     
     def delete(self):
         """Remove event from the event queue."""
@@ -177,10 +196,6 @@ cdef class event:
     def __repr__(self):
         return '<event flags=0x%x, handle=%s, callback=%s, arg=%s>' % \
                (self.ev.ev_flags, self.handle, self.callback, self.args)
-
-def init():
-    """Initialize event queue."""
-    event_init()
 
 def dispatch():
     """Dispatch all events on the event queue.
@@ -216,13 +231,13 @@ def abort():
     """Abort event dispatch loop."""
     __event_abort()
 
-include "simple.pxi"
+#include "simple.pxi"
 
-include "bufferevent.pxi"
+#include "nbevent.pxi"
 
-include "evdns.pxi"
+#include "evdns.pxi"
 
-include "evhttp.pxi"
+#include "evhttp.pxi"
 
 # XXX - make sure event queue is always initialized.
-init()
+event_init()
