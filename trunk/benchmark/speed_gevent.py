@@ -3,7 +3,10 @@
 
 import sys
 
-from greenlet_fix import greenlet
+try:
+  from greenlet_fix import greenlet
+except ImportError:
+  import greenlet
 import lprng
 
 import gevent
@@ -46,10 +49,6 @@ def Handle(client_socket):
   #f.flush()  # Not needed here.
 
 if __name__ == '__main__':
-  #wsgiserver = gevent.wsgi.WSGIServer(('127.0.0.1', 8080), WsgiApplication)
-  #wsgiserver.backlog = 128
-  #wsgiserver.serve_forever()
-  # !! prints
   server_socket = gevent.socket.socket()
   gevent.socket.set_reuse_addr(server_socket)
   server_socket.bind(('127.0.0.1', 8080))
