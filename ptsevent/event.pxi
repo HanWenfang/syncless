@@ -230,14 +230,3 @@ def loop(nonblock=False):
 def abort():
     """Abort event dispatch loop."""
     __event_abort()
-
-#include "simple.pxi"
-
-#include "nbevent.pxi"
-
-#include "evdns.pxi"
-
-#include "evhttp.pxi"
-
-# XXX - make sure event queue is always initialized.
-event_init()
