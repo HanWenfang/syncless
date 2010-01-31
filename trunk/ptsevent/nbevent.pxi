@@ -42,7 +42,6 @@ cdef extern from "fcntl.h":
 cdef extern from "signal.h":
     int SIGINT
 
-# bufferevent
 cdef extern from "event.h":
     struct evbuffer:
         char *buf "buffer"
@@ -72,12 +71,21 @@ cdef extern from "event.h":
     char *evbuffer_find(evbuffer *, void*, int)
     # void evbuffer_setcb(evbuffer *, void (*)(struct evbuffer *, int, int, void *), void *)
 
+cdef extern from "frameobject.h":  # Needed by core/stackless_structs.h
+    pass
+cdef extern from "core/stackless_structs.h":
+    ctypedef struct PyTaskletObject:
+        PyTaskletObject *next
+        PyTaskletObject *prev
+
 cdef extern from "stackless_api.h":
     object PyStackless_Schedule(object retval, int remove)
     int PyStackless_GetRunCount()
     ctypedef class stackless.tasklet [object PyTaskletObject]:
       pass
-    int PyTasklet_Insert(tasklet task)
+    # Return -1 on exception, 0 on OK.
+    int PyTasklet_Insert(tasklet task) except -1
+    int PyTasklet_Remove(tasklet task) except -1
     tasklet PyStackless_GetCurrent()
     #tasklet PyTasklet_New(type type_type, object func);
 
@@ -115,14 +123,70 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
 #        print name
 #        PyStackless_Schedule(None, 0)  # remove
 
+def LinkHelper():
+    raise RuntimeError('LinkHelper tasklet called')
+
 # TODO(pts): Experiment calling these from Python instead of C.
-def MainLoop():
+def MainLoop(tasklet link_helper_tasklet):
+    #cdef PyTaskletObject *pprev
+    #cdef PyTaskletObject *pnext
+    cdef PyTaskletObject *ptemp
+    cdef PyTaskletObject *p
+    cdef PyTaskletObject *c
+    o = PyStackless_GetCurrent()
+    # Using c instead of o below prevents reference counting.
+    c = <PyTaskletObject*>o
+    p = <PyTaskletObject*>link_helper_tasklet
+    assert c != p
+
     while True:
         #print 'MainLoop', PyStackless_GetRunCount()
-        # Exceptions (if any) in event handlers would propagate to here.
-        # Argument: nonblocking: don't block if nothing available.
         # !! TODO(pts): what if nothing registered and we're running MainLoop
-        loop(PyStackless_GetRunCount() > 1)
+        # maybe loop has returned true and
+        # stackless.current.prev is stackless.current.
+
+        # We add link_helper_tasklet to the end of the queue. All other
+        # tasklets added by loop(...) below will be added between
+        # link_helper_tasklet
+        if p.next != NULL:
+            PyTasklet_Remove(link_helper_tasklet)
+        PyTasklet_Insert(link_helper_tasklet)
+
+        # This runs 1 iteration of the libevent main loop: waiting for
+        # I/O events and calling callbacks.
+        #
+        # Exceptions (if any) in event handlers would propagate to here.
+        # !! would they? or only 1 exception?
+        # Argument: nonblocking: don't block if nothing available.
+        #
+        # Each callback we (nbevent.pxi)
+        # have registered is just a tasklet_obj.insert(), but others may have
+        # registered different callbacks.
+        #
+        # We compare against 2 because of stackless.current
+        # (main_loop_tasklet) and link_helper_tasklet.
+        loop(PyStackless_GetRunCount() > 2)
+
+        # Swap link_helper_tasklet and stackless.current in the queue.  We
+        # do this so that the tasklets inserted by the loop(...) call above
+        # are run first, preceding tasklets already alive. This makes
+        # scheduling more fair on a busy server.
+        #
+        # The swap implementation would work even for p == c, or if p and c
+        # are adjacent.
+        ptemp = p.next
+        p.next = c.next
+        c.next = ptemp
+        p.next.prev = p
+        c.next.prev = c
+        ptemp = p.prev
+        p.prev = c.prev
+        c.prev = ptemp
+        p.prev.next = p
+        c.prev.next = c
+
+        PyTasklet_Remove(link_helper_tasklet)
+
         PyStackless_Schedule(None, 0)  # remove=0
 
 
@@ -155,6 +219,27 @@ def SetFdBlocking(int fd, is_blocking):
 cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
     PyTasklet_Insert(<tasklet>arg)  # No null or type checking.
 
+# This works, but it assumes that c.prev is kept in the runnable list during
+# the inserts.
+#def RRR(tasklet a, tasklet b):
+#    """Insert a, b, and make sure they run next."""
+#    cdef PyTaskletObject *p
+#    cdef PyTaskletObject *c
+#    o = PyStackless_GetCurrent()
+#    # This assignment prevents reference counting below.
+#    c = <PyTaskletObject*>o
+#    p = c.prev
+#    PyTasklet_Insert(a);
+#    PyTasklet_Insert(b);
+#    if p != c:
+#      # Move p (stackless.current) right after p.
+#      # TODO(pts): More checks.
+#      c.prev.next = c.next
+#      c.next.prev = c.prev
+#      c.next = p.next
+#      c.next.prev = c
+#      c.prev = p
+#      p.next = c
 
 cdef class evbufferobj:
     """A Python wrapper around libevent's I/O buffer: struct evbuffer
@@ -451,11 +536,3 @@ cdef class evbufferobj:
                 raise IOError(errno, strerror(errno))
             evbuffer_drain(self.eb, n)
         return n
-
-# --- Initialization.
-
-# This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
-# gets control) a KeyboardInterrupt in the main tasklet.
-event(SigIntHandler, handle=SIGINT, evtype=EV_SIGNAL | EV_PERSIST).add()
-
-main_loop_tasklet = stackless.tasklet(MainLoop)()
