@@ -111,6 +111,7 @@ cdef extern from "event.h":
     # void evbuffer_setcb(evbuffer *, void (*)(struct evbuffer *, int, int, void *), void *)
 
 cdef extern from "Python.h":
+    object PyString_FromFormat(char_constp fmt, ...)
     object PyString_FromStringAndSize(char_constp v, Py_ssize_t len)
     object PyString_FromString(char_constp v)
     int    PyObject_AsCharBuffer(object obj, char_constp *buffer, Py_ssize_t *buffer_len)
@@ -269,10 +270,10 @@ cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
         (<tasklet>arg).tempval = True
     else:
         (<tasklet>arg).tempval = False
-    PyTasklet_Insert(<tasklet>arg)  # No null or type checking.
+    PyTasklet_Insert(<tasklet>arg)  # No NULL- or type checking.
 
 cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
-    PyTasklet_Insert(<tasklet>arg)  # No null or type checking.
+    PyTasklet_Insert(<tasklet>arg)
 
 # This works, but it assumes that c.prev is kept in the runnable list during
 # the inserts.
@@ -711,6 +712,9 @@ evsocket_impl = socket._socket.socket
 #
 # TODO(pts): Reimplement socket.socket as well, especially makefile.
 # TODO(pts): Implement close().
+# TODO(pts): For socket._socket.socket, settimeout(1) raises EAGAIN, without
+# waiting for the timeout.
+# TODO(pts): For socket.socket, the socket timeout affects socketfile.read.
 cdef class evsocket:
     cdef event_t wakeup_ev
     cdef int fd
