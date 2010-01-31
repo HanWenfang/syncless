@@ -48,7 +48,7 @@ def Handler(cs, csaddr):
 
 if __name__ == '__main__':
   ss = ptsevent.evsocket(socket.AF_INET, socket.SOCK_STREAM)
-  #ss.settimeout(0)
+  #ss.settimeout(1)
   ss.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   # TODO(pts): Use ss._sock.
   ss.bind(('127.0.0.1', 8080))
