@@ -1,5 +1,21 @@
-#### pts #### This file has been entirely written by pts@fazekas.hu.
+#
+# nbevent.pxi: non-blocking I/Oclasses using libevent and buffering
+# by pts@fazekas.hu at Sun Jan 31 12:07:36 CET 2010
+# ### pts #### This file has been entirely written by pts@fazekas.hu.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
 
+
+# TODO(pts): Add module docstring.
 # !! TODO(pts) there are still long requests, even with listen(2280)
 #Connection Times (ms)
 #              min  mean[+/-sd] median   max
@@ -23,6 +39,28 @@
 # TODO(pts): port to pure Python + select() or epoll().
 import stackless
 import socket
+
+# These are some Pyrex magic declarations which will enforce type safety in
+# our *.pxi files by turning GCC warnings about const and signedness to Pyrex
+# errors.
+#
+# stdlib.h is not explicitly needed, but providing a from clause prevents
+# Pyrex from generating a ``typedef''.
+cdef extern from "stdlib.h":
+    ctypedef struct char_const:
+        pass
+    ctypedef struct uchar_const:
+        pass
+    ctypedef struct uchar:
+        pass
+    ctypedef char_const* char_constp "char const*"
+    ctypedef uchar_const* uchar_constp "unsigned char const*"
+    ctypedef uchar* uchar_p "unsigned char*"
+
+cdef extern from "Python.h":
+    object PyString_FromStringAndSize(char_constp v, Py_ssize_t len)
+    object PyString_FromString(char_constp v)
+    int    PyObject_AsCharBuffer(object obj, char_constp *buffer, Py_ssize_t *buffer_len)
 cdef extern from "unistd.h":
     cdef int os_write "write"(int fd, char *p, int n)
     cdef int os_read "read"(int fd, char *p, int n)
@@ -44,8 +82,8 @@ cdef extern from "signal.h":
 
 cdef extern from "event.h":
     struct evbuffer:
-        char *buf "buffer"
-        char *orig_buffer
+        uchar_p buf "buffer"
+        uchar_p orig_buffer
         int misalign
         int totallen
         int off
@@ -68,7 +106,7 @@ cdef extern from "event.h":
     int evbuffer_drain(evbuffer *b, int size)
     int evbuffer_write(evbuffer *, int)
     int evbuffer_read(evbuffer *, int, int)
-    char *evbuffer_find(evbuffer *, void*, int)
+    uchar_p evbuffer_find(evbuffer *, uchar_constp, int)
     # void evbuffer_setcb(evbuffer *, void (*)(struct evbuffer *, int, int, void *), void *)
 
 cdef extern from "frameobject.h":  # Needed by core/stackless_structs.h
@@ -289,11 +327,11 @@ cdef class evbufferobj:
         evbuffer_drain(self.eb, n)
 
     def append(evbufferobj self, buf):
-        cdef char *p
-        cdef int n
+        cdef char_constp p
+        cdef Py_ssize_t n
         if PyObject_AsCharBuffer(buf, &p, &n) < 0:
             raise TypeError
-        return evbuffer_add(self.eb, p, n)
+        return evbuffer_add(self.eb, <char*>p, n)
 
     def consume(evbufferobj self, int n=-1):
         """Read, drain and return at most n (or all) from the beginning.
@@ -305,7 +343,7 @@ cdef class evbufferobj:
             n = self.eb.off
         if n == 0:
             return ''
-        buf = PyString_FromStringAndSize(self.eb.buf, n)
+        buf = PyString_FromStringAndSize(<char_constp>self.eb.buf, n)
         evbuffer_drain(self.eb, n)
         return buf
         #assert got == n  # Assertions turned on by default. Good.
@@ -316,16 +354,16 @@ cdef class evbufferobj:
         cdef char *p
         if n > self.eb.off or n < 0:
             n = self.eb.off
-        return PyString_FromStringAndSize(self.eb.buf, n)
+        return PyString_FromStringAndSize(<char_constp>self.eb.buf, n)
 
     def find(evbufferobj self, buf):
-        cdef int n
-        cdef char *p
+        cdef Py_ssize_t n
+        cdef char_constp p
         cdef char *q
         # TODO(pts): Intern n == 1 strings.
         if PyObject_AsCharBuffer(buf, &p, &n) < 0:
             raise TypeError
-        q = evbuffer_find(self.eb, p, n)
+        q = <char*>evbuffer_find(self.eb, <uchar_constp>p, n)
         if q == NULL:
             return -1
         return q - <char*>self.eb.buf
@@ -349,11 +387,11 @@ cdef class evbufferobj:
         """
         cdef int n
         cdef char *q
-        q = evbuffer_find(self.eb, '\n', 1)
+        q = <char*>evbuffer_find(self.eb, <uchar_constp>'\n', 1)
         if q == NULL:
             return ''
         n = q - <char*>self.eb.buf + 1
-        buf = PyString_FromStringAndSize(self.eb.buf, n)
+        buf = PyString_FromStringAndSize(<char_constp>self.eb.buf, n)
         evbuffer_drain(self.eb, n)
         return buf
 
@@ -394,7 +432,7 @@ cdef class evbufferobj:
         cdef int n
         cdef int got
         cdef char *q
-        q = evbuffer_find(self.eb, '\n', 1)
+        q = <char*>evbuffer_find(self.eb, <uchar_constp>'\n', 1)
         while q == NULL:
             # !! don't do ioctl(FIONREAD) if not necessary (in libevent)
             # !! where do we get totallen=32768? evbuffer_read has a strange
@@ -425,14 +463,14 @@ cdef class evbufferobj:
                 PyStackless_Schedule(None, 1)  # remove=1
             elif got == 0:  # EOF, return remaining bytes ('' or partial line)
                 n = self.eb.off
-                buf = PyString_FromStringAndSize(self.eb.buf, n)
+                buf = PyString_FromStringAndSize(<char_constp>self.eb.buf, n)
                 evbuffer_drain(self.eb, n)
                 return buf
             else:
                 # TODO(pts): Find from later than the beginning (just as read).
-                q = evbuffer_find(self.eb, '\n', 1)
+                q = <char*>evbuffer_find(self.eb, <uchar_constp>'\n', 1)
         n = q - <char*>self.eb.buf + 1
-        buf = PyString_FromStringAndSize(self.eb.buf, n)
+        buf = PyString_FromStringAndSize(<char_constp>self.eb.buf, n)
         evbuffer_drain(self.eb, n)
         return buf
 
@@ -444,10 +482,10 @@ cdef class evbufferobj:
         """
         cdef int n
         cdef char *q
-        q = evbuffer_find(self.eb, '\n', 1)
+        q = <char*>evbuffer_find(self.eb, <uchar_constp>'\n', 1)
         if q == NULL:
             return ''
-        return PyString_FromStringAndSize(self.eb.buf,
+        return PyString_FromStringAndSize(<char_constp>self.eb.buf,
                                           q - <char*>self.eb.buf + 1)
 
     def read_from_fd(evbufferobj self, int fd, int n):
@@ -506,7 +544,7 @@ cdef class evbufferobj:
             n = self.eb.off
         if n > 0:
             # TODO(pts): Use send(...) or evbuffer_write() on Win32.
-            n = os_write(fd, self.eb.buf, n)
+            n = os_write(fd, <char*>self.eb.buf, n)
             if n < 0:
                 # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
                 raise IOError(errno, strerror(errno))
@@ -528,7 +566,7 @@ cdef class evbufferobj:
             n = self.eb.off
         if n > 0:
             # TODO(pts): Use send(...) or evbuffer_write() on Win32.
-            n = os_write(fd, self.eb.buf, n)
+            n = os_write(fd, <char*>self.eb.buf, n)
             if n < 0:
                 if errno == EAGAIN:
                     return None
