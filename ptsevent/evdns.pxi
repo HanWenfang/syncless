@@ -1,17 +1,28 @@
 
+# These are some Pyrex magic declarations which will enforce type safety in
+# our *.pxi files by turning GCC warnings about const and signedness to Pyrex
+# errors.
 cdef extern from "evdns.h":
+    ctypedef struct inaddr_const:
+        pass
+    ctypedef struct in6addr_const:
+        pass
+    ctypedef inaddr_const* inaddr_constp "struct in_addr const*"
+    ctypedef in6addr_const* in6addr_constp "struct in6_addr const*"
+
     ctypedef void (*evdns_handler)(int result, char t, int count, int ttl,
                                    void *addrs, void *arg)
 
+cdef extern from "evdns.h":
     int evdns_init()
     char *evdns_err_to_string(int err)
     int evdns_resolve_ipv4(char *name, int flags, evdns_handler callback,
                            void *arg)
     int evdns_resolve_ipv6(char *name, int flags, evdns_handler callback,
                            void *arg)
-    int evdns_resolve_reverse(char *ip, int flags, evdns_handler callback,
+    int evdns_resolve_reverse(inaddr_constp ip, int flags, evdns_handler callback,
                               void *arg)
-    int evdns_resolve_reverse_ipv6(char *ip, int flags, evdns_handler callback,
+    int evdns_resolve_reverse_ipv6(in6addr_constp ip, int flags, evdns_handler callback,
                                    void *arg)
     void evdns_shutdown(int fail_requests)
 
@@ -49,13 +60,15 @@ cdef void __evdns_callback(int result, char t, int count, int ttl,
     if t == DNS_IPv4_A:
         x = []
         for i from 0 <= i < count:
-            x.append(PyString_FromStringAndSize(<char *>addrs + (i * 4), 4))
+            x.append(PyString_FromStringAndSize(
+                <char_constp>(<char *>addrs + (i * 4)), 4))
     elif t == DNS_IPv6_AAAA:
         x = []
         for i from 0 <= i < count:
-            x.append(PyString_FromStringAndSize(<char *>addrs + (i * 16), 16))
+            x.append(PyString_FromStringAndSize(
+                <char_constp>(<char *>addrs + (i * 16)), 16))
     elif t == DNS_PTR and count == 1: # only 1 PTR possible
-        x = PyString_FromString((<char **>addrs)[0])
+        x = PyString_FromString((<char_constp*>addrs)[0])
     else:
         x = None
     try:
@@ -109,7 +122,8 @@ def dns_resolve_reverse(char *ip, int flags, callback, *args):
     t = (callback, args)
     i = id(t)
     __evdns_cbargs[i] = t
-    evdns_resolve_reverse(ip, flags, __evdns_callback, <void *>i)
+    # TODO(pts): Test the type safety here.
+    evdns_resolve_reverse(<inaddr_constp>ip, flags, __evdns_callback, <void *>i)
 
 def dns_resolve_reverse_ipv6(char *ip, int flags, callback, *args):
     """Lookup a PTR record for a given IPv6 address.
@@ -125,10 +139,10 @@ def dns_resolve_reverse_ipv6(char *ip, int flags, callback, *args):
     t = (callback, args)
     i = id(t)
     __evdns_cbargs[i] = t
-    evdns_resolve_reverse(ip, flags, __evdns_callback, <void *>i)
+    # TODO(pts): Test the type safety here.
+    evdns_resolve_reverse_ipv6(<in6addr_constp>ip, flags, __evdns_callback, <void *>i)
 
 def dns_shutdown(int fail_requests=0):
     """Shutdown the async DNS resolver and terminate all active requests."""
     evdns_shutdown(fail_requests)
     __evdns_cbargs.clear()
-

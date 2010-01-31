@@ -31,9 +31,6 @@ cdef extern from "sys/types.h":
 cdef extern from "Python.h":
     void   Py_INCREF(object o)
     void   Py_DECREF(object o)
-    object PyString_FromStringAndSize(char *v, int len)
-    object PyString_FromString(char *v)
-    int    PyObject_AsCharBuffer(object obj, char **buffer, int *buffer_len)
 
 ctypedef void (*event_handler)(int fd, short evtype, void *arg)
     
