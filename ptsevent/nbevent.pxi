@@ -117,14 +117,18 @@ cdef extern from "Python.h":
 cdef extern from "frameobject.h":  # Needed by core/stackless_structs.h
     pass
 cdef extern from "core/stackless_structs.h":
+    ctypedef struct PyObject:
+        pass
+    # This is only for pointer manipulation with reference counting.
     ctypedef struct PyTaskletObject:
         PyTaskletObject *next
         PyTaskletObject *prev
+        PyObject *tempval
 cdef extern from "stackless_api.h":
     object PyStackless_Schedule(object retval, int remove)
     int PyStackless_GetRunCount()
     ctypedef class stackless.tasklet [object PyTaskletObject]:
-        pass
+        cdef object tempval
     # Return -1 on exception, 0 on OK.
     int PyTasklet_Insert(tasklet task) except -1
     int PyTasklet_Remove(tasklet task) except -1
@@ -257,6 +261,15 @@ def SetFdBlocking(int fd, is_blocking):
         fcntl3(fd, F_SETFL, value)
     return bool(old & O_NONBLOCK)
 
+
+cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
+    # PyStackless_Schedule will return this.
+    # No easier way to assign a bool in Pyrex.
+    if evtype == c_EV_TIMEOUT:
+        (<tasklet>arg).tempval = True
+    else:
+        (<tasklet>arg).tempval = False
+    PyTasklet_Insert(<tasklet>arg)  # No null or type checking.
 
 cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
     PyTasklet_Insert(<tasklet>arg)  # No null or type checking.
@@ -667,6 +680,29 @@ cdef class evfile:
         evbuffer_drain(&self.read_eb, n)
         return buf
 
+cdef class evsocket
+
+# With `cdef void', an exception here would be ignored, so
+# we just do a `cdef object'. We don't make this a method so it won't
+# be virtual.
+cdef object handle_eagain(evsocket self, int evtype):
+    cdef tasklet wakeup_tasklet
+    if self.timeout == 0.0:
+        raise socket.error(e.errno, strerror(e.errno))
+    wakeup_tasklet = PyStackless_GetCurrent()
+    if self.timeout < 0.0:
+        event_set(&self.wakeup_ev, self.fd, evtype,
+                  HandleCWakeup, <void *>wakeup_tasklet)
+        event_add(&self.wakeup_ev, NULL)
+        PyStackless_Schedule(None, 1)  # remove=1
+    else:
+        event_set(&self.wakeup_ev, self.fd, evtype,
+                  HandleCTimeoutWakeup, <void *>wakeup_tasklet)
+        event_add(&self.wakeup_ev, &self.tv)
+        if PyStackless_Schedule(None, 1):  # remove=1
+            # Same error message as in socket.socket.
+            raise socket.error('timed out')
+
 evsocket_impl = socket._socket.socket
 
 # We're not inheriting from socket._socket.socket, because with the current
@@ -680,6 +716,8 @@ cdef class evsocket:
     cdef int fd
     # -1.0 if None (infinite timeout).
     cdef float timeout
+    # Corresponds to timeout (if not None).
+    cdef timeval tv
     cdef object sock
 
     def __init__(self, *args):
@@ -728,6 +766,7 @@ cdef class evsocket:
             self.timeout = None
         else:
             self.timeout = 0.0
+            self.tv.tv_sec = self.tv.tv_usec = 0
 
     def settimeout(evsocket self, timeout):
         cdef float timeout_float
@@ -738,9 +777,11 @@ cdef class evsocket:
             if timeout_float < 0.0:
                 raise ValueError('Timeout value out of range')
             self.timeout = timeout_float
+            self.tv.tv_sec = <long>timeout_float
+            self.tv.tv_usec = <unsigned int>(
+                (timeout_float - <float>self.tv.tv_sec) * 1000000.0)
 
     def accept(evsocket self):
-        cdef tasklet wakeup_tasklet
         while True:
             try:
                 asock, addr = self.sock.accept()
@@ -749,13 +790,8 @@ cdef class evsocket:
             except socket.error, e:
                 if e.errno != EAGAIN:
                     raise
-                if self.timeout == 0.0:
-                    raise socket.error(e.errno, strerror(e.errno))
-                wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.wakeup_ev, self.fd, c_EV_READ,
-                          HandleCWakeup, <void *>wakeup_tasklet)
-                event_add(&self.wakeup_ev, NULL)
-                PyStackless_Schedule(None, 1)  # remove=1
+                handle_eagain(self, c_EV_READ)
+
 
     def makefile(evsocket self, mode='r+', int bufsize=-1):
         assert mode == 'r+'  # TODO(pts): Implement other modes
