@@ -64,24 +64,13 @@ cdef extern from "event.h":
     int c_EV_SIGNAL "EV_SIGNAL"
     int c_EV_PERSIST "EV_PERSIST"
 
+# TODO(pts): Do this (exporting to Python + reusing the constant in C)
+# with less typing.
 EV_TIMEOUT = c_EV_TIMEOUT
 EV_READ = c_EV_READ
 EV_WRITE = c_EV_WRITE
 EV_SIGNAL = c_EV_SIGNAL
 EV_PERSIST = c_EV_PERSIST
-
-#cdef enum:
-#    EV_TIMEOUT = 0x01
-#    EV_READ    = 0x02
-#    EV_WRITE   = 0x04
-#    EV_SIGNAL  = 0x08
-#    EV_PERSIST = 0x10
-#cdef extern enum:
-#    EV_TIMEOUT
-#    EV_READ
-#    EV_WRITE
-#    EV_SIGNAL
-#    EV_PERSIST
 
 __event_exc = None
 
