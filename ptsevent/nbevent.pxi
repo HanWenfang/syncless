@@ -115,6 +115,7 @@ cdef extern from "Python.h":
     object PyString_FromStringAndSize(char_constp v, Py_ssize_t len)
     object PyString_FromString(char_constp v)
     int    PyObject_AsCharBuffer(object obj, char_constp *buffer, Py_ssize_t *buffer_len)
+    object PyInt_FromString(char*, char**, int)
 cdef extern from "frameobject.h":  # Needed by core/stackless_structs.h
     pass
 cdef extern from "core/stackless_structs.h":
@@ -130,6 +131,10 @@ cdef extern from "stackless_api.h":
     int PyStackless_GetRunCount()
     ctypedef class stackless.tasklet [object PyTaskletObject]:
         cdef object tempval
+    ctypedef class stackless.bomb [object PyBombObject]:
+        cdef object curexc_type
+        cdef object curexc_value
+        cdef object curexc_traceback
     # Return -1 on exception, 0 on OK.
     int PyTasklet_Insert(tasklet task) except -1
     int PyTasklet_Remove(tasklet task) except -1
@@ -151,16 +156,16 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
         if len(exc_info) < 3:
             exc_info = list(exc_info) + [None, None]
         raise exc_info[0], exc_info[1], exc_info[2]
-    bomb = stackless.bomb(*exc_info)
+    bomb_obj = bomb(*exc_info)
     if tasklet_obj.blocked:
         c = tasklet_obj._channel
         old_preference = c.preference
         c.preference = 1    # Prefer the sender.
         for i in xrange(-c.balance):
-            c.send(bomb)
+            c.send(bomb_obj)
         c.preference = old_preference
     else:
-        tasklet_obj.tempval = bomb
+        tasklet_obj.tempval = bomb_obj
     tasklet_obj.insert()
     tasklet_obj.run()
 
