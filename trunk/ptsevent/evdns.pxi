@@ -204,6 +204,24 @@ cdef void _dns_callback(int resultcode, char t, int count, int ttl,
         (<tasklet>arg).tempval = dnsresult(t, ttl, x)
     PyTasklet_Insert(<tasklet>arg)
 
+cdef int is_valid_ipv4(char *p):
+    cdef int i
+    for i from 0 <= i < 3:
+        if p[0] < c'0' or p[0] > c'9':
+            return 0
+        p += 1
+        while p[0] >= c'0' and p[0] <= c'9':
+            p += 1
+        if p[0] != c'.':
+            return 0
+        p += 1
+    if p[0] < c'0' or p[0] > c'9':
+        return 0
+    p += 1
+    while p[0] >= c'0' and p[0] <= c'9':
+        p += 1
+    return p[0] == c'\0'
+
 cdef dnsresult dns_call(_evdns_call_t call, char_constp name, int flags):
     cdef tasklet wakeup_tasklet
     cdef object tempval
@@ -304,5 +322,7 @@ def dns_resolve_reverse(object ip, int flags=0):
 
 def gethostbyname(char *host):
     """Asynchronous drop-in replacement for socket.gethostbyname."""
+    if is_valid_ipv4(host):
+        return host
     # !! recognize host being an IPv4 address, and return it without resolving.
     return dns_resolve_ipv4(host).values[0]
