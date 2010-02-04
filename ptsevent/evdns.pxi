@@ -59,6 +59,21 @@ cdef extern from "evdns.h":
     int c_DNS_IPv6_AAAA "DNS_IPv6_AAAA"
     int c_DNS_QUERY_NO_SEARCH "DNS_QUERY_NO_SEARCH"
 
+cdef extern from "netdb.h":
+    # NETDB_INTERNAL == -1 (see errno)
+    # NETDB_SUCCESS == 0
+    int c_HERROR_HOST_NOT_FOUND "HOST_NOT_FOUND"  # 1
+    int c_HERROR_TRY_AGAIN "TRY_AGAIN"  # 2
+    int c_HERROR_NO_RECOVERY "NO_RECOVERY"  # 3
+    int c_HERROR_NO_DATA "NO_DATA"  # 4
+    int c_HERROR_NO_ADDRESS "NO_ADDRESS"  # == "NO_DATA"
+
+HERROR_HOST_NOT_FOUND = c_HERROR_HOST_NOT_FOUND
+HERROR_TRY_AGAIN = c_HERROR_TRY_AGAIN
+HERROR_NO_RECOVERY = c_HERROR_NO_RECOVERY
+HERROR_NO_DATA = c_HERROR_NO_DATA
+HERROR_NO_ADDRESS = c_HERROR_NO_ADDRESS
+
 # Result codes
 DNS_ERR_NONE = c_DNS_ERR_NONE
 DNS_ERR_FORMAT = c_DNS_ERR_FORMAT
@@ -204,9 +219,36 @@ cdef void _dns_callback(int resultcode, char t, int count, int ttl,
         (<tasklet>arg).tempval = dnsresult(t, ttl, x)
     PyTasklet_Insert(<tasklet>arg)
 
-cdef int is_valid_ipv4(char *p):
+cdef char is_valid_hex_digit(char p):
+    if p >= c'0' and p <= c'9':
+        return 1
+    elif p >= c'a' and p <= c'f':
+        return 1
+    elif p >= c'A' and p <= c'F':
+        return 1
+    else:
+        return 0
+
+cdef char is_valid_ipv6(char *p):
+    # TODO(pts): Parse properly, according to
+    # http://en.wikipedia.org/wiki/IPv6_address
+    # ::, ::1, ff02::2,
     cdef int i
-    for i from 0 <= i < 3:
+    if not is_valid_hex_digit(p[0]):
+        return 0  # as far as socket.gethostbyaddr is concerned
+    for i from 1 <= i < 8:
+        while is_valid_hex_digit(p[0]):
+            p += 1
+        if p[0] != c':':
+            return 0
+        p += 1
+    while is_valid_hex_digit(p[0]):
+        p += 1
+    return p[0] == c'\0'
+
+cdef char is_valid_ipv4(char *p):
+    cdef int i
+    for i from 1 <= i < 4:
         if p[0] < c'0' or p[0] > c'9':
             return 0
         p += 1
@@ -320,9 +362,153 @@ def dns_resolve_reverse(object ip, int flags=0):
     else:
         raise ValueError('unknown ip address syntax')
 
-def gethostbyname(char *host):
-    """Asynchronous drop-in replacement for socket.gethostbyname."""
-    if is_valid_ipv4(host):
-        return host
-    # !! recognize host being an IPv4 address, and return it without resolving.
-    return dns_resolve_ipv4(host).values[0]
+# --- socket.gethostbyname etc. emulations
+
+# Maps IP addresses to list of host names from /etc/hosts.
+names_by_ip = {}
+
+# Maps IP addresses and host names to list of host names from /etc/hosts.
+names_by_nameip = {}
+
+# TODO(pts): Move this to pure Python to save memory and disk space.
+def read_etc_hosts(filename='/etc/hosts', f=None):
+    """Load IPv4 addresses and hostnames from /etc/hosts.
+
+    Data already loaded to names_by_ip and names_by_nameip is not overridden.
+
+    Raises:
+      IOError:
+    """
+    if f is None:
+        f = open(filename)
+    try:
+        for line in f:
+            items = line.strip().split()
+            if len(items) > 1 and not items[0].startswith('#'):
+                ip = items[0]
+                if is_valid_ipv4(ip):  # TODO(pts): Support IPv6 addresses.
+                    # TODO(pts): Normalize IP address in items[0].
+                    names_by_ip.setdefault(ip, items)
+                    names_by_nameip.setdefault(ip, items)
+                    for name in items:
+                        names_by_nameip.setdefault(name, items)
+    finally:
+        f.close()
+
+cdef object raise_gaierror(object exc_info, char is_name):
+    cdef int result
+    exc_type, exc_value, exc_tb = exc_info
+    # -9 == socket.EAI_ADDRFAMILY
+    # -5 == socket.EAI_NODATA
+    # -2 == socket.EAI_NONAME  'Name or service not known'
+    result = exc_value[0]
+    result = -result
+    # TODO(pts): Substitute more.
+    # Substitute with Linux-specific values.
+    if result == c_DNS_ERR_NOTEXIST:
+        if is_name:
+            exc_value = socket.gaierror(
+                socket.EAI_NONAME, 'Name or service not known')
+        else:
+            exc_value = socket.gaierror(
+                socket.EAI_NODATA, 'No address associated with hostname')
+    else:
+        exc_value = socket.gaierror(-result - 900, exc_value[1])
+    raise type(exc_value), exc_value, exc_tb
+
+cdef object raise_herror(object exc_info):
+    cdef int result
+    exc_type, exc_value, exc_tb = exc_info
+    # 1 == c_HERROR_HOST_NOT_FOUND
+    result = exc_value[0]  # <int>exc_value[0] is different.
+    result = -result
+    # TODO(pts): Substitute more.
+    # Substitute with Linux-specific values.
+    if result == c_DNS_ERR_NOTEXIST:
+        exc_value = socket.herror(
+            HERROR_HOST_NOT_FOUND, 'Unknown host')
+    else:
+        exc_value = socket.herror(-result - 900, exc_value[1])
+    raise type(exc_value), exc_value, exc_tb
+
+def gethostbyname(char *name):
+    """Asynchronous drop-in replacement for socket.gethostbyname.
+
+    This function returns data from /etc/hosts as read at module load time.
+
+    Returns:
+      An IPv4 address as an ASCII string (e.g. '192.168.1.2').
+    Raises:
+      socket.gaierror: The error names and codes may be different.
+    """
+    # TODO(pts): Do proper binary string parsing (everywhere).
+    if is_valid_ipv4(name):
+        return name
+    if is_valid_ipv6(name):
+        raise socket.gaierror(
+            socket.EAI_ADDRFAMILY, 'Address family for hostname not supported')
+    if name in names_by_nameip:
+        return names_by_nameip[name][0]
+    try:
+        return dns_resolve_ipv4(name).values[0]
+    except DnsLookupError:
+        raise_gaierror(sys.exc_info(), 0)
+
+def gethostbyaddr(char *name):
+    """Asynchronous drop-in replacement for socket.gethostbyaddr.
+
+    This function returns data from /etc/hosts as read at module load time.
+
+    Raises:
+      socket.herror: The error names and codes may be different.
+      socket.gaierror: The error names and codes may be different.
+    """
+    if is_valid_ipv4(name) or is_valid_ipv6(name):
+        ip = name
+    elif name in names_by_nameip:
+        ip = names_by_nameip[name][0]
+    else:
+        try:
+            ip = dns_resolve_ipv4(name).values[0]
+        except DnsLookupError:
+            raise_gaierror(sys.exc_info(), 0)
+    if ip in names_by_ip:
+        items = names_by_ip[ip]
+        return (items[1], items[2:], [ip])
+    try:
+        return (dns_resolve_reverse(ip).values[0], [], [ip])
+    except DnsLookupError:
+        raise_herror(sys.exc_info())
+
+def getfqdn(name=''):
+    """Asynchronous drop-in replacement for socket.getfqdn.
+
+    This function returns data from /etc/hosts as read at module load time.
+    """
+    cdef char* cname
+    cname = NULL
+    if not name:
+      name = socket.gethostname()
+    cname = name
+    if is_valid_ipv4(cname) or is_valid_ipv6(cname):
+        ip = cname
+    elif cname in names_by_nameip:
+        ip = names_by_nameip[cname][0]
+    else:
+        try:
+            ip = dns_resolve_ipv4(cname).values[0]
+        except DnsLookupError:
+            return cname
+    if ip in names_by_ip:
+        return names_by_ip[ip][1]
+    try:
+        return dns_resolve_reverse(ip).values[0]
+    except DnsLookupError:
+        return cname
+
+# TODO(pts): Implement socket.gethostbyname_ex()
+#    (like gethostbyaddr, but doesn't look up an IP address.)
+# TODO(pts): Implement socket.getaddrinfo()
+# >>> socket.getaddrinfo('www.ipv6.org', 0, socket.AF_INET6)
+# [(10, 1, 6, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0)), (10, 2, 17, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0)), (10, 3, 0, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0))]
+# TODO(pts): Implement socket.getnameinfo()
