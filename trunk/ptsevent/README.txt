@@ -69,8 +69,45 @@ svn checkout http://pyevent.googlecode.com/svn/trunk/ pyevent-read-only
 * setup.py
 * test.py
 
+Limitations
+~~~~~~~~~~~
+1. The DNS looup functions (even the emulated ptsevent.gethostbyname) read
+   /etc/hosts (and /etc/resolve.conf) only at startup.
+
+2. For hostname lookups, Linux libc6 NSS mechanisms (such as
+   //etc/nsswitch.conf and etc/host.conf) are ignored: /etc/hosts is used
+   /first, then a DNS lookup
+   is done.
+
+3. The reverse DNS lookup functions fail on a host with multiple PTR records:
+
+$ host 202.92.65.220 
+;; Truncated, retrying in TCP mode.
+220.65.92.202.in-addr.arpa domain name pointer pop.cbdcorp.com.au.
+220.65.92.202.in-addr.arpa domain name pointer pop.stanicharding.com.au.
+220.65.92.202.in-addr.arpa domain name pointer webmail.stanicharding.com.au.
+220.65.92.202.in-addr.arpa domain name pointer webmail.cbdcorp.com.au.
+220.65.92.202.in-addr.arpa domain name pointer webmail.viewhotels.com.au.
+220.65.92.202.in-addr.arpa domain name pointer pop.migrationlawforum.com.au.
+220.65.92.202.in-addr.arpa domain name pointer sydmail01.powertel.net.au.
+220.65.92.202.in-addr.arpa domain name pointer mail.viewhotels.com.au.
+220.65.92.202.in-addr.arpa domain name pointer mail.migrationlawforum.com.au.
+220.65.92.202.in-addr.arpa domain name pointer webmail.migrationlawforum.com.au.
+220.65.92.202.in-addr.arpa domain name pointer mail.c2cextreme.net.
+220.65.92.202.in-addr.arpa domain name pointer mail.cbdcorp.com.au.
+220.65.92.202.in-addr.arpa domain name pointer mail.stanicharding.com.au
+$ stackless2.6 -c 'import ptsevent;
+    print ptsevent.dns_resolve_reverse("202.92.65.220")'
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "evdns.pxi", line 344, in ptsevent.dns_resolve_reverse
+  File "evdns.pxi", line 278, in ptsevent.dns_call
+ptsevent.DnsLookupError: [Errno -65] reply truncated or ill-formed
+
 ---
 
 TODO(pts): setsockopt TCP_DEFER_ACCEPT
 TODO(pts): setsockopt SO_LINGER non-immediate close() for writing
-TODO(pts: use SO_RCVTIMEO and SO_SNDTIMEO for timeout
+TODO(pts): use SO_RCVTIMEO and SO_SNDTIMEO for timeout
+TODO(pts): is it smaller or faste in Cython?
+TODO(pts): measure if evhttp is faster for WSGI than in pure Python

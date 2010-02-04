@@ -20,3 +20,8 @@ cdef tasklet main_loop_tasklet
 def get_main_loop_tasklet():
   return main_loop_tasklet
 main_loop_tasklet = stackless.tasklet(MainLoop)(link_helper_tasklet)
+
+try:
+  read_etc_hosts()
+except IOError:
+  pass
