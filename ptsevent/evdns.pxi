@@ -1,3 +1,6 @@
+#
+# evdns.pxi: Non-blocking DNS lookup routines
+# by pts@fazekas.hu at Sat Feb  6 20:04:13 CET 2010
 # ### pts #### This file has been highly modified by pts@fazekas.hu.
 #
 # Example:
@@ -432,7 +435,7 @@ cdef object raise_herror(object exc_info):
     raise type(exc_value), exc_value, exc_tb
 
 def gethostbyname(char *name):
-    """Asynchronous drop-in replacement for socket.gethostbyname.
+    """Non-blocking drop-in replacement for socket.gethostbyname.
 
     This function returns data from /etc/hosts as read at module load time.
 
@@ -454,8 +457,38 @@ def gethostbyname(char *name):
     except DnsLookupError:
         raise_gaierror(sys.exc_info(), 0)
 
+cdef object c_gethostbyname(object address, int family):
+    """Helper function for the connect() methods in nbevent.pyx.
+
+    Raises:
+      socket.gaierror: The error names and codes may be different.
+    """
+    cdef char *name
+    if family == AF_INET:
+        name = address[0]
+        if is_valid_ipv4(name):
+            return address
+        if not is_valid_ipv6(name):
+            try:
+                return (dns_resolve_ipv4(name).values[0], address[1])
+            except DnsLookupError:
+                raise_gaierror(sys.exc_info(), 0)
+    elif family == AF_INET6:
+        name = address[0]
+        if is_valid_ipv6(name):
+            return address
+        if not is_valid_ipv4(name):
+            try:
+                return (dns_resolve_ipv6(name).values[0], address[1])
+            except DnsLookupError:
+                raise_gaierror(sys.exc_info(), 0)
+    else:
+        return address  # for AF_UNIX etc.
+    raise socket.gaierror(socket.EAI_ADDRFAMILY,
+                          'Address family for hostname not supported')
+
 def gethostbyaddr(char *name):
-    """Asynchronous drop-in replacement for socket.gethostbyaddr.
+    """Non-blocking drop-in replacement for socket.gethostbyaddr.
 
     This function returns data from /etc/hosts as read at module load time.
 
@@ -481,7 +514,7 @@ def gethostbyaddr(char *name):
         raise_herror(sys.exc_info())
 
 def getfqdn(name=''):
-    """Asynchronous drop-in replacement for socket.getfqdn.
+    """Non-blocking drop-in replacement for socket.getfqdn.
 
     This function returns data from /etc/hosts as read at module load time.
     """
@@ -507,7 +540,7 @@ def getfqdn(name=''):
         return cname
 
 def gethostbyname_ex(char *name):
-    """Asynchronous drop-in replacement for socket.gethostbyname_ex.
+    """Non-blocking drop-in replacement for socket.gethostbyname_ex.
 
     This function returns data from /etc/hosts as read at module load time.
 
