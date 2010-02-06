@@ -1068,6 +1068,7 @@ cdef class nbsocket:
         fd = dup(self.fd)
         if fd < 0:
             raise socket.error(errno, strerror(errno))
+        # TODO(pts): Verify proper close semantics for _realsocket emulation.
         return nbfile(fd, fd, bufsize, do_close=1, close_ref=self)
 
 
