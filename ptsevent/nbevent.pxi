@@ -66,6 +66,8 @@ cdef extern from "unistd.h":
     cdef int os_read "read"(int fd, char *p, int n)
     cdef int dup(int fd)
     cdef int close(int fd)
+    cdef int isatty(int fd)
+    cdef int ftruncate(int fd, int size)
 cdef extern from "string.h":
     cdef void *memset(void *s, int c, size_t n)
 cdef extern from "stdlib.h":
@@ -635,10 +637,14 @@ cdef class nbfile:
     cdef int write_buf_limit
     cdef char c_do_close
     cdef char c_closed
+    cdef char c_softspace
+    cdef object c_mode
+    cdef object c_name
 
     def __init__(nbfile self, int read_fd, int write_fd,
                  int write_buf_limit=8192, char do_close=0,
-                 object close_ref=None):
+                 object close_ref=None, object mode='r+',
+                 object name=None):
         assert read_fd >= 0
         assert write_fd >= 0
         self.c_do_close = do_close
@@ -646,12 +652,18 @@ cdef class nbfile:
         self.write_fd = write_fd
         self.write_buf_limit = write_buf_limit
         self.close_ref = close_ref
+        self.c_mode = mode
+        self.c_name = name
         # evbuffer_new() clears the memory area of the object with zeroes,
         # but Pyrex (and __cinit__) ensure that happens, so we don't have to
         # do that.
 
     def fileno(nbfile self):
         return self.read_fd
+
+    # This method is not present in standard file.
+    def write_fileno(nbfile self):
+        return self.write_fd
 
     def close(nbfile self):
         cdef int got
@@ -689,12 +701,44 @@ cdef class nbfile:
         def __get__(self):
             return self.c_do_close
 
+    property mode:
+        def __get__(self):
+            return self.c_mode
+
+    property name:
+        def __get__(self):
+            return self.c_name
+
+    # file.softspace is used by `print'.
+    property softspace:
+        def __get__(self):
+            return self.c_softspace
+        def __set__(self, char softspace):
+            self.c_softspace = softspace
+
+    # Simplification over `file'.
+    property encoding:
+        def __get__(self):
+            return None
+
+    # Simplification over `file'.
+    property newlines:
+        def __get__(self):
+            return None
+
+    # Unicode error handler. Simplification over `file'.
+    property errors:
+        def __get__(self):
+            return None
+
     def write(nbfile self, object buf):
         # TODO(pts): Flush the buffer eventually automatically.
         cdef char_constp p
         cdef Py_ssize_t n
         if PyObject_AsCharBuffer(buf, &p, &n) < 0:
             raise TypeError
+        # !! TODO(pts): Don't even temporarily overflow the buffer.
+        # !! TODO(pts): Do line buffering with buffer size == 1.
         evbuffer_add(&self.write_eb, <char*>p, n)
         if self.write_eb.off >= self.write_buf_limit:
             self.flush()
@@ -753,11 +797,43 @@ cdef class nbfile:
         evbuffer_drain(&self.read_eb, n)
         return buf
 
+    def __next__(nbfile self):
+        line = self.readline()
+        if line:
+            return line
+        raise StopIteration
+
     def __iter__(nbfile self):
         # We have to use __builtins__.iter because Pyrex expects 1 argument for
         # iter(...).
-        return __builtin__.iter(self.readline, '')
+        #return __builtin__.iter(self.readline, '')
+        return self
 
+    def xreadlines(nbfile self):
+        return self  # Just like file.xreadlines
+
+    def isatty(nbfile self):
+        cdef int got
+        got = isatty(self.read_fd)
+        if got < 0:
+            raise IOError(errno, strerror(errno))
+        elif got:
+            return True
+        else:
+            return False
+
+    def truncate(nbfile self, int size):
+        # TODO(pts): Do we need this? It won't work for streams (like seek, tell)
+        if ftruncate(self.read_fd, size) < 0:
+            raise IOError(errno, strerror(errno))
+
+# !! implement open(...) properly, with modes etc.
+# !! prevent writing to a nonwritable file
+# !! implement read()
+# !! implement readinto()
+# !! implement readlines()
+# !! implement seek() and tell()
+# !! implement writelines()
 
 # Forward declaration.
 cdef class nbsocket
@@ -1110,3 +1186,7 @@ def sleep(float duration):
     """Non-blocking drop-in replacement for time.sleep."""
     # TODO(pts): Reuse existing sleepers (thread-local?) to speed this up.
     sleeper().sleep(duration)
+
+# TODO(pts): Add new_file and nbfile(...)
+# TODO(pts): If the buffering argument is given, 0 means unbuffered, 1 means
+# line buffered, and larger numbers specify the buffer size.
