@@ -178,7 +178,7 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
 
 # Example code:
 #def Sayer(object name):
-#    while True:
+#    while 1:
 #        print name
 #        PyStackless_Schedule(None, 0)  # remove
 
@@ -198,7 +198,7 @@ def MainLoop(tasklet link_helper_tasklet):
     p = <PyTaskletObject*>link_helper_tasklet
     assert c != p
 
-    while True:
+    while 1:  # ``while 1`'' is more efficient in Pyrex than ``while True''
         #print 'MainLoop', PyStackless_GetRunCount()
         # !! TODO(pts): what if nothing registered and we're running MainLoop
         # maybe loop has returned true and
@@ -436,7 +436,7 @@ cdef class evbufferobj:
 
     def nb_accept(evbufferobj self, object sock):
         cdef tasklet wakeup_tasklet
-        while True:  # !! optimize this for Pyrex (while 1)
+        while 1:
             try:
                 return sock.accept()
             except socket.error, e:
@@ -930,7 +930,7 @@ cdef class nbsocket:
                 (timeout_float - <float>self.tv.tv_sec) * 1000000.0)
 
     def accept(nbsocket self):
-        while True:
+        while 1:
             try:
                 asock, addr = self.sock.accept()
                 esock = type(self)(asock)  # Create new nbsocket.
@@ -945,7 +945,7 @@ cdef class nbsocket:
         # There is no need to predeclare c_gethostbyname in Pyrex.
         address = c_gethostbyname(address, self.sock.family)
 
-        while True:
+        while 1:
             err = self.sock.connect_ex(address)
             if err:
                 if err != EAGAIN and err != EINPROGRESS:
@@ -958,14 +958,14 @@ cdef class nbsocket:
         # Do a non-blocking DNS lookup if needed.
         address = c_gethostbyname(address, self.sock.family)
 
-        while True:
+        while 1:
             err = self.sock.connect_ex(address)
             if err != EAGAIN and err != EINPROGRESS:
                 return err
             handle_eagain(self, c_EV_WRITE)
 
     def shutdown(nbsocket self, object how):
-        while True:
+        while 1:
             err = self.sock.shutdown(how)
             if err != EAGAIN:
                 return err
@@ -973,7 +973,7 @@ cdef class nbsocket:
             handle_eagain(self, c_EV_WRITE)
 
     def recv(nbsocket self, *args):
-        while True:
+        while 1:
             try:
                 return self.sock.recv(*args)
             except socket.error, e:
@@ -982,7 +982,7 @@ cdef class nbsocket:
                 handle_eagain(self, c_EV_READ)
 
     def recvfrom(nbsocket self, *args):
-        while True:
+        while 1:
             try:
                 return self.sock.recvfrom(*args)
             except socket.error, e:
@@ -991,7 +991,7 @@ cdef class nbsocket:
                 handle_eagain(self, c_EV_READ)
 
     def recv_into(nbsocket self, *args):
-        while True:
+        while 1:
             try:
                 return self.sock.recv_into(*args)
             except socket.error, e:
@@ -1000,7 +1000,7 @@ cdef class nbsocket:
                 handle_eagain(self, c_EV_READ)
 
     def recvfrom_into(nbsocket self, *args):
-        while True:
+        while 1:
             try:
                 return self.sock.recvfrom_into(*args)
             except socket.error, e:
@@ -1009,7 +1009,7 @@ cdef class nbsocket:
                 handle_eagain(self, c_EV_READ)
 
     def send(nbsocket self, *args):
-        while True:
+        while 1:
             try:
                 return self.sock.send(*args)
             except socket.error, e:
@@ -1018,7 +1018,7 @@ cdef class nbsocket:
                 handle_eagain(self, c_EV_WRITE)
 
     def sendto(nbsocket self, *args):
-        while True:
+        while 1:
             try:
                 return self.sock.sendto(*args)
             except socket.error, e:
