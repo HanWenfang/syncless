@@ -80,7 +80,6 @@ GETHOSTBYADDR_RESULT = {
     'www.l.google.com': ('fx-in-f106.1e100.net', [], ['74.125.39.106']),
     'www.ipv6.org': ('igloo.stacken.kth.se', [], ['130.237.234.40']),
 }
-
 GETFQDN_RESULT = {
     '1.2.3.4': 'bogus1.there',
     '1.2.3.5': 'other',
@@ -101,6 +100,56 @@ GETFQDN_RESULT = {
     'www.l.google.com': 'fx-in-f106.1e100.net',
     'unknown': 'unknown',
 }
+
+GETHOSTBYNAME_EX_RESULT = {
+    '1.2.3.4': ('1.2.3.4', [], ['1.2.3.4']),
+    '1.2.3.5': ('1.2.3.5', [], ['1.2.3.5']),
+    '127.0.0.1': ('127.0.0.1', [], ['127.0.0.1']),
+    '127.5.6.7': ('127.5.6.7', [], ['127.5.6.7']),
+    '152.66.84.8': ('152.66.84.8', [], ['152.66.84.8']),
+    '2001:6b0:1:ea:202:a5ff:fecd:13a6': ERR_ADDRFAMILY,
+    '74.125.39.106': ('74.125.39.106', [], ['74.125.39.106']),
+    # Incomplete emulation: socket.gethostbyname_ex would return:
+    # 'bogus3': ('bogus1.there',
+    #           ['bogus2', 'bogus3', 'bogus4.foo.bar'],
+    #           ['1.2.3.4', '1.2.3.5']),  # !! for gethostbyaddr
+    'bogus3': ('bogus1.there',
+               ['bogus2', 'bogus3', 'bogus4.foo.bar'],
+               ['1.2.3.4']),
+    'bogus4.foo.bar':  ('bogus1.there',
+                        ['bogus2', 'bogus3', 'bogus4.foo.bar'], ['1.2.3.4']),
+    'foo.bar.baz': ERR_NODATA,
+    'fourier.szit.bme.hu': ('fourier.szit.bme.hu', [], ['152.66.84.8']),
+    'localhost': ('localhost', [], ['127.0.0.1']),
+    'mail.szit.bme.hu': ('fourier.szit.bme.hu', ['mail.szit.bme.hu'],
+                         ['152.66.84.8']),
+    'other': ('other', ['bogus3'], ['1.2.3.5']),
+    # Incomplete emulation: socket.gethostbyname_ex would return:
+    #'www.google.com': ('www.l.google.com', ['www.google.com'],
+    #                   ['74.125.39.106', '74.125.39.103',
+    #                    '74.125.39.147', '74.125.39.104',
+    #                    '74.125.39.105', '74.125.39.99']),
+    'www.google.com': ('fx-in-f106.1e100.net', ['www.google.com'],
+                       ['74.125.39.106', '74.125.39.103',
+                        '74.125.39.147', '74.125.39.104',
+                        '74.125.39.105', '74.125.39.99']),
+    # Incomplete emulation: socket.gethostbyname_ex would return:
+    #'www.l.google.com': ('www.l.google.com', [],
+    #                   ['74.125.39.106', '74.125.39.103',
+    #                    '74.125.39.147', '74.125.39.104',
+    #                    '74.125.39.105', '74.125.39.99']),
+    'www.l.google.com': ('fx-in-f106.1e100.net', ['www.l.google.com'],
+                       ['74.125.39.106', '74.125.39.103',
+                        '74.125.39.147', '74.125.39.104',
+                        '74.125.39.105', '74.125.39.99']),
+    # Incomplete emulation: socket.gethostbyname_ex would return:
+    #'www.ipv6.org': ('shake.stacken.kth.se', ['www.ipv6.org'],
+    #                 ['130.237.234.40']),
+    'www.ipv6.org': ('igloo.stacken.kth.se', ['www.ipv6.org'],
+                     ['130.237.234.40']),
+    'unknown': ERR_NODATA,
+}
+
 
 def FakeDnsResolveIpv4(name):
   values = RESOLVE_IPV4_RESULT[name]
@@ -162,6 +211,11 @@ class DnsCompatTest(unittest.TestCase):
       result = Wrap(ptsevent.gethostbyname, name)
       self.assertEqual({name: GETHOSTBYNAME_RESULT[name]}, {name: result})
 
+  def testGetHostByNameEx(self):
+    for name in sorted(GETHOSTBYNAME_EX_RESULT):
+      result = Wrap(ptsevent.gethostbyname_ex, name)
+      self.assertEqual({name: GETHOSTBYNAME_EX_RESULT[name]}, {name: result})
+
   def testGetHostByAddr(self):
     for name in sorted(GETHOSTBYADDR_RESULT):
       result = Wrap(ptsevent.gethostbyaddr, name)
@@ -172,11 +226,10 @@ class DnsCompatTest(unittest.TestCase):
       result = ptsevent.getfqdn(name)  # Never raises an exception.
       self.assertEqual({name: GETFQDN_RESULT[name]}, {name: result})
 
-#  def testGetHostByAddrGen(self):
-#    for name in sorted(GETHOSTBYADDR_RESULT) + ['unknown']:
-#      print repr(name), ':', Wrap(socket.getfqdn, name)
+#  def testZZZGen(self):
+#    for name in sorted(GETHOSTBYNAME_EX_RESULT) + ['unknown']:
+#      print repr(name), ':', Wrap(socket.gethostbyname_ex, name)
 
 
 if __name__ == '__main__':
   unittest.main()
- 

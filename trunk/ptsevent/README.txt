@@ -75,9 +75,8 @@ Limitations
    /etc/hosts (and /etc/resolve.conf) only at startup.
 
 2. For hostname lookups, Linux libc6 NSS mechanisms (such as
-   //etc/nsswitch.conf and etc/host.conf) are ignored: /etc/hosts is used
-   /first, then a DNS lookup
-   is done.
+   /etc/nsswitch.conf and etc/host.conf) are ignored: /etc/hosts is used
+   first, then a DNS lookup is done.
 
 3. The reverse DNS lookup functions fail on a host with multiple PTR records:
 
@@ -103,6 +102,10 @@ Traceback (most recent call last):
   File "evdns.pxi", line 344, in ptsevent.dns_resolve_reverse
   File "evdns.pxi", line 278, in ptsevent.dns_call
 ptsevent.DnsLookupError: [Errno -65] reply truncated or ill-formed
+
+4. ptsevent.gethostbyname_ex is slower (does 2 DNS lookups) and only
+   approximates the answer of socket.gethostbyname_ex, because evdns doesn't
+   support CNAME lookups.
 
 ---
 
