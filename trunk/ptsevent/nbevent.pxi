@@ -41,6 +41,7 @@
 # TODO(pts): port to pure Python + select() or epoll().
 import stackless
 import socket
+import __builtin__
 
 # These are some Pyrex magic declarations which will enforce type safety in
 # our *.pxi files by turning GCC warnings about const and signedness to Pyrex
@@ -63,6 +64,8 @@ cdef extern from "stdlib.h":
 cdef extern from "unistd.h":
     cdef int os_write "write"(int fd, char *p, int n)
     cdef int os_read "read"(int fd, char *p, int n)
+    cdef int dup(int fd)
+    cdef int close(int fd)
 cdef extern from "string.h":
     cdef void *memset(void *s, int c, size_t n)
 cdef extern from "stdlib.h":
@@ -72,6 +75,7 @@ cdef extern from "errno.h":
     cdef extern char *strerror(int)
     cdef enum errno_dummy:
         EAGAIN
+        EINPROGRESS
 cdef extern from "fcntl.h":
     cdef int fcntl2 "fcntl"(int fd, int cmd)
     cdef int fcntl3 "fcntl"(int fd, int cmd, long arg)
@@ -80,6 +84,9 @@ cdef extern from "fcntl.h":
     int F_SETFL
 cdef extern from "signal.h":
     int SIGINT
+cdef extern from "sys/socket.h":
+    int AF_INET6
+    int AF_INET
 
 cdef extern from "event.h":
     struct evbuffer:
@@ -246,6 +253,14 @@ def MainLoop(tasklet link_helper_tasklet):
 def SigIntHandler(ev, sig, evtype, arg):
     SendExceptionAndRun(stackless.main, (KeyboardInterrupt,))
 
+cdef void set_fd_nonblocking(int fd):
+    # This call works on Unix, but it's not portable (to e.g. Windows).
+    # See also the #ifdefs in socketmodule.c:internal_setblocking().
+    cdef int old
+    # TODO(pts): Don't silently ignore the errors.
+    old = fcntl2(fd, F_GETFL)
+    if old >= 0 and (old & ~O_NONBLOCK):
+        fcntl3(fd, F_SETFL, old | O_NONBLOCK)
 
 def SetFdBlocking(int fd, is_blocking):
     """Set a file descriptor blocking or nonblocking.
@@ -258,7 +273,10 @@ def SetFdBlocking(int fd, is_blocking):
     """
     cdef int old
     cdef int value
+    # TODO(pts): Don't silently ignore the errors.
     old = fcntl2(fd, F_GETFL)
+    if old < 0:
+        return
     if is_blocking:
         value = old & ~O_NONBLOCK
     else:
@@ -308,14 +326,14 @@ cdef class evbufferobj:
     Please note that this buffer wastes memory: after reading a very long
     line, the buffer space won't be reclaimed until self.reset() is called.
     """
+    # We don't need __cinit__ for memset(<void*>&self.eb, 0, sizeof(self.eb))
+    # to mimic the calloc() in evbuffer_new(), because Pyrex ensures the
+    # clearing of object memory.
     cdef evbuffer eb
-    # We must keep self.wakeup_ev on the heap, because
-    # Stackless scheduling swaps the C stack.
+    # We must keep self.wakeup_ev on the heap (not on the C stack), because
+    # hard switching in Stackless scheduling swaps the C stack, and libevent
+    # needs all pending event_t structures available.
     cdef event_t wakeup_ev
-
-    def __cinit__(evbufferobj self):
-        # evbuffer_new has a calloc().
-        memset(<void*>&self.eb, 0, sizeof(self.eb))
 
     def __repr__(evbufferobj self):
         return '<evbufferobj misalign=%s, totallen=%s, off=%s at 0x%x>' % (
@@ -418,7 +436,7 @@ cdef class evbufferobj:
 
     def nb_accept(evbufferobj self, object sock):
         cdef tasklet wakeup_tasklet
-        while True:
+        while True:  # !! optimize this for Pyrex (while 1)
             try:
                 return sock.accept()
             except socket.error, e:
@@ -596,33 +614,82 @@ cdef class evbufferobj:
             evbuffer_drain(&self.eb, n)
         return n
 
+
+# Forward declaration.
+#cdef class iterator
+
+
 # TODO(pts): Implement all methods.
 # TODO(pts): Implement close().
-cdef class evfile:
+# !! implement timeout (does socket._realsocket.makefile do that?)
+cdef class nbfile:
     """A non-blocking file (I/O channel)."""
     # We must keep self.wakeup_ev on the heap, because
     # Stackless scheduling swaps the C stack.
+    cdef object close_ref
     cdef event_t wakeup_ev
     cdef int read_fd
     cdef int write_fd
     cdef evbuffer read_eb
     cdef evbuffer write_eb
     cdef int write_buf_limit
+    cdef char c_do_close
+    cdef char c_closed
 
-    def __cinit__(evfile self, int read_fd, int write_fd,
-                  int write_buf_limit=8192):
+    def __init__(nbfile self, int read_fd, int write_fd,
+                 int write_buf_limit=8192, char do_close=0,
+                 object close_ref=None):
+        assert read_fd >= 0
+        assert write_fd >= 0
+        self.c_do_close = do_close
         self.read_fd = read_fd
         self.write_fd = write_fd
         self.write_buf_limit = write_buf_limit
-        # Similar to evbuffer_new().
-        memset(<void*>&self.read_eb, 0, sizeof(self.read_eb))
-        # Similar to evbuffer_new().
-        memset(<void*>&self.write_eb, 0, sizeof(self.read_eb))
+        self.close_ref = close_ref
+        # evbuffer_new() clears the memory area of the object with zeroes,
+        # but Pyrex (and __cinit__) ensure that happens, so we don't have to
+        # do that.
 
-    def fileno(evfile self):
+    def fileno(nbfile self):
         return self.read_fd
 
-    def write(evfile self, object buf):
+    def close(nbfile self):
+        cdef int got
+        try:
+            if self.write_eb.off > 0:
+                self.flush()
+        finally:
+            if not self.c_closed:
+                self.c_closed = 1
+                if self.c_do_close:
+                    if self.close_ref is None:
+                        got = close(self.read_fd)
+                        if got < 0:
+                            exc = IOError(errno, strerror(errno))
+                            close(self.write_fd)
+                            raise exc
+                        got = close(self.write_fd)
+                        if got < 0:
+                            raise IOError(errno, strerror(errno))
+                    else:
+                        close_ref = self.close_ref
+                        self.close_ref = False
+                        if close_ref is not False:
+                            close_ref.close()
+
+    property closed:
+        def __get__(self):
+            if self.c_closed:
+                return True
+            else:
+                return False
+
+    # This is not a standard property of `file'.
+    property do_close:
+        def __get__(self):
+            return self.c_do_close
+
+    def write(nbfile self, object buf):
         # TODO(pts): Flush the buffer eventually automatically.
         cdef char_constp p
         cdef Py_ssize_t n
@@ -632,7 +699,7 @@ cdef class evfile:
         if self.write_eb.off >= self.write_buf_limit:
             self.flush()
 
-    def flush(evfile self):
+    def flush(nbfile self):
         # Please note that this method may raise an error even if parts of the
         # buffer has been flushed.
         cdef tasklet wakeup_tasklet
@@ -651,7 +718,7 @@ cdef class evfile:
                 event_add(&self.wakeup_ev, NULL)
                 PyStackless_Schedule(None, 1)  # remove=1
 
-    def readline(evfile self):
+    def readline(nbfile self):
         cdef tasklet wakeup_tasklet
         cdef int n
         cdef int got
@@ -686,17 +753,24 @@ cdef class evfile:
         evbuffer_drain(&self.read_eb, n)
         return buf
 
-cdef class evsocket
+    def __iter__(nbfile self):
+        # We have to use __builtins__.iter because Pyrex expects 1 argument for
+        # iter(...).
+        return __builtin__.iter(self.readline, '')
+
+
+# Forward declaration.
+cdef class nbsocket
 
 # With `cdef void', an exception here would be ignored, so
 # we just do a `cdef object'. We don't make this a method so it won't
 # be virtual.
-cdef object handle_eagain(evsocket self, int evtype):
+cdef object handle_eagain(nbsocket self, int evtype):
     cdef tasklet wakeup_tasklet
-    if self.timeout == 0.0:
+    if self.timeout_value == 0.0:
         raise socket.error(e.errno, strerror(e.errno))
     wakeup_tasklet = PyStackless_GetCurrent()
-    if self.timeout < 0.0:
+    if self.timeout_value < 0.0:
         event_set(&self.wakeup_ev, self.fd, evtype,
                   HandleCWakeup, <void *>wakeup_tasklet)
         event_add(&self.wakeup_ev, NULL)
@@ -709,100 +783,329 @@ cdef object handle_eagain(evsocket self, int evtype):
             # Same error message as in socket.socket.
             raise socket.error('timed out')
 
-evsocket_impl = socket._socket.socket
+# Implementation backend class for sockets. Should be socket._socket.socket
+# (which is the same as socket._realsocket)
+socket_impl = socket._realsocket
+
+socket_fromfd = socket.fromfd
 
 # We're not inheriting from socket._socket.socket, because with the current
 # socketmodule.c implementation it would be impossible to wrap the return
 # value of accept() this way.
 #
-# TODO(pts): Reimplement socket.socket as well, especially makefile.
-# TODO(pts): Implement close().
-# TODO(pts): For socket._socket.socket, settimeout(1) raises EAGAIN, without
-# waiting for the timeout.
+# TODO(pts): Implement a streaming fast socket class which uses fd and read(2).
 # TODO(pts): For socket.socket, the socket timeout affects socketfile.read.
-cdef class evsocket:
+cdef class nbsocket:
+    """Non-blocking drop-in replacement class for socket.socket.
+
+    See the function new_realsocket for using this class as a replacement for
+    socket._realsocket.
+    """
+
     cdef event_t wakeup_ev
     cdef int fd
     # -1.0 if None (infinite timeout).
-    cdef float timeout
+    cdef float timeout_value
     # Corresponds to timeout (if not None).
     cdef timeval tv
     cdef object sock
+    cdef char c_do_close
 
-    def __init__(self, *args):
-        if args and isinstance(args[0], evsocket_impl):
+    def __init__(nbsocket self, *args, **kwargs):
+        if 'socket_impl' in kwargs:
+            my_socket_impl = kwargs['socket_impl']
+        else:
+            my_socket_impl = socket_impl
+        if args and isinstance(args[0], my_socket_impl):
             self.sock = args[0]
             assert len(args) == 1
         else:
-            self.sock = evsocket_impl(*args)
+            self.sock = my_socket_impl(*args)
         self.fd = self.sock.fileno()
-        self.timeout = -1.0
-        self.sock.setblocking(False)
+        # TODO(pts): self.sock.setblocking(False) on non-Unix.
+        set_fd_nonblocking(self.fd)
+        self.timeout_value = -1.0
 
-    def fileno(evsocket self):
+    def fileno(nbsocket self):
         return self.fd
 
-    def close(evsocket self):
-        self.sock.close()
-        self.fd = -1
+    def dup(nbsocket self):
+        # TODO(pts): Skip the fcntl2 in the set_fd_nonblocking call in the
+        # constructor.
+        return type(self)(self.sock.dup())
 
-    def setsockopt(evsocket self, *args):
+    def close(nbsocket self):
+        if self.c_do_close:
+            # self.sock.close() calls socket(2) + close(2) if the filehandle
+            # was already closed.
+            self.sock.close()
+        else:
+            # TODO(pts): Make this faster, and work without a new object.
+            self.sock = socket._closedsocket()
+        self.fd = -1
+        # There is no method or attribute socket.closed or
+        # socket._real_socket.closed(), so we don't implement one either.
+        # We don't release the reference to self.sock here, to imitate
+        # after-close behavior of the object.
+
+    def setdoclose(nbsocket self, char do_close):
+        """With True, makes self.close() close the filehandle.
+
+        Returns:
+          self
+        """
+        self.c_do_close = do_close
+        return self
+
+    # This is not a standard property of `socket.socket'.
+    property do_close:
+        def __get__(self):
+            return self.c_do_close
+
+    property type:
+        def __get__(self):
+            return self.sock.type
+
+    property family:
+        def __get__(self):
+            return self.sock.family
+
+    property timeout:
+        def __get__(self):
+            """Return a nonnegative float, or -1.0 if there is no timeout.
+
+            socket._realsocket has .timeout, socket.socket doesn't have it.
+            """
+            if self.timeout_value < 0:
+                return None
+            else:
+                return self.timeout_value
+
+    property proto:
+        def __get__(self):
+            return self.sock.proto
+
+    def setsockopt(nbsocket self, *args):
         return self.sock.setsockopt(*args)
 
-    def getsockopt(evsocket self, *args):
+    def getsockopt(nbsocket self, *args):
         return self.sock.getsockopt(*args)
 
-    def getsockname(evsocket self, *args):
+    def getsockname(nbsocket self, *args):
         return self.sock.getsockname(*args)
 
-    def getpeername(evsocket self, *args):
+    def getpeername(nbsocket self, *args):
         return self.sock.getpeername(*args)
 
-    def bind(evsocket self, *args):
+    def bind(nbsocket self, *args):
         return self.sock.bind(*args)
 
-    def listen(evsocket self, *args):
+    def listen(nbsocket self, *args):
         return self.sock.listen(*args)
 
-    def gettimeout(evsocket self):
-        if self.timeout < 0:
+    def gettimeout(nbsocket self):
+        if self.timeout_value < 0:
             return None
         else:
-            return self.timeout
+            return self.timeout_value
 
-    def setblocking(evsocket self, is_blocking):
+    def setblocking(nbsocket self, is_blocking):
         if is_blocking:
-            self.timeout = None
+            self.timeout_value = None
         else:
-            self.timeout = 0.0
+            self.timeout_value = 0.0
             self.tv.tv_sec = self.tv.tv_usec = 0
 
-    def settimeout(evsocket self, timeout):
+    def settimeout(nbsocket self, timeout):
         cdef float timeout_float
         if timeout is None:
-            self.timeout = None
+            self.timeout_value = None
         else:
             timeout_float = timeout
             if timeout_float < 0.0:
                 raise ValueError('Timeout value out of range')
-            self.timeout = timeout_float
+            self.timeout_value = timeout_float
             self.tv.tv_sec = <long>timeout_float
             self.tv.tv_usec = <unsigned int>(
                 (timeout_float - <float>self.tv.tv_sec) * 1000000.0)
 
-    def accept(evsocket self):
+    def accept(nbsocket self):
         while True:
             try:
                 asock, addr = self.sock.accept()
-                esock = type(self)(asock)  # Create new evsocket.
+                esock = type(self)(asock)  # Create new nbsocket.
                 return esock, addr
             except socket.error, e:
                 if e.errno != EAGAIN:
                     raise
                 handle_eagain(self, c_EV_READ)
 
+    def connect(nbsocket self, object address):
+        # Do a non-blocking DNS lookup if needed.
+        # There is no need to predeclare c_gethostbyname in Pyrex.
+        address = c_gethostbyname(address, self.sock.family)
 
-    def makefile(evsocket self, mode='r+', int bufsize=-1):
-        assert mode == 'r+'  # TODO(pts): Implement other modes
-        # TODO(pts): Implement dup() and close() semantics.
-        return evfile(self.fd, self.fd, bufsize)
+        while True:
+            err = self.sock.connect_ex(address)
+            if err:
+                if err != EAGAIN and err != EINPROGRESS:
+                    raise socket.error(err, strerror(err))
+                handle_eagain(self, c_EV_WRITE)
+            else:
+                return
+
+    def connect_ex(nbsocket self, object address):
+        # Do a non-blocking DNS lookup if needed.
+        address = c_gethostbyname(address, self.sock.family)
+
+        while True:
+            err = self.sock.connect_ex(address)
+            if err != EAGAIN and err != EINPROGRESS:
+                return err
+            handle_eagain(self, c_EV_WRITE)
+
+    def shutdown(nbsocket self, object how):
+        while True:
+            err = self.sock.shutdown(how)
+            if err != EAGAIN:
+                return err
+            # TODO(pts): Can this happen (with SO_LINGER?).
+            handle_eagain(self, c_EV_WRITE)
+
+    def recv(nbsocket self, *args):
+        while True:
+            try:
+                return self.sock.recv(*args)
+            except socket.error, e:
+                if e.errno != EAGAIN:
+                    raise
+                handle_eagain(self, c_EV_READ)
+
+    def recvfrom(nbsocket self, *args):
+        while True:
+            try:
+                return self.sock.recvfrom(*args)
+            except socket.error, e:
+                if e.errno != EAGAIN:
+                    raise
+                handle_eagain(self, c_EV_READ)
+
+    def recv_into(nbsocket self, *args):
+        while True:
+            try:
+                return self.sock.recv_into(*args)
+            except socket.error, e:
+                if e.errno != EAGAIN:
+                    raise
+                handle_eagain(self, c_EV_READ)
+
+    def recvfrom_into(nbsocket self, *args):
+        while True:
+            try:
+                return self.sock.recvfrom_into(*args)
+            except socket.error, e:
+                if e.errno != EAGAIN:
+                    raise
+                handle_eagain(self, c_EV_READ)
+
+    def send(nbsocket self, *args):
+        while True:
+            try:
+                return self.sock.send(*args)
+            except socket.error, e:
+                if e.errno != EAGAIN:
+                    raise
+                handle_eagain(self, c_EV_WRITE)
+
+    def sendto(nbsocket self, *args):
+        while True:
+            try:
+                return self.sock.sendto(*args)
+            except socket.error, e:
+                if e.errno != EAGAIN:
+                    raise
+                handle_eagain(self, c_EV_WRITE)
+
+    def sendall(nbsocket self, object data, int flags=0):
+        cdef int got
+        try:
+            got = self.sock.send(data, flags)
+            assert got > 0
+        except socket.error, e:
+            if e.errno != EAGAIN:
+                raise
+            handle_eagain(self, c_EV_WRITE)
+            got = 0
+        while got < len(data):
+            try:
+                got2 = self.sock.send(buffer(data, got), flags)
+                assert got2 > 0
+                got += got2
+            except socket.error, e:
+                if e.errno != EAGAIN:
+                    raise
+                handle_eagain(self, c_EV_WRITE)
+
+    def makefile_samefd(nbsocket self, mode='r+', int bufsize=-1):
+        """Create and return an nbfile with self.fd.
+
+        The nbfile will be buffered, and its close method won't be cause an
+        os.close(self.fd).
+
+        This method is not part of normal sockets.
+        """
+        assert mode == 'r+'  # !! TODO(pts): Implement other modes
+        return nbfile(self.fd, self.fd, bufsize)
+
+    def makefile(nbsocket self, mode='r+', int bufsize=-1):
+        """Create an nbfile (non-blocking file-like) object from self.
+
+        os.dup(self.fd) will be passed to the new nbfile object, and its
+        .close() method will close that file descriptor.
+        """
+        cdef int fd
+        assert mode == 'r+'  # !! TODO(pts): Implement other modes
+        fd = dup(self.fd)
+        if fd < 0:
+            raise socket.error(errno, strerror(errno))
+        return nbfile(fd, fd, bufsize, do_close=1, close_ref=self)
+
+
+def new_realsocket(*args):
+    """Non-blocking drop-in replacement for socket._realsocket.
+
+    The most important difference between socket.socket and socket._realsocket
+    is that socket._realsocket.close() closes the filehandle immediately,
+    while socket.socket.close() just breaks the reference.
+    """
+    return nbsocket(*args).setdoclose(1)
+
+
+def new_realsocket_fromfd(*args):
+    """Non-blocking drop-in replacement for socket.fromfd."""
+    return nbsocket(socket_fromfd(*args)).setdoclose(1)
+
+cdef class sleeper:
+    # We must keep self.wakeup_ev on the heap (not on the C stack), because
+    # hard switching in Stackless scheduling swaps the C stack, and libevent
+    # needs all pending event_t structures available.
+    cdef event_t wakeup_ev
+
+    def sleep(sleeper self, float duration):
+        cdef tasklet wakeup_tasklet
+        cdef timeval tv
+        if duration > 0:
+            wakeup_tasklet = PyStackless_GetCurrent()
+            evtimer_set(&self.wakeup_ev, HandleCWakeup, <void*>wakeup_tasklet)
+            event_add(&self.wakeup_ev, NULL)
+            # TODO(pts): Optimize this for integers.
+            tv.tv_sec = <long>duration
+            tv.tv_usec = <unsigned int>(
+                (duration - <float>tv.tv_sec) * 1000000.0)
+            event_add(&self.wakeup_ev, &tv)
+            PyStackless_Schedule(None, 1)  # remove=1
+
+def sleep(float duration):
+    """Non-blocking drop-in replacement for time.sleep."""
+    # TODO(pts): Reuse existing sleepers (thread-local?) to speed this up.
+    sleeper().sleep(duration)

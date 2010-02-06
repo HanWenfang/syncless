@@ -47,7 +47,7 @@ def Handler(cs, csaddr):
   cs.close()  # No need for event_del, nothing listening.
 
 if __name__ == '__main__':
-  ss = ptsevent.evsocket(socket.AF_INET, socket.SOCK_STREAM)
+  ss = ptsevent.new_realsocket(socket.AF_INET, socket.SOCK_STREAM)
   #ss.settimeout(1)
   ss.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   # TODO(pts): Use ss._sock.
