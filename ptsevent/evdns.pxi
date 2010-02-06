@@ -506,8 +506,43 @@ def getfqdn(name=''):
     except DnsLookupError:
         return cname
 
-# TODO(pts): Implement socket.gethostbyname_ex()
-#    (like gethostbyaddr, but doesn't look up an IP address.)
+def gethostbyname_ex(char *name):
+    """Asynchronous drop-in replacement for socket.gethostbyname_ex.
+
+    This function returns data from /etc/hosts as read at module load time.
+
+    Avoid using this function if possible.
+    Please note that this function is less faithful to its socket.*
+    counterpart than the other functions in this module. This is because the
+    underlying DNS lookup mechanism (evdns) can't return the CNAME records
+    in evdns_resolve_ipv4(). The CNAME emulation here is inaccurate (see the
+    unit tests) and slower (needs 2 DNS requests).
+    """
+    if is_valid_ipv4(name):
+        return (name, [], [name])
+    if is_valid_ipv6(name):
+        raise socket.gaierror(
+            socket.EAI_ADDRFAMILY, 'Address family for hostname not supported')
+    if name in names_by_nameip:
+        items = names_by_nameip[name]
+        return (items[1], items[2:], [items[0]])
+    try:
+        ips = dns_resolve_ipv4(name).values
+    except DnsLookupError:
+        raise_gaierror(sys.exc_info(), 0)
+
+    if ips[0] in names_by_ip:
+        canonical = names_by_ip[ips[0]][1]
+    else:
+        try:
+            canonical = dns_resolve_reverse(ips[0]).values[0]
+        except DnsLookupError:
+            raise_gaierror(sys.exc_info(), 0)
+    if canonical == name:
+        return (name, [], ips)
+    else:
+        return (canonical, [name], ips)
+
 # TODO(pts): Implement socket.getaddrinfo()
 # >>> socket.getaddrinfo('www.ipv6.org', 0, socket.AF_INET6)
 # [(10, 1, 6, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0)), (10, 2, 17, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0)), (10, 3, 0, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0))]
