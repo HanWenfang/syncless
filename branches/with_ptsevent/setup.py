@@ -12,7 +12,18 @@ setup(name='syncless',
       url='http://code.google.com/p/syncless/',
       download_url='http://syncless.googlecode.com/files/syncless-0.01.tar.gz',
       packages=['syncless'],
-      long_description="Syncless is an experimental, lightweight, non-blocking (asynchronous) client and server socket network communication library implemented in Stackless Python 2.6. Syncless contains an asynchronous DNS resolver (using dnspython) and a HTTP server capable of serving WSGI applications. Syncless aims to be a coroutine-based alternative of event-driven networking engines (such as Twisted and FriendFeed's Tornado). Syncless is already about that fast, but it has less features and it's less stable now.",
+      long_description=
+          "Syncless is an experimental, lightweight, non-blocking "
+          "(asynchronous) client and server socket network communication "
+          "library for Stackless Python 2.6. For high speed, Syncless uses "
+          "libevent, and parts of Syncless' code is implemented in C (Pyrex). "
+          "Thus Syncless can be faster than many other non-blocking Python "
+          "communication libraries. Syncless contains an asynchronous DNS "
+          "resolver (using evdns) and a HTTP server capable of serving WSGI "
+          "applications. Syncless aims to be a coroutine-based alternative of "
+          "event-driven networking engines (such as Twisted and FriendFeed's "
+          "Tornado), and it's a competitor of gevent, pyevent, eventlet and "
+          "Concurrence.",
       license="GPL v2",
       platforms=["Unix"],
       classifiers=[
