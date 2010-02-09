@@ -1,57 +1,46 @@
 #!/usr/bin/env python
 #
-# $Id: setup.py 49 2008-05-11 03:06:12Z dugsong $
+# by pts@fazekas.hu at Tue Feb  9 18:42:57 CET 2010
 
+import glob
+import os
+import os.path
+import sys
 from distutils.core import setup, Extension
-import glob, os, sys
 
-if 0 and glob.glob('/usr/lib/libevent.*'):  # !! better lookup
-    print 'found system libevent for', sys.platform
-    event = Extension(name='ptsevent',
-                       sources=[ 'ptsevent.c' ],
-                       libraries=[ 'event' ])
-elif glob.glob('%s/lib/libevent.*' % sys.prefix):
-    print 'found installed libevent in', sys.prefix
-    event = Extension(name='ptsevent',
-                       sources=[ 'ptsevent.c' ],
-                       include_dirs=[ '%s/include' % sys.prefix ],
-                       library_dirs=[ '%s/lib' % sys.prefix ],
-                       libraries=[ 'event' ])
-else:
-    ev_dir = None
-    l = glob.glob('../libevent*')
-    l.reverse()
-    for dir in l:
-        if os.path.isdir(dir):
-            ev_dir = dir
-            break
-    if not ev_dir:
-        raise "couldn't find libevent installation or build directory"
-    
-    print 'found libevent build directory', ev_dir
-    ev_srcs = [ 'ptsevent.c' ]
-    ev_incdirs = [ ev_dir ]
-    ev_extargs = []
-    ev_extobjs = []
-    ev_libraries = []
-    
-    if sys.platform == 'win32':
-        ev_incdirs.extend([ '%s/WIN32-Code' % ev_dir,
-                            '%s/compat' % ev_dir ])
-        ev_srcs.extend([ '%s/%s' % (ev_dir, x) for x in [
-            'WIN32-Code/misc.c', 'WIN32-Code/win32.c',
-            'log.c', 'ptsevent.c' ]])
-        ev_extargs = [ '-DWIN32', '-DHAVE_CONFIG_H' ]
-        ev_libraries = [ 'wsock32' ]
-    else:
-        ev_extobjs = glob.glob('%s/*.o' % dir)
+try:
+  import stackless
+except ImportError:
+  print >>sys.stderr, (
+      'This Python extension needs Stackless Python.\n'
+      'Please run setup.py with the Stackless Python interpreter.')
+  sys.exit(2)
 
-    event = Extension(name='ptsevent',
-                      sources=ev_srcs,
-                      include_dirs=ev_incdirs,
-                      extra_compile_args=ev_extargs,
-                      extra_objects=ev_extobjs,
-                      libraries=ev_libraries)
+# TODO(pts): Run this autodetection only for build_ext (just like in
+# pysqlite).
+
+# We could add more directories (e.g. those in /etc/ld.so.conf), but that's
+# system-specific, see http://stackoverflow.com/questions/2230467 .
+# !! command-line flags
+include_dirs = []
+library_dirs = []
+event = None
+for prefix in os.getenv('LD_LIBRARY_PATH', '').split(':') + [
+              sys.prefix, '/usr']:
+  if (prefix and
+      os.path.isfile(prefix + '/include/event.h') and
+      os.path.isfile(prefix + '/include/evdns.h') and
+      glob.glob(prefix + '/lib/libevent.*')):
+    print 'found libevent in', prefix
+    include_dirs =['%s/include' % prefix]
+    library_dirs =['%s/lib' % prefix]    
+if not include_dirs:
+  print 'libevent not found, may be present anyway, going on'
+event = Extension(name='ptsevent',
+                  sources=['ptsevent.c'],
+                  include_dirs=include_dirs,
+                  library_dirs=library_dirs,
+                  libraries=['event'])
 
 setup(name='ptsevent',
       version='0.4',

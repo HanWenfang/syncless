@@ -149,12 +149,12 @@ cdef class dnsresult:
         def __get__(self):
             return self._values
 
-    def __cinit__(evbufferobj self, char t, int ttl, list values):
+    def __cinit__(dnsresult self, char t, int ttl, list values):
         self._t = t
         self._ttl = ttl
         self._values = values
 
-    def __repr__(evbufferobj self):
+    def __repr__(dnsresult self):
         return '<dnsresult t=%d, ttl=%d values=%r at 0x%x>' % (
             self._t, self._ttl, self._values, <unsigned>self)
 
