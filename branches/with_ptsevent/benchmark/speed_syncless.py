@@ -59,4 +59,3 @@ if __name__ == '__main__':
     cs, csaddr = ss.accept()
     stackless.tasklet(Handler)(cs, csaddr)
     cs = None  # Save memory.
-                

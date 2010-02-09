@@ -798,6 +798,9 @@ cdef class nbfile:
         def __get__(nbfile self):
             return self.write_eb.off
 
+    def discard_write_buffer(nbfile self):
+        evbuffer_drain(&self.write_eb, self.write_eb.off)
+
     def discard(nbfile self, int n):
         """Read and discard exactly n bytes.
 
