@@ -2,7 +2,7 @@ PYTHON=stackless2.6
 
 .PHONY: all install clean
 
-all: ptsevent.c
+all: coio.c
 	$(PYTHON) setup.py build
 
 install:
@@ -15,7 +15,7 @@ clean:
 test:
 	$(PYTHON) test.py
 
-#ptsevent.c: event.pyx nbevent.pxi evdns.pxi evhttp.pxi simple.pxi
+#coio.c: event.pyx nbevent.pxi evdns.pxi evhttp.pxi simple.pxi
 # Ignoring DeprecationWarning since Pyrex does an `import md5'
-ptsevent.c: ptsevent.pyx event.pxi nbevent.pxi evdns.pxi patch.pxi
-	$(PYTHON) -W ignore::DeprecationWarning -c "from Pyrex.Compiler.Main import main; main(command_line=1)" ptsevent.pyx
+coio.c: coio.pyx event.pxi nbevent.pxi evdns.pxi patch.pxi
+	$(PYTHON) -W ignore::DeprecationWarning -c "from Pyrex.Compiler.Main import main; main(command_line=1)" coio.pyx

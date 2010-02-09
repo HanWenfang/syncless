@@ -4,12 +4,12 @@
 # ### pts #### This file has been highly modified by pts@fazekas.hu.
 #
 # Example:
-# import ptsevent
+# import syncless.coio
 # 
-# print ptsevent.dns_resolve_ipv4('www.google.com', 0)
+# print syncless.coio.dns_resolve_ipv4('www.google.com', 0)
 # #: <dnsresult code=0, t=1, ttl=273 values=['74.125.43.147', '74.125.43.99', '74.125.43.104', '74.125.43.105', '74.125.43.106', '74.125.43.103'] at 0xb7bd9734>
 # 
-# print ptsevent.dns_resolve_ipv6('www.ipv6.org')
+# print syncless.coio.dns_resolve_ipv6('www.ipv6.org')
 # #$ host -t AAAA www.ipv6.org
 # #www.ipv6.org is an alias for shake.stacken.kth.se.
 # #shake.stacken.kth.se has IPv6 address 2001:6b0:1:ea:202:a5ff:fecd:13a6
