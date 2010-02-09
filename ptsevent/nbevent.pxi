@@ -91,7 +91,7 @@ cdef extern from "sys/socket.h":
     int AF_INET
 
 cdef extern from "event.h":
-    struct evbuffer:
+    struct evbuffer_s "evbuffer":
         uchar_p buf "buffer"
         uchar_p orig_buffer
         int misalign
@@ -101,23 +101,23 @@ cdef extern from "event.h":
         int low
         int high
     struct bufev_t "bufferevent":
-        evbuffer *input
+        evbuffer_s *input
         event_watermark wm_read
         event_watermark wm_write
 
     # These must match other declarations of the same name.
-    evbuffer *evbuffer_new()
-    void evbuffer_free(evbuffer *)
-    int evbuffer_expand(evbuffer *, int)
-    int evbuffer_add(evbuffer *, char *, int)
-    int evbuffer_remove(evbuffer *, void *, int)
-    char *evbuffer_readline(evbuffer *)
-    int evbuffer_add_buffer(evbuffer *, evbuffer *)
-    int evbuffer_drain(evbuffer *b, int size)
-    int evbuffer_write(evbuffer *, int)
-    int evbuffer_read(evbuffer *, int, int)
-    uchar_p evbuffer_find(evbuffer *, uchar_constp, int)
-    # void evbuffer_setcb(evbuffer *, void (*)(struct evbuffer *, int, int, void *), void *)
+    evbuffer_s *evbuffer_new()
+    void evbuffer_free(evbuffer_s *)
+    int evbuffer_expand(evbuffer_s *, int)
+    int evbuffer_add(evbuffer_s *, char *, int)
+    int evbuffer_remove(evbuffer_s *, void *, int)
+    #char *evbuffer_readline(evbuffer_s *)
+    int evbuffer_add_buffer(evbuffer_s *, evbuffer_s *)
+    int evbuffer_drain(evbuffer_s *b, int size)
+    int evbuffer_write(evbuffer_s *, int)
+    int evbuffer_read(evbuffer_s *, int, int)
+    uchar_p evbuffer_find(evbuffer_s *, uchar_constp, int)
+    # void evbuffer_setcb(evbuffer_s *, void (*)(struct evbuffer_s *, int, int, void *), void *)
 
 cdef extern from "Python.h":
     object PyString_FromFormat(char_constp fmt, ...)
@@ -322,7 +322,7 @@ cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
 #      c.prev = p
 #      p.next = c
 
-cdef class evbufferobj:
+cdef class evbuffer:
     """A Python wrapper around libevent's I/O buffer: struct evbuffer
 
     Please note that this buffer wastes memory: after reading a very long
@@ -331,22 +331,22 @@ cdef class evbufferobj:
     # We don't need __cinit__ for memset(<void*>&self.eb, 0, sizeof(self.eb))
     # to mimic the calloc() in evbuffer_new(), because Pyrex ensures the
     # clearing of object memory.
-    cdef evbuffer eb
+    cdef evbuffer_s eb
     # We must keep self.wakeup_ev on the heap (not on the C stack), because
     # hard switching in Stackless scheduling swaps the C stack, and libevent
     # needs all pending event_t structures available.
     cdef event_t wakeup_ev
 
-    def __repr__(evbufferobj self):
-        return '<evbufferobj misalign=%s, totallen=%s, off=%s at 0x%x>' % (
+    def __repr__(evbuffer self):
+        return '<evbuffer misalign=%s, totallen=%s, off=%s at 0x%x>' % (
             self.eb.misalign, self.eb.totallen, self.eb.off, <unsigned>self)
 
-    def __len__(evbufferobj self):
+    def __len__(evbuffer self):
         return self.eb.off
 
-    def reset(evbufferobj self):
+    def reset(evbuffer self):
         """Clear the buffer and free associated memory."""
-        cdef evbuffer *eb
+        cdef evbuffer_s *eb
         eb = &self.eb
         free(eb.orig_buffer)
         # TODO(pts): Use memset().
@@ -356,25 +356,36 @@ cdef class evbufferobj:
         eb.totallen = 0
         eb.misalign = 0
 
-    def expand(evbufferobj self, int n):
-        """As a side effect, may discard consumed data.
+    property totallen:
+        def __get__(evbuffer self):
+            return self.eb.totallen
+
+    property misalign:
+        def __get__(evbuffer self):
+            return self.eb.misalign
+
+    def expand(evbuffer self, int n):
+        """Expand the available buffer space (self.totallen) to >= n bytes.
+
+        As a side effect, may discard consumed data (self.misalign = 0).
 
         Please note that 256 bytes will always be reserved. Call self.reset()
         to get rid of everything.
         """
-        return evbuffer_expand(&self.eb, n)
+        if evbuffer_expand(&self.eb, n):
+            raise MemoryError
 
-    def drain(evbufferobj self, int n):
+    def drain(evbuffer self, int n):
         evbuffer_drain(&self.eb, n)
 
-    def append(evbufferobj self, buf):
+    def append(evbuffer self, buf):
         cdef char_constp p
         cdef Py_ssize_t n
         if PyObject_AsCharBuffer(buf, &p, &n) < 0:
             raise TypeError
         return evbuffer_add(&self.eb, <char*>p, n)
 
-    def consume(evbufferobj self, int n=-1):
+    def consume(evbuffer self, int n=-1):
         """Read, drain and return at most n (or all) from the beginning.
 
         The corresponding C function is evbuffer_remove()."""
@@ -389,7 +400,7 @@ cdef class evbufferobj:
         return buf
         #assert got == n  # Assertions turned on by default. Good.
 
-    def peek(evbufferobj self, int n=-1):
+    def peek(evbuffer self, int n=-1):
         """Read and return at most n (or all) from the beginning, no drain."""
         cdef int got
         cdef char *p
@@ -397,7 +408,7 @@ cdef class evbufferobj:
             n = self.eb.off
         return PyString_FromStringAndSize(<char_constp>self.eb.buf, n)
 
-    def find(evbufferobj self, buf):
+    def find(evbuffer self, buf):
         cdef Py_ssize_t n
         cdef char_constp p
         cdef char *q
@@ -409,7 +420,7 @@ cdef class evbufferobj:
             return -1
         return q - <char*>self.eb.buf
 
-    def append_clear(evbufferobj self, evbufferobj source):
+    def append_clear(evbuffer self, evbuffer source):
         """Append source and clear source.
 
         The corresponding C function is evbuffer_add_buffer().
@@ -417,7 +428,7 @@ cdef class evbufferobj:
         if 0 != evbuffer_add_buffer(&self.eb, &source.eb):
             raise RuntimeError
 
-    def consumeline(evbufferobj self):
+    def consumeline(evbuffer self):
         """Read, drain and return string ending with '\\n', or ''.
 
         An empty string is returned instead of a partial line at the end of
@@ -436,7 +447,7 @@ cdef class evbufferobj:
         evbuffer_drain(&self.eb, n)
         return buf
 
-    def nb_accept(evbufferobj self, object sock):
+    def nb_accept(evbuffer self, object sock):
         cdef tasklet wakeup_tasklet
         while 1:
             try:
@@ -450,7 +461,7 @@ cdef class evbufferobj:
                 event_add(&self.wakeup_ev, NULL)
                 PyStackless_Schedule(None, 1)  # remove=1
 
-    def nb_flush(evbufferobj self, int fd):
+    def nb_flush(evbuffer self, int fd):
         """Use self.append*, then self.nb_flush. Don't reuse self for reads."""
         # Please note that this method may raise an error even if parts of the
         # buffer has been flushed.
@@ -468,7 +479,7 @@ cdef class evbufferobj:
                 event_add(&self.wakeup_ev, NULL)
                 PyStackless_Schedule(None, 1)  # remove=1
 
-    def nb_readline(evbufferobj self, int fd):
+    def nb_readline(evbuffer self, int fd):
         cdef tasklet wakeup_tasklet
         cdef int n
         cdef int got
@@ -515,7 +526,7 @@ cdef class evbufferobj:
         evbuffer_drain(&self.eb, n)
         return buf
 
-    def peekline(evbufferobj self):
+    def peekline(evbuffer self):
         """Read and return string ending with '\\n', or '', no draining.
 
         An empty string is returned instead of a partial line at the end of
@@ -529,7 +540,7 @@ cdef class evbufferobj:
         return PyString_FromStringAndSize(<char_constp>self.eb.buf,
                                           q - <char*>self.eb.buf + 1)
 
-    def read_from_fd(evbufferobj self, int fd, int n):
+    def read_from_fd(evbuffer self, int fd, int n):
         """Read from file descriptor, append to self,
 
         Does a ioctl(fd, FIONREAD, &c) before reading to limit the wasted
@@ -549,7 +560,7 @@ cdef class evbufferobj:
             raise IOError(errno, strerror(errno))
         return got
 
-    def read_from_fd_again(evbufferobj self, int fd, int n):
+    def read_from_fd_again(evbuffer self, int fd, int n):
         """Read from file descriptor, append to self,
 
         Does a ioctl(fd, FIONREAD, &c) before reading to limit the wasted
@@ -571,7 +582,7 @@ cdef class evbufferobj:
             raise IOError(errno, strerror(errno))
         return got
 
-    def write_to_fd(evbufferobj self, int fd, int n=-1):
+    def write_to_fd(evbuffer self, int fd, int n=-1):
         """Write and drain n bytes to file descriptor fd.
 
         A similar but weaker C function is evbuffer_write().
@@ -592,7 +603,7 @@ cdef class evbufferobj:
             evbuffer_drain(&self.eb, n)
         return n
 
-    def write_to_fd_again(evbufferobj self, int fd, int n=-1):
+    def write_to_fd_again(evbuffer self, int fd, int n=-1):
         """Write and drain n bytes to file descriptor fd.
 
         A similar but weaker C function is evbuffer_write().
@@ -632,9 +643,12 @@ cdef class nbfile:
     cdef event_t wakeup_ev
     cdef int read_fd
     cdef int write_fd
-    cdef evbuffer read_eb
-    cdef evbuffer write_eb
     cdef int write_buf_limit
+    # Maximum number of bytes to be read from read_fd, or -1 if unlimited.
+    # Please note that the bytes in read_eb are not counted in c_read_limit.
+    cdef int c_read_limit
+    cdef evbuffer_s read_eb
+    cdef evbuffer_s write_eb
     cdef char c_do_close
     cdef char c_closed
     cdef char c_softspace
@@ -647,6 +661,7 @@ cdef class nbfile:
                  object name=None):
         assert read_fd >= 0
         assert write_fd >= 0
+        self.c_read_limit = -1
         self.c_do_close = do_close
         self.read_fd = read_fd
         self.write_fd = write_fd
@@ -690,7 +705,7 @@ cdef class nbfile:
                             close_ref.close()
 
     property closed:
-        def __get__(self):
+        def __get__(nbfile self):
             if self.c_closed:
                 return True
             else:
@@ -698,37 +713,50 @@ cdef class nbfile:
 
     # This is not a standard property of `file'.
     property do_close:
-        def __get__(self):
+        def __get__(nbfile self):
             return self.c_do_close
 
+    property read_limit:
+        def __get__(nbfile self):
+            """Maximum number of bytes to read from the file.
+            
+            Negative values stand for unlimited. After each read from the file
+            (not from the buffer), this property is decremented accordingly.
+            
+            It is possible to set this property.
+            """
+            return self.c_read_limit
+        def __set__(nbfile self, int new_value):
+            self.c_read_limit = new_value
+
     property mode:
-        def __get__(self):
+        def __get__(nbfile self):
             return self.c_mode
 
     property name:
-        def __get__(self):
+        def __get__(nbfile self):
             return self.c_name
 
     # file.softspace is used by `print'.
     property softspace:
-        def __get__(self):
+        def __get__(nbfile self):
             return self.c_softspace
-        def __set__(self, char softspace):
+        def __set__(nbfile self, char softspace):
             self.c_softspace = softspace
 
     # Simplification over `file'.
     property encoding:
-        def __get__(self):
+        def __get__(nbfile self):
             return None
 
     # Simplification over `file'.
     property newlines:
-        def __get__(self):
+        def __get__(nbfile self):
             return None
 
     # Unicode error handler. Simplification over `file'.
     property errors:
-        def __get__(self):
+        def __get__(nbfile self):
             return None
 
     def write(nbfile self, object buf):
@@ -762,6 +790,163 @@ cdef class nbfile:
                 event_add(&self.wakeup_ev, NULL)
                 PyStackless_Schedule(None, 1)  # remove=1
 
+    property read_buffer_len:
+        def __get__(nbfile self):
+            return self.read_eb.off
+
+    property write_buffer_len:
+        def __get__(nbfile self):
+            return self.write_eb.off
+
+    def discard(nbfile self, int n):
+        """Read and discard exactly n bytes.
+
+        Args:
+          n: Number of bytes to discard. Negative values are treated as 0.
+        Returns:
+          The number of bytes not discarded because of EOF.
+        Raises:
+          IOError: (but not EOFError)
+        """
+        cdef tasklet wakeup_tasklet
+        cdef int got
+        if self.read_eb.off > 0:
+            if self.read_eb.off >= n:
+                self.read_eb.off -= n
+                return 0
+            n -= self.read_eb.off
+            evbuffer_drain(&self.read_eb, self.read_eb.off)
+        if n <= 0:
+            return 0
+        while 1:  # n > 0
+            if self.c_read_limit >= 0 and n > self.c_read_limit:
+                got = self.c_read_limit
+                if got == 0:
+                    return n
+            else:
+                got = n
+            if got > 8192:
+                got = 8192
+            #assert got > 0  # true, but don't check it for speed reasons
+            # !! don't do ioctl(FIONREAD) if not necessary (in libevent)
+            got = evbuffer_read(&self.read_eb, self.read_fd, got)
+            if got < 0:
+                if errno != EAGAIN:
+                    raise IOError(errno, strerror(errno))
+                wakeup_tasklet = PyStackless_GetCurrent()
+                event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
+                          <void *>wakeup_tasklet)
+                event_add(&self.wakeup_ev, NULL)
+                PyStackless_Schedule(None, 1)  # remove=1
+            elif got == 0:  # EOF
+                return n
+            else:
+                n -= got
+                if self.c_read_limit >= 0:
+                    self.c_read_limit -= got
+                evbuffer_drain(&self.read_eb, got)
+                if n == 0:
+                    return 0
+
+    def discard_to_read_limit(nbfile self):
+        """Discard the read buffer, and discard bytes from read_fd."""
+        if self.read_eb.off > 0:
+            evbuffer_drain(&self.read_eb, self.read_eb.off)
+            #assert self.c_read_limit == 0
+        if self.c_read_limit > 0:
+            # TODO(pts): Speed this up by not doing a Python method call.
+            self.discard(self.c_read_limit)
+            assert self.c_read_limit == 0
+
+    def read(nbfile self, int n):
+        """Read exactly n bytes (or less on EOF), and return string
+
+        Args:
+          n: Number of bytes to read. Negative values are treated as 0.
+        Returns:
+          String containing the bytes read; an empty string on EOF.
+        Raises:
+          IOError: (but not EOFError)
+        """
+        cdef tasklet wakeup_tasklet
+        cdef int got
+        cdef object buf
+        if self.c_read_limit >= 0 and n > self.c_read_limit:
+            n = self.c_read_limit
+        if n <= 0:
+            return ''
+        while self.read_eb.off < n:  # Data not fully in the buffer.
+            got = n - self.read_eb.off
+            if got > 65536 and got > self.read_eb.totallen:
+                # Limit the total number of bytes read to the double of the
+                # read buffer size.
+                # evbuffer_read() does someting similar, also involving
+                # EVBUFFER_MAX_READ == 4096.
+                got = self.read_eb.totallen
+            # !! don't do ioctl(FIONREAD) if not necessary (in libevent)
+            got = evbuffer_read(&self.read_eb, self.read_fd, got)
+            if got < 0:
+                if errno != EAGAIN:
+                    raise IOError(errno, strerror(errno))
+                wakeup_tasklet = PyStackless_GetCurrent()
+                event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
+                          <void *>wakeup_tasklet)
+                event_add(&self.wakeup_ev, NULL)
+                PyStackless_Schedule(None, 1)  # remove=1
+            elif got == 0:  # EOF
+                n = self.read_eb.off
+                break
+            else:
+                if self.c_read_limit >= 0:
+                    self.c_read_limit -= got
+                evbuffer_drain(&self.read_eb, got)
+        buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
+        evbuffer_drain(&self.read_eb, n)
+        return buf
+
+    def read_at_most(nbfile self, int n):
+        """Read at most n bytes and return the string.
+
+        If the read buffer is not empty (self.read_buffer_len), data inside it
+        will be returned, and no attempt is done to read self.read_fd.
+        """
+        cdef tasklet wakeup_tasklet
+        cdef int got
+        if n <= 0:
+            return ''
+        if self.read_eb.off > 0:
+            if self.read_eb.off < n:
+                n = self.read_eb.off
+            buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
+            evbuffer_drain(&self.read_eb, n)
+            if self.c_read_limit >= 0:
+                self.c_read_limit -= n
+            # TODO(pts): Maybe read more from fd, if available and flag.
+            return buf
+        if self.c_read_limit >= 0 and n > self.c_read_limit:
+            n = self.c_read_limit
+        while 1:
+            # TODO(pts): Don't read it to the buffer, read without memcpy.
+            #            We'd need the readinto method for that.
+            got = evbuffer_read(&self.read_eb, self.read_fd, n)
+            if got < 0:
+                if errno != EAGAIN:
+                    raise IOError(errno, strerror(errno))
+                wakeup_tasklet = PyStackless_GetCurrent()
+                event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
+                          <void *>wakeup_tasklet)
+                event_add(&self.wakeup_ev, NULL)
+                PyStackless_Schedule(None, 1)  # remove=1
+            elif got == 0:
+                return ''
+            else:
+                buf = PyString_FromStringAndSize(
+                    <char_constp>self.read_eb.buf, got)
+                evbuffer_drain(&self.read_eb, got)
+                if self.c_read_limit >= 0:
+                    self.c_read_limit -= got
+                return buf
+
     def readline(nbfile self):
         cdef tasklet wakeup_tasklet
         cdef int n
@@ -774,6 +959,15 @@ cdef class nbfile:
             # !! don't do ioctl(FIONREAD) if not necessary (in libevent)
             # !! where do we get totallen=32768? evbuffer_read has a strange
             # buffer growing behavior.
+            # !! read more than 8192 bytes if the buffer has space for that
+            n = 8192
+            if self.c_read_limit >= 0 and n > self.c_read_limit:
+                n = self.c_read_limit
+                if n == 0:
+                    n = self.read_eb.off
+                    buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
+                    evbuffer_drain(&self.read_eb, n)
+                    return buf
             got = evbuffer_read(&self.read_eb, fd, 8192)
             if got < 0:
                 if errno != EAGAIN:
@@ -790,6 +984,8 @@ cdef class nbfile:
                 evbuffer_drain(&self.read_eb, n)
                 return buf
             else:
+                if self.c_read_limit >= 0:
+                    self.c_read_limit -= got
                 # TODO(pts): Find from later than the beginning (just as read).
                 q = <char*>evbuffer_find(&self.read_eb, <uchar_constp>'\n', 1)
         n = q - <char*>self.read_eb.buf + 1
