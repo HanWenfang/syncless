@@ -2,10 +2,11 @@
 # by pts@fazekas.hu at Sat Jan 23 20:15:51 CET 2010
 
 import time
-import syncless.coio  # libevent creates an epoll fd and 2 socket FDs.
 import socket
 import stackless
 import sys
+from syncless import coio
+from syncless import patch
 
 import lprng
 
@@ -46,8 +47,10 @@ def Handler(cs, csaddr):
   f.flush()
   cs.close()  # No need for event_del, nothing listening.
 
+
 if __name__ == '__main__':
-  ss = syncless.coio.new_realsocket(socket.AF_INET, socket.SOCK_STREAM)
+  patch.patch_stderr()  # Give Ctrl-<C> a chance at infinite logging.
+  ss = coio.new_realsocket(socket.AF_INET, socket.SOCK_STREAM)
   #ss.settimeout(1)
   ss.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   # TODO(pts): Use ss._sock.

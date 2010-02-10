@@ -1,7 +1,6 @@
 include "event.pxi"
 include "nbevent.pxi"
 include "evdns.pxi"
-include "patch.pxi"
 #include "evhttp.pxi"
 
 # --- Initialization.

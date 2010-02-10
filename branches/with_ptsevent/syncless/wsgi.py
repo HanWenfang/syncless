@@ -172,7 +172,7 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
   do_keep_alive_ary = [True]
   headers_sent_ary = [False]
   server_software = default_env['SERVER_SOFTWARE']
-  sockfile = nbf.makefile_samefd()
+  sockfile = nbf.makefile_samefd(write_buffer_limit=0)
   reqhead_continuation_re = REQHEAD_CONTINUATION_RE
   try:
     while do_keep_alive_ary[0]:

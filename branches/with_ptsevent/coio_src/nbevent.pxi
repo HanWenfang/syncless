@@ -62,7 +62,7 @@ cdef extern from "stdlib.h":
     ctypedef int size_t
 
 cdef extern from "unistd.h":
-    cdef int os_write "write"(int fd, char *p, int n)
+    cdef int os_write "write"(int fd, char_constp p, int n)
     cdef int os_read "read"(int fd, char *p, int n)
     cdef int dup(int fd)
     cdef int close(int fd)
@@ -264,14 +264,14 @@ cdef void set_fd_nonblocking(int fd):
     if old >= 0 and (old & ~O_NONBLOCK):
         fcntl3(fd, F_SETFL, old | O_NONBLOCK)
 
-def SetFdBlocking(int fd, is_blocking):
+def set_fd_blocking(int fd, is_blocking):
     """Set a file descriptor blocking or nonblocking.
 
     Please note that this may affect more than expected, for example it may
     affect sys.stderr when called for sys.stdout.
 
     Returns:
-        The old blocking value (True or False).
+      The old blocking value (True or False).
     """
     cdef int old
     cdef int value
@@ -596,7 +596,7 @@ cdef class evbuffer:
             n = self.eb.off
         if n > 0:
             # TODO(pts): Use send(...) or evbuffer_write() on Win32.
-            n = os_write(fd, <char*>self.eb.buf, n)
+            n = os_write(fd, <char_constp>self.eb.buf, n)
             if n < 0:
                 # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
                 raise IOError(errno, strerror(errno))
@@ -618,7 +618,7 @@ cdef class evbuffer:
             n = self.eb.off
         if n > 0:
             # TODO(pts): Use send(...) or evbuffer_write() on Win32.
-            n = os_write(fd, <char*>self.eb.buf, n)
+            n = os_write(fd, <char_constp>self.eb.buf, n)
             if n < 0:
                 if errno == EAGAIN:
                     return None
@@ -628,22 +628,40 @@ cdef class evbuffer:
         return n
 
 
-# Forward declaration.
-#cdef class iterator
+cdef object write_to_fd(int fd, event_t *wakeup_ev, char_constp p, Py_ssize_t n):
+    # wakeup_ev must be on the heap (not stack).
+    cdef tasklet wakeup_tasklet
+    cdef int got
+    while n > 0:
+        got = os_write(fd, p, n)
+        if got < 0:
+            if errno != EAGAIN:
+                # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
+                raise IOError(errno, strerror(errno))
+            wakeup_tasklet = PyStackless_GetCurrent()
+            event_set(wakeup_ev, fd, c_EV_WRITE, HandleCWakeup,
+                      <void *>wakeup_tasklet)
+            event_add(wakeup_ev, NULL)
+            PyStackless_Schedule(None, 1)  # remove=1
+        p += got
+        n -= got
 
 
 # TODO(pts): Implement all methods.
 # TODO(pts): Implement close().
 # !! implement timeout (does socket._realsocket.makefile do that?)
 cdef class nbfile:
-    """A non-blocking file (I/O channel)."""
+    """A non-blocking file (I/O channel).
+
+    The filehandles are assumed to be nonblocking.
+    """
     # We must keep self.wakeup_ev on the heap, because
     # Stackless scheduling swaps the C stack.
     cdef object close_ref
     cdef event_t wakeup_ev
     cdef int read_fd
     cdef int write_fd
-    cdef int write_buf_limit
+    cdef int c_write_buffer_limit
     # Maximum number of bytes to be read from read_fd, or -1 if unlimited.
     # Please note that the bytes in read_eb are not counted in c_read_limit.
     cdef int c_read_limit
@@ -656,16 +674,16 @@ cdef class nbfile:
     cdef object c_name
 
     def __init__(nbfile self, int read_fd, int write_fd,
-                 int write_buf_limit=8192, char do_close=0,
+                 int write_buffer_limit=8192, char do_close=0,
                  object close_ref=None, object mode='r+',
                  object name=None):
-        assert read_fd >= 0
-        assert write_fd >= 0
+        assert read_fd >= 0 or mode == 'w'
+        assert write_fd >= 0 or mode == 'r'
         self.c_read_limit = -1
         self.c_do_close = do_close
         self.read_fd = read_fd
         self.write_fd = write_fd
-        self.write_buf_limit = write_buf_limit
+        self.c_write_buffer_limit = write_buffer_limit
         self.close_ref = close_ref
         self.c_mode = mode
         self.c_name = name
@@ -674,7 +692,10 @@ cdef class nbfile:
         # do that.
 
     def fileno(nbfile self):
-        return self.read_fd
+        if self.read_fd >= 0:
+            return self.read_fd
+        else:
+            return self.write_fd
 
     # This method is not present in standard file.
     def write_fileno(nbfile self):
@@ -763,12 +784,17 @@ cdef class nbfile:
         # TODO(pts): Flush the buffer eventually automatically.
         cdef char_constp p
         cdef Py_ssize_t n
+        cdef int fd
         if PyObject_AsCharBuffer(buf, &p, &n) < 0:
             raise TypeError
+        if self.c_write_buffer_limit == 0:  # Direct output without buffering.
+            # TODO(pts): Use the socket timeout.
+            return write_to_fd(self.write_fd, &self.wakeup_ev, p, n)
         # !! TODO(pts): Don't even temporarily overflow the buffer.
         # !! TODO(pts): Do line buffering with buffer size == 1.
         evbuffer_add(&self.write_eb, <char*>p, n)
-        if self.write_eb.off >= self.write_buf_limit:
+        if (self.write_buffer_limit > 0 and
+            self.write_eb.off >= self.c_write_buffer_limit):
             self.flush()
 
     def flush(nbfile self):
@@ -797,6 +823,10 @@ cdef class nbfile:
     property write_buffer_len:
         def __get__(nbfile self):
             return self.write_eb.off
+
+    property write_buffer_limit:
+        def __get__(nbfile self):
+            return self.c_write_buffer_limit
 
     def discard_write_buffer(nbfile self):
         evbuffer_drain(&self.write_eb, self.write_eb.off)
@@ -1321,7 +1351,7 @@ cdef class nbsocket:
                     raise
                 handle_eagain(self, c_EV_WRITE)
 
-    def makefile_samefd(nbsocket self, mode='r+', int bufsize=-1):
+    def makefile_samefd(nbsocket self, mode='r+', int bufsize=8192):
         """Create and return an nbfile with self.fd.
 
         The nbfile will be buffered, and its close method won't be cause an
@@ -1329,10 +1359,11 @@ cdef class nbsocket:
 
         This method is not part of normal sockets.
         """
+        # !! TODO(pts): Don't hard-wire the buffer size (8192)
         assert mode == 'r+'  # !! TODO(pts): Implement other modes
         return nbfile(self.fd, self.fd, bufsize)
 
-    def makefile(nbsocket self, mode='r+', int bufsize=-1):
+    def makefile(nbsocket self, mode='r+', int bufsize=8192):
         """Create an nbfile (non-blocking file-like) object from self.
 
         os.dup(self.fd) will be passed to the new nbfile object, and its
@@ -1385,6 +1416,24 @@ def sleep(float duration):
     """Non-blocking drop-in replacement for time.sleep."""
     # TODO(pts): Reuse existing sleepers (thread-local?) to speed this up.
     sleeper().sleep(duration)
+
+
+def fdopen(int fd, mode='r', int bufsize=8192, char do_close=1,
+           object name=None):
+    """Non-blocking, almost drop-in replacement for os.fdopen."""
+    cdef int read_fd
+    cdef int write_fd
+    assert fd >= 0
+    set_fd_nonblocking(fd)
+    read_fd = fd
+    write_fd = fd
+    # TODO(pts): Handle mode='rb' etc.
+    if mode == 'r':
+        write_fd = -1
+    elif mode == 'w':
+        read_fd = -1
+    return nbfile(read_fd, write_fd, write_buffer_limit=bufsize,
+                  do_close=do_close, mode=mode)
 
 # TODO(pts): Add new_file and nbfile(...)
 # TODO(pts): If the buffering argument is given, 0 means unbuffered, 1 means

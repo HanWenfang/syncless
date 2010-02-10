@@ -219,5 +219,7 @@ Planned features
 * TODO(pts): use SO_RCVTIMEO and SO_SNDTIMEO for timeout
 * TODO(pts): is it smaller or faste in Cython?
 * TODO(pts): measure if evhttp is faster for WSGI than in pure Python
+* !! TODO(pts): Handle starving (when one worker is very fast, even Ctrl-<C>
+  is delayed)
 
 __EOF__

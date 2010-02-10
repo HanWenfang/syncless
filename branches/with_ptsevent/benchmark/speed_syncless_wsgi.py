@@ -7,9 +7,9 @@ import stackless
 import sys
 from syncless import coio
 from syncless import wsgi
+from syncless import patch
 
 import lprng
-
 
 def WsgiApplication(env, start_response):
   print >>sys.stderr, 'connection from %(REMOTE_ADDR)s:%(REMOTE_PORT)s' % env
@@ -21,9 +21,9 @@ def WsgiApplication(env, start_response):
     next_num = lprng.Lprng(num).next()
     return ['<a href="/%d">continue with %d</a>\n' % (next_num, next_num)]
 
-
 if __name__ == '__main__':
   logging.root.level = logging.DEBUG
+  patch.patch_stderr()  # Give Ctrl-<C> a chance at infinite logging.
   ss = coio.new_realsocket(socket.AF_INET, socket.SOCK_STREAM)
   ss.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   ss.bind(('127.0.0.1', 8080))
