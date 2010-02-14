@@ -16,6 +16,7 @@ GNU General Public License for more details.
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import sys
+import types
 from syncless import coio
 
 # TODO(pts): Have a look at Concurrence (or others) for patching everything.
@@ -71,8 +72,26 @@ def patch_stdin_and_stdout():
                                write_buffer_limit=8192, do_close=0)
     sys.stdin = sys.stdout = new_stdinout
 
+def fix_ssl_makefile():
+  """Fix the reference counting in ssl.SSLSocket.makefile.
+  
+  This is the reference counting bugfix (close=True) for Stackless 2.6.4.
+  """
+  try:
+    import ssl
+  except ImportError:
+    ssl = None
+  if ssl:
+    import socket
+    def SslMakeFileFix(self, mode='r', bufsize=-1):
+      self._makefile_refs += 1
+      return socket._fileobject(self, mode, bufsize, close=True)
+    ssl.SSLSocket.makefile = types.MethodType(
+        SslMakeFileFix, None, ssl.SSLSocket)
+
 def patch_all():
   patch_socket()
   patch_time()
   patch_stdin_and_stdout()
   patch_stderr()
+  fix_ssl_makefile()
