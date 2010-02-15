@@ -279,7 +279,7 @@ cdef dnsresult dns_call(_evdns_call_t call, char_constp name, int flags):
     wakeup_tasklet.tempval = None
     result = call(name, flags, _dns_callback, <void*>wakeup_tasklet)
     if result:
-        raise DnsLookupError(-err, evdns_err_to_string(err))
+        raise DnsLookupError(-result, evdns_err_to_string(result))
     if wakeup_tasklet.tempval is None:
         tempval = PyStackless_Schedule(None, 1)  # remove=1
     else:  # Not a single wait was needed. 

@@ -50,16 +50,24 @@ import types
 #
 # stdlib.h is not explicitly needed, but providing a from clause prevents
 # Pyrex from generating a ``typedef''.
+#
+# The declarations are a bit quirky (using a helper struct and a helper
+# typedef), but this is how to make them work in both Pyrex and Cython.
+cdef extern from *:
+    struct char_consts:
+        pass
+    struct uchar_s:
+        pass
+    struct uchar_consts:
+        pass
+    ctypedef char_consts char_constt "char const"
+    ctypedef uchar_s uchar_t "unsigned char"
+    ctypedef uchar_consts uchar_constt "unsigned char const"
+    ctypedef char_constt* char_constp "char const*"
+    ctypedef uchar_t* uchar_p "unsigned char*"
+    ctypedef uchar_constt* uchar_constp "unsigned char const*"
+
 cdef extern from "stdlib.h":
-    ctypedef struct char_const:
-        pass
-    ctypedef struct uchar_const:
-        pass
-    ctypedef struct uchar:
-        pass
-    ctypedef char_const* char_constp "char const*"
-    ctypedef uchar_const* uchar_constp "unsigned char const*"
-    ctypedef uchar* uchar_p "unsigned char*"
     ctypedef int size_t
 
 cdef extern from "unistd.h":
@@ -253,6 +261,8 @@ def MainLoop(tasklet link_helper_tasklet):
 
 
 # TODO(pts): Use a cdef, and hard-code event_add().
+# !! TODO(pts): Schedule the main thread upon the SIGINT, don't wait for
+# cooperative scheduling.
 def SigIntHandler(ev, sig, evtype, arg):
     SendExceptionAndRun(stackless.main, (KeyboardInterrupt,))
 
@@ -745,14 +755,15 @@ cdef class nbfile:
             return self.c_do_close
 
     property read_limit:
+        # TODO(pts): How is the property docstring propagated?
+        """Maximum number of bytes to read from the file.
+        
+        Negative values stand for unlimited. After each read from the file
+        (not from the buffer), this property is decremented accordingly.
+        
+        It is possible to set this property.
+        """
         def __get__(nbfile self):
-            """Maximum number of bytes to read from the file.
-            
-            Negative values stand for unlimited. After each read from the file
-            (not from the buffer), this property is decremented accordingly.
-            
-            It is possible to set this property.
-            """
             return self.c_read_limit
         def __set__(nbfile self, int new_value):
             self.c_read_limit = new_value
@@ -874,8 +885,8 @@ cdef class nbfile:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
-                          <void *>wakeup_tasklet)
+                event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
+                          HandleCWakeup, <void *>wakeup_tasklet)
                 event_add(&self.wakeup_ev, NULL)
                 PyStackless_Schedule(None, 1)  # remove=1
             elif got == 0:  # EOF
@@ -929,8 +940,8 @@ cdef class nbfile:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
-                          <void *>wakeup_tasklet)
+                event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
+                          HandleCWakeup, <void *>wakeup_tasklet)
                 event_add(&self.wakeup_ev, NULL)
                 PyStackless_Schedule(None, 1)  # remove=1
             elif got == 0:  # EOF
@@ -973,8 +984,8 @@ cdef class nbfile:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
-                          <void *>wakeup_tasklet)
+                event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
+                          HandleCWakeup, <void *>wakeup_tasklet)
                 event_add(&self.wakeup_ev, NULL)
                 PyStackless_Schedule(None, 1)  # remove=1
             elif got == 0:
@@ -1081,7 +1092,7 @@ cdef class nbsslsocket
 cdef object handle_eagain(nbsocket self, int evtype):
     cdef tasklet wakeup_tasklet
     if self.timeout_value == 0.0:
-        raise socket.error(e.errno, strerror(e.errno))
+        raise socket.error(EAGAIN, strerror(EAGAIN))
     wakeup_tasklet = PyStackless_GetCurrent()
     if self.timeout_value < 0.0:
         event_set(&self.wakeup_ev, self.fd, evtype,
@@ -1096,11 +1107,10 @@ cdef object handle_eagain(nbsocket self, int evtype):
             # Same error message as in socket.socket.
             raise socket.error('timed out')
 
-# Like handle_eagain, but for nbsslsocket
 cdef object handle_ssl_eagain(nbsslsocket self, int evtype):
     cdef tasklet wakeup_tasklet
     if self.timeout_value == 0.0:
-        raise socket.error(e.errno, strerror(e.errno))
+        raise socket.error(EAGAIN, strerror(EAGAIN))
     wakeup_tasklet = PyStackless_GetCurrent()
     if self.timeout_value < 0.0:
         event_set(&self.wakeup_ev, self.fd, evtype,
@@ -1197,12 +1207,12 @@ cdef class nbsocket:
             return self.c_do_close
 
     property _sock:
-        def __get__(self):
-            """Return a socket._realsocket.
+        """Return a socket._realsocket.
 
-            This makes it possible to pass an nbsocket to the ssl.SSLSocket
-            constructor.
-            """
+        This makes it possible to pass an nbsocket to the ssl.SSLSocket
+        constructor.
+        """
+        def __get__(self):
             return self.realsock
 
     property type:
@@ -1214,12 +1224,12 @@ cdef class nbsocket:
             return self.realsock.family
 
     property timeout:
-        def __get__(self):
-            """Return a nonnegative float, or -1.0 if there is no timeout.
+        """Return a nonnegative float, or -1.0 if there is no timeout.
 
-            socket._realsocket has a read-only .timeout, socket.socket doesn't
-            have an attribute named timeout.
-            """
+        socket._realsocket has a read-only .timeout, socket.socket doesn't
+        have an attribute named timeout.
+        """
+        def __get__(self):
             if self.timeout_value < 0:
                 return None
             else:
@@ -1435,7 +1445,22 @@ except ImportError:
     sslsocket_impl = None
 
 
+cdef class sockwrapper:
+    """A helper class for holding a self._sock."""
+    cdef object c_sock
+
+    def __init__(sockwrapper self, sock):
+        self.c_sock = sock
+
+    property _sock:
+        def __get__(self):
+            return self.c_sock
+
+
 # !! TODO(pts): implement all NotImplementedError
+# TODO(pts): Test timeout for connect and do_handshake.
+# TODO(pts): Test timeout for send, recv.
+# TODO(pts): Test timeout for makefile read, write.
 cdef class nbsslsocket:
     """Non-blocking drop-in replacement class for ssl.SSLSocket.
 
@@ -1461,6 +1486,8 @@ cdef class nbsslsocket:
             my_sslsocket_impl = kwargs.pop('sslsocket_impl')
         else:
             my_sslsocket_impl = sslsocket_impl
+        # TODO(pts): Make sure we do a non-blocking handshake (do_handshake)
+        # in my_sslsocket_impl.__init__. Currently it's blocking.
         self.sslsock = my_sslsocket_impl(*args, **kwargs)
         self.realsock = self.sslsock._sock
         # This may be None so far.
@@ -1468,8 +1495,9 @@ cdef class nbsslsocket:
         # .connect.
         self.sslobj = self.sslsock._sslobj
         self.fd = self.realsock.fileno()
-        self.realsock.setblocking(False)  # TODO(pts): Is this needed?
-        self.sslsock.setblocking(False)  # This is needed.
+	# It seems that either of these setblocking calls are enough.
+        self.realsock.setblocking(False)
+        #self.sslsock.setblocking(False)
         self.timeout_value = -1.0
 
     def fileno(nbsslsocket self):
@@ -1483,6 +1511,7 @@ cdef class nbsslsocket:
         return nbsocket(self.realsock.dup())
 
     def close(nbsslsocket self):
+        print 'CLOSE', self.sslsock._makefile_refs
         self.sslsock.close()
         self.sslobj = self.sslsock._sslobj
 
@@ -1507,11 +1536,11 @@ cdef class nbsslsocket:
             return self.realsock
 
     property _sslsock:
-        def __get__(self):
-            """Return the corresponding SSLSocket instance.
+        """Return the corresponding SSLSocket instance.
 
-            Property _sslsock is not present in SSLSocket.
-            """
+        Property _sslsock is not present in SSLSocket.
+        """
+        def __get__(self):
             return self.sslsock
 
     property keyfile:
@@ -1547,8 +1576,8 @@ cdef class nbsslsocket:
             return self.sslsock._makefile_refs
 
     property timeout:
+        """Return a nonnegative float, or -1.0 if there is no timeout."""
         def __get__(self):
-            """Return a nonnegative float, or -1.0 if there is no timeout."""
             if self.timeout_value < 0:
                 return None
             else:
@@ -1628,16 +1657,29 @@ cdef class nbsslsocket:
                     raise
 
     def accept(nbsslsocket self):
-        raise NotImplementedError  # !!
+        cdef nbsslsocket asslsock
         while 1:
             try:
                 asock, addr = self.realsock.accept()
-                esock = type(self)(asock)  # Create new nbsslsocket.
-                return esock, addr
+                break
             except socket.error, e:
                 if e.errno != EAGAIN:
                     raise
-                handle_eagain(self, c_EV_READ)
+                handle_ssl_eagain(self, c_EV_READ)
+        asslsock = nbsslsocket(
+            sockwrapper(asock),
+            keyfile=self.sslsock.keyfile,
+            certfile=self.sslsock.certfile,
+            server_side=True,
+            cert_reqs=self.sslsock.cert_reqs,
+            ssl_version=self.sslsock.ssl_version,
+            ca_certs=self.sslsock.ca_certs,
+            do_handshake_on_connect=False,
+            suppress_ragged_eofs=self.sslsock.suppress_ragged_eofs)
+        if self.sslsock.do_handshake_on_connect:
+            asslsock.sslsock.do_handshake_on_connect = True
+            asslsock.do_handshake()  # Non-blocking.
+        return (asslsock, addr)
 
     def connect(nbsslsocket self, object address):
         if self._sslobj:
@@ -1693,7 +1735,7 @@ cdef class nbsslsocket:
             if err != EAGAIN:
                 return err
             # TODO(pts): Can this happen (with SO_LINGER?).
-            handle_eagain(self, c_EV_WRITE)
+            handle_ssl_eagain(self, c_EV_WRITE)
 
     def pending(nbsslsocket self):
         # TODO(pts): How is this method useful?
@@ -1767,7 +1809,7 @@ cdef class nbsslsocket:
             except socket.error, e:
                 if e.errno != EAGAIN:
                     raise
-                handle_eagain(self, c_EV_READ)
+                handle_ssl_eagain(self, c_EV_READ)
 
     def recv_into(nbsslsocket self, *args):
         raise NotImplementedError  # !!
@@ -1777,7 +1819,7 @@ cdef class nbsslsocket:
             except socket.error, e:
                 if e.errno != EAGAIN:
                     raise
-                handle_eagain(self, c_EV_READ)
+                handle_ssl_eagain(self, c_EV_READ)
 
     def recvfrom_into(nbsslsocket self, *args):
         raise NotImplementedError  # !!
@@ -1787,7 +1829,7 @@ cdef class nbsslsocket:
             except socket.error, e:
                 if e.errno != EAGAIN:
                     raise
-                handle_eagain(self, c_EV_READ)
+                handle_ssl_eagain(self, c_EV_READ)
 
     def send(nbsslsocket self, data, int flags=0):
         if self.sslobj:
@@ -1806,7 +1848,7 @@ cdef class nbsslsocket:
                         raise
         while 1:
             try:
-                return self.realsock.send(*args)
+                return self.realsock.send(data, flags)
             except socket.error, e:
                 if e.errno != EAGAIN:
                     raise
@@ -1820,7 +1862,7 @@ cdef class nbsslsocket:
             except socket.error, e:
                 if e.errno != EAGAIN:
                     raise
-                handle_eagain(self, c_EV_WRITE)
+                handle_ssl_eagain(self, c_EV_WRITE)
 
     def sendall(nbsslsocket self, object data, int flags=0):
         cdef int got
@@ -1835,6 +1877,7 @@ cdef class nbsslsocket:
                         str(self.__class__))
                 while 1:
                     try:
+                        got2 = 0  # Pacify gcc warning.
                         got2 = self.sslobj.write(buf)
                     except SSLError, e:
                         if e.errno == SSL_ERROR_WANT_READ:
@@ -1851,11 +1894,12 @@ cdef class nbsslsocket:
                     
             while 1:
                 try:
+                    got2 = 0  # Pacify gcc warning.
                     got2 = self.realsock.send(buf, flags)
                 except socket.error, e:
                     if e.errno != EAGAIN:
                         raise
-                    handle_eagain(self, c_EV_WRITE)
+                    handle_ssl_eagain(self, c_EV_WRITE)
                 assert got2 > 0
                 got += got2
                 if got >= len(data):
@@ -1881,7 +1925,6 @@ cdef class nbsslsocket:
         # (something similar to nbfile).
         self.sslsock._makefile_refs += 1
         return socket._fileobject(self, mode, bufsize, close=True)
-
 
 def new_realsocket(*args):
     """Non-blocking drop-in replacement for socket._realsocket.
