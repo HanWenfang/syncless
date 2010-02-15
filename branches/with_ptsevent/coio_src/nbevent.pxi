@@ -1599,6 +1599,8 @@ cdef class nbsslsocket:
     property do_handshake_on_connect:
         def __get__(self):
             return self.sslsock.do_handshake_on_connect
+        def __set__(self, val):
+            self.sslsock.do_handshake_on_connect = bool(val)
 
     property suppress_ragged_eofs:
         def __get__(self):
@@ -1699,19 +1701,26 @@ cdef class nbsslsocket:
                 if e.errno != EAGAIN:
                     raise
                 handle_ssl_eagain(self, c_EV_READ)
-        asslsock = nbsslsocket(
-            sockwrapper(asock),
-            keyfile=self.sslsock.keyfile,
-            certfile=self.sslsock.certfile,
-            server_side=True,
-            cert_reqs=self.sslsock.cert_reqs,
-            ssl_version=self.sslsock.ssl_version,
-            ca_certs=self.sslsock.ca_certs,
-            do_handshake_on_connect=False,
-            suppress_ragged_eofs=self.sslsock.suppress_ragged_eofs)
-        if self.sslsock.do_handshake_on_connect:
-            asslsock.sslsock.do_handshake_on_connect = True
-            asslsock.do_handshake()  # Non-blocking.
+        asock_to_close = asock
+        try:
+            asslsock = nbsslsocket(
+                sockwrapper(asock),
+                keyfile=self.sslsock.keyfile,
+                certfile=self.sslsock.certfile,
+                server_side=True,
+                cert_reqs=self.sslsock.cert_reqs,
+                ssl_version=self.sslsock.ssl_version,
+                ca_certs=self.sslsock.ca_certs,
+                do_handshake_on_connect=False,
+                suppress_ragged_eofs=self.sslsock.suppress_ragged_eofs)
+            if self.sslsock.do_handshake_on_connect:
+                asslsock.sslsock.do_handshake_on_connect = True
+                asslsock.do_handshake()  # Non-blocking.
+            asock_to_close = None
+        finally:
+            # Close the new connection upon an exception (such as keyfile=
+            # not found).
+            asock_to_close.close()
         return (asslsock, addr)
 
     def connect(nbsslsocket self, object address):
