@@ -1129,6 +1129,10 @@ cdef object handle_ssl_eagain(nbsslsocket self, int evtype):
 # (which is the same as socket._realsocket)
 socket_impl = socket._realsocket
 
+# The original socket._realsocket class. Reference saved so further patching
+# (in syncless.path) won't have an effect on it.
+socket_realsocket = socket._realsocket
+
 socket_fromfd = socket.fromfd
 
 # We're not inheriting from socket._socket.socket, because with the current
@@ -1466,6 +1470,25 @@ cdef class nbsslsocket:
 
     Please note that this class is not as speed-optimized as nbsocket or
     nbfile, because how the `ssl' module provides abstractions.
+
+    Just like ssl.SSLSocket, nbsslsocket uses a socket._realsocket
+    (derived from the first constructor argument) for the underlying raw
+    communication.
+
+    Just like ssl.SSLSocket, please don't communicate using the unerlying socket._realsocket
+    after the nbsslsocket has been created -- but close it when
+    necessary. Just like ssl.SSLSocket, nbsslsocket will never call the
+    .close() method of the underlying socket._realsocket, it will just
+    drop reference to it.
+
+    Args:
+      args: Same arguments as to the ssl.SSLSocket constructor.
+        ssl.SSLSocket requires a socket.socket as a first argument, and
+        derives its underlying the socket._realsocket from its first
+        argument (using the ._sock property). As an exterions to this,
+        nbsslsocket accepts a socket.socket, socket._realsocket or
+        nbsocket (all treated equvalently) in its first argument, and gets
+        its underlying socket._realsocket accordingly.
     """
     cdef event_t wakeup_ev
     cdef int fd
@@ -1486,6 +1509,17 @@ cdef class nbsslsocket:
             my_sslsocket_impl = kwargs.pop('sslsocket_impl')
         else:
             my_sslsocket_impl = sslsocket_impl
+        if (hasattr(args[0], '_sock') and
+            isinstance(args[0]._sock, socket_realsocket)):
+            # This works with isinstance(args[0], socket.socket) or
+            # isinstance(args[0], nbsocket).
+            pass
+        elif isinstance(args[0], socket_realsocket):
+            args = list(args)
+            args[0] = sockwrapper(args[0])
+        else:
+            raise TypeError('bad type for underlying socket: ' + str(args[0]))
+
         # TODO(pts): Make sure we do a non-blocking handshake (do_handshake)
         # in my_sslsocket_impl.__init__. Currently it's blocking.
         self.sslsock = my_sslsocket_impl(*args, **kwargs)
@@ -1511,7 +1545,6 @@ cdef class nbsslsocket:
         return nbsocket(self.realsock.dup())
 
     def close(nbsslsocket self):
-        print 'CLOSE', self.sslsock._makefile_refs
         self.sslsock.close()
         self.sslobj = self.sslsock._sslobj
 
