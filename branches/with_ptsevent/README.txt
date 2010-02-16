@@ -221,7 +221,8 @@ Planned features
 * TODO(pts): is it smaller or faste in Cython?
 * TODO(pts): measure if evhttp is faster for WSGI than in pure Python
 * TODO(pts): Strip the coio.so files upon installation? It seems to be still
-             importable.
+             importable. Some Python installations autostrip. Why not ours?
+* TODO(pts): Fix the AttributeError in socket.socket.close().
 * !! TODO(pts): Handle starving (when one worker is very fast, even Ctrl-<C>
   is delayed)
 

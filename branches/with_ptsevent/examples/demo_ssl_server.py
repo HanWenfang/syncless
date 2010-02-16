@@ -68,7 +68,7 @@ if __name__ == '__main__':
   else:
     sslsocket_impl = ssl.SSLSocket     # Blocking (1 connection at a time).
     patch.fix_ssl_makefile()
-    patch.fix_ssl_accept()
+    patch.fix_ssl_init_memory_leak()
   print >>sys.stderr, 'info: testing with %s' % sslsocket_impl
   sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
   if use_ssl:

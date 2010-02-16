@@ -1523,6 +1523,12 @@ cdef class nbsslsocket:
         # TODO(pts): Make sure we do a non-blocking handshake (do_handshake)
         # in my_sslsocket_impl.__init__. Currently it's blocking.
         self.sslsock = my_sslsocket_impl(*args, **kwargs)
+        if self.sslsock.recv.func_name == '<lambda>':
+          # Fix memory leak because of circular references. Also makes
+          # self.realsock autoclosed if there are no more references. See also
+          # syncless.patch.fix_ssl_init_memory_leak().
+          for attr in socket._delegate_methods:
+            delattr(self.sslsock, attr)
         self.realsock = self.sslsock._sock
         # This may be None so far.
         # TODO(pts): Update self.sslobj in .unwrap, .shutdown, .close,
@@ -1701,26 +1707,19 @@ cdef class nbsslsocket:
                 if e.errno != EAGAIN:
                     raise
                 handle_ssl_eagain(self, c_EV_READ)
-        asock_to_close = asock
-        try:
-            asslsock = nbsslsocket(
-                sockwrapper(asock),
-                keyfile=self.sslsock.keyfile,
-                certfile=self.sslsock.certfile,
-                server_side=True,
-                cert_reqs=self.sslsock.cert_reqs,
-                ssl_version=self.sslsock.ssl_version,
-                ca_certs=self.sslsock.ca_certs,
-                do_handshake_on_connect=False,
-                suppress_ragged_eofs=self.sslsock.suppress_ragged_eofs)
-            if self.sslsock.do_handshake_on_connect:
-                asslsock.sslsock.do_handshake_on_connect = True
-                asslsock.do_handshake()  # Non-blocking.
-            asock_to_close = None
-        finally:
-            # Close the new connection upon an exception (such as keyfile=
-            # not found).
-            asock_to_close.close()
+        asslsock = nbsslsocket(
+            sockwrapper(asock),
+            keyfile=self.sslsock.keyfile,
+            certfile=self.sslsock.certfile,
+            server_side=True,
+            cert_reqs=self.sslsock.cert_reqs,
+            ssl_version=self.sslsock.ssl_version,
+            ca_certs=self.sslsock.ca_certs,
+            do_handshake_on_connect=False,
+            suppress_ragged_eofs=self.sslsock.suppress_ragged_eofs)
+        if self.sslsock.do_handshake_on_connect:
+            asslsock.sslsock.do_handshake_on_connect = True
+            asslsock.do_handshake()  # Non-blocking.
         return (asslsock, addr)
 
     def connect(nbsslsocket self, object address):

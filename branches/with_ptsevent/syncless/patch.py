@@ -89,39 +89,45 @@ def fix_ssl_makefile():
     ssl.SSLSocket.makefile = types.MethodType(
         SslMakeFileFix, None, ssl.SSLSocket)
 
-def fix_ssl_accept():
-  """Fix ssl.SSLSocket.accept() close the new socket on exception.
+def fix_ssl_init_memory_leak():
+  """Fix the memory leak in ssl.SSLSocket.__init__ in Python 2.6.4.
+
+  ssl.SSLSocket.__init__ has code like this:
+
+    self.send = lambda data, flags=0: SSLSocket.send(self, data, flags)
+
+  It could have been this simple, and it would still produce a memory leak:
   
-  This is a bugfix for Stackless 2.6.4.
+    self.foo = lambda: self
+
+  This creates a circular reference (self -> __init__ -> lambda -> self),
+  which prevents self._sock from being automatically closed when self goes out
+  of scope.
+
+  The fix just removes those lambdas (and function attributes created by
+  socket.socket.__init__ as well). This fixes the memory leak, and provides
+  correct behavior.
   """
   try:
     import ssl
   except ImportError:
-    ssl = None
-  if ssl:
-    import socket
-    def SslAcceptFix(self):
-      newsock, addr = socket.socket.accept(self)
+    return
+  import socket
+  import types
+  if ssl.SSLSocket(socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      ).recv.func_name == '<lambda>':
+    # TODO(pts): Don't create a socket.socket just for the detection above.
+    old_init = ssl.SSLSocket.__init__.im_func
+    def SslInitFix(*args, **kwargs):
+      self = args[0]
       try:
-        return (ssl.SSLSocket(newsock,
-                    keyfile=self.keyfile,
-                    certfile=self.certfile,
-                    server_side=True,
-                    cert_reqs=self.cert_reqs,
-                    ssl_version=self.ssl_version,
-                    ca_certs=self.ca_certs,
-                    do_handshake_on_connect=self.do_handshake_on_connect,
-                    suppress_ragged_eofs=self.suppress_ragged_eofs),
-                addr)
-      except:
-        # Force close. Releasing references not enough.
-        # Reproduce this error by specifying a nonexisting keyfile= etc.
-        # There is a memory leak if gc.disable() is active.
-        # TODO(pts): Submit a patch to Python 2.6 against the memory leak.
-        newsock._sock.close()
-        raise
-    ssl.SSLSocket.accept = types.MethodType(
-        SslAcceptFix, None, ssl.SSLSocket)
+        old_init(*args, **kwargs)
+      finally:
+        if self.recv.func_name == '<lambda>':
+          for attr in socket._delegate_methods:
+            delattr(self, attr)
+    ssl.SSLSocket.__init__ = types.MethodType(SslInitFix, None, ssl.SSLSocket)
+
 
 def validate_new_sslsock(**kwargs):
   """Validate contructor arguments of ssl.SSLSocket.
@@ -157,10 +163,14 @@ def validate_new_sslsock(**kwargs):
     nsock.close()
 
 
+def fix_all():
+  fix_ssl_makefile()
+  fix_ssl_init_memory_leak()
+
+
 def patch_all():
+  fix_all()
   patch_socket()
   patch_time()
   patch_stdin_and_stdout()
   patch_stderr()
-  fix_ssl_makefile()
-  fix_ssl_accept()
