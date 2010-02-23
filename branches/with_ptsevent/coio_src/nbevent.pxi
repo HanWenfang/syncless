@@ -810,6 +810,8 @@ cdef class nbfile:
             return write_to_fd(self.write_fd, &self.wakeup_ev, p, n)
         # !! TODO(pts): Don't even temporarily overflow the buffer.
         # !! TODO(pts): Do line buffering with buffer size == 1.
+        # TODO(pts): Speed this up by avoiding part of the copy if the write
+        # buffer is empty.
         evbuffer_add(&self.write_eb, <char*>p, n)
         if (self.write_buffer_limit > 0 and
             self.write_eb.off >= self.c_write_buffer_limit):
@@ -1059,6 +1061,20 @@ cdef class nbfile:
     def xreadlines(nbfile self):
         return self  # Just like file.xreadlines
 
+    def readlines(nbfile self):
+        cdef list lines
+        lines = []
+        while True:
+            line = self.readline()
+            if not line:
+                break
+            lines.append(line)
+        return lines
+
+    def writelines(nbfile self, lines):
+       for line in lines:
+           self.write(line)
+
     def isatty(nbfile self):
         cdef int got
         got = isatty(self.read_fd)
@@ -1076,11 +1092,8 @@ cdef class nbfile:
 
 # !! implement open(...) properly, with modes etc.
 # !! prevent writing to a nonwritable file
-# !! implement read()
 # !! implement readinto()
-# !! implement readlines()
 # !! implement seek() and tell()
-# !! implement writelines()
 
 # Forward declarations.
 cdef class nbsocket
@@ -1523,7 +1536,7 @@ cdef class nbsslsocket:
         # TODO(pts): Make sure we do a non-blocking handshake (do_handshake)
         # in my_sslsocket_impl.__init__. Currently it's blocking.
         self.sslsock = my_sslsocket_impl(*args, **kwargs)
-        if self.sslsock.recv.func_name == '<lambda>':
+        if self.sslsock.recv is args[0]._sock.recv:
           # Fix memory leak because of circular references. Also makes
           # self.realsock autoclosed if there are no more references. See also
           # syncless.patch.fix_ssl_init_memory_leak().

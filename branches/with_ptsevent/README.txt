@@ -205,6 +205,9 @@ syncless.coio.DnsLookupError: [Errno -65] reply truncated or ill-formed
    approximates the answer of socket.gethostbyname_ex, because evdns doesn't
    support CNAME lookups.
 
+5. Don't use non-blocking I/O on the same filehandle from multiple
+   coroutines (tasklets): there may be race conditions.
+
 Planned features
 ~~~~~~~~~~~~~~~~
 * TODO(pts): Document the side effect of import syncless.coio on Ctrl-<C>.
