@@ -25,6 +25,7 @@ for prefix in os.getenv('LD_LIBRARY_PATH', '').split(':') + [
     print 'found libevent in', prefix
     include_dirs =['%s/include' % prefix]
     library_dirs =['%s/lib' % prefix]    
+    break
 if not include_dirs:
   print 'libevent not found, may be present anyway, going on'
 event = Extension(name='syncless.coio',

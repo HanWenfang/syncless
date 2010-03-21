@@ -8,9 +8,9 @@ import cgi
 import time
 
 try:
-  from syncless import dns
+  from syncless import coio
 except ImportError:  # Don't ignore inner ImportError{}s.
-  dns = None
+  coio = None
 
 def WsgiApp(env, start_response):
   """A simple demo WSGI application function."""
@@ -20,7 +20,7 @@ def WsgiApp(env, start_response):
   response_headers = [('Content-type', 'text/html')]
   write = start_response(status, response_headers)
   if env['REQUEST_METHOD'] in ('POST', 'PUT'):
-    return ['Posted/put %s.' % env['wsgi.input'].read(10)]
+    return ['Posted/put %r.' % env['wsgi.input'].read(10)]
   elif env['PATH_INFO'] == '/hello':
     return ['Hello, <i>World</i> @ %s!\n' % time.time()]
   elif env['PATH_INFO'] == '/foobar':
@@ -41,16 +41,16 @@ def WsgiApp(env, start_response):
     key, hostname = env['QUERY_STRING'].split('=', 2)
     if not hostname:
       return 'Empty hostname!'
-    if not dns:
+    if not coio:
       return 'Missing DNS resolver!'
     try:
-      result = dns.resolver.query(hostname, 'A')
-    except dns.DNSException, e:
+      result = coio.dns_resolve_ipv4(hostname, 0).values
+    except coio.DNSLookupError, e:
       # Example e.__class__.__name__: 'NXDOMAIN', 'Timeout' (after >20 sec).
       return 'Resolve error: %s' % e.__class__.__name__
     return '\n<br>'.join(map(cgi.escape, map(repr, result)))
   else:
-    if dns:
+    if coio:
       dns_html = ('<form action="/a">Hostname: <input name=hostname>'
                   '<input type=submit value=Resolve></form>')
     else:

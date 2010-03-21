@@ -156,13 +156,13 @@ cdef class dnsresult:
 
     def __repr__(dnsresult self):
         return '<dnsresult t=%d, ttl=%d values=%r at 0x%x>' % (
-            self._t, self._ttl, self._values, <unsigned>self)
+            self._t, self._ttl, self._values, <unsigned><void*>self)
 
 cdef object format_ipv6_word(unsigned hi, unsigned lo):
     lo += hi << 8
     if lo:
         # TODO(pts): Faster.
-        return PyString_FromFormat(<char_constp>'%x', lo)
+        return PyString_FromFormat(<char_constp><char*>'%x', lo)
     else:
         return ''
 
@@ -193,7 +193,7 @@ cdef void _dns_callback(int resultcode, char t, int count, int ttl,
         for i from 0 <= i < count:
             # TODO(pts): Replace all % by PyString_FromFormat.
             xlist.append(PyString_FromFormat(
-                <char_constp>'%d.%d.%d.%d', p[0], p[1], p[2], p[3]))
+                <char_constp><char*>'%d.%d.%d.%d', p[0], p[1], p[2], p[3]))
             p += 4
         x = xlist
     elif t == c_DNS_IPv6_AAAA and count > 0:
@@ -346,7 +346,7 @@ def dns_resolve_reverse(object ip, int flags=0):
        p = tmp
        for i from 0 <= i < 4:
            # This also ValueError. TODO(pts): Proper parsing.
-           p[i] = PyInt_FromString(items[i], NULL, 10)
+           p[i] = <unsigned char>PyInt_FromString(items[i], NULL, 10)
        return dns_call(<_evdns_call_t>evdns_resolve_reverse,
                        <char_constp>p, flags)
     elif ':' in ip:  # TODO(pts): Faster, for strings.
@@ -363,7 +363,7 @@ def dns_resolve_reverse(object ip, int flags=0):
        return dns_call(<_evdns_call_t>evdns_resolve_reverse_ipv6,
                        <char_constp>p, flags)
     else:
-        raise ValueError('unknown ip address syntax')
+        raise ValueError('unknown ip address syntax: ' + ip)
 
 # --- socket.gethostbyname etc. emulations
 

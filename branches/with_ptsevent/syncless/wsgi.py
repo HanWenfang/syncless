@@ -12,11 +12,21 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-Doc: WSGI: http://www.python.org/dev/peps/pep-0333/
+Doc: WSGI specification: http://www.python.org/dev/peps/pep-0333/
 Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
 
 TODO(pts): Validate this implementation with wsgiref.validate.
 TODO(pts): Write access.log like BaseHTTPServer and CherryPy
+
+FYI flush-after-first-body-byte is defined in the WSGI specification. An
+excerpt: The start_response callable must not actually transmit the response
+headers.  Instead, it must store them for the server or gateway to transmit
+only after the first iteration of the application return value that yields a
+non-empty string, or upon the application's first invocation of the write()
+callable.  In other words, response headers must not be sent until there is
+actual body data available, or until the application's returned iterable is
+exhausted.  (The only possible exception to this rule is if the response
+headers explicitly include a Content-Length of zero.)
 """
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
@@ -32,6 +42,7 @@ import types
 from syncless import coio
 
 # !! TODO(pts): Fix all methods to use coio (instead of nbf and nbs).
+#               Add tests.
 
 # TODO(pts): Use this.
 ERRLIST_REQHEAD_RAISE = [
@@ -84,7 +95,6 @@ class WsgiErrorsStream(object):
       cls.write(msg)
 
 
-# !! implement this
 # !! test all methods
 class WsgiEmptyInputStream(object):
   """Empty POST data input stream sent to the WSGI application as
@@ -95,7 +105,6 @@ class WsgiEmptyInputStream(object):
   """
 
   bytes_read = 0
-  bytes_remaining = 0
 
   @classmethod
   def read(cls, size):
@@ -112,6 +121,10 @@ class WsgiEmptyInputStream(object):
   @classmethod
   def __iter__(cls):
     return iter(())
+
+  @classmethod
+  def discard_to_read_limit(cls):
+    pass
 
 
 class FixedReadLineInputStream(object):
@@ -151,6 +164,7 @@ def GetHttpDate(at):
   return '%s, %02d %s %4d %02d:%02d:%02d GMT' % (
       WDAY[now[6]], now[2], MON[now[1]], now[0], now[3], now[4], now[5])
       
+
 def RespondWithBadRequest(date, server_software, nbf, reason):
   msg = 'Bad request: ' + str(reason)
   # TODO(pts): Add Server: and Date:
@@ -163,6 +177,21 @@ def RespondWithBadRequest(date, server_software, nbf, reason):
             (server_software, date, len(msg) + 1, msg))
   sockfile.flush()
 
+
+def ConsumerWorker(items):
+  """Stackless tasklet to consume the rest of a wsgi_application output.
+  
+  Args:
+    items: Iterable returned by the call to a wsgi_application.
+  """
+  try:
+    for data in items:
+      pass
+  finally:
+    if hasattr(items, 'close'):  # According to the WSGI spec.
+      items.close()
+
+
 def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
@@ -172,11 +201,22 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
   do_keep_alive_ary = [True]
   headers_sent_ary = [False]
   server_software = default_env['SERVER_SOFTWARE']
-  sockfile = nbf.makefile_samefd(write_buffer_limit=0)
+  sockfile = nbf.makefile_samefd()
   reqhead_continuation_re = REQHEAD_CONTINUATION_RE
   try:
     while do_keep_alive_ary[0]:
       do_keep_alive_ary[0] = False
+
+      # This enables the infinite write buffer so we can buffer the HTTP
+      # response headers (without a size limit) until the first body byte. 
+      # Please note that the use of sockfile.write_buffer_len in this
+      # function prevents us from using unbuffered output.  But unbuffered
+      # output would be silly anyway since we send the HTTP response headers
+      # line-by-line.
+      sockfile.write_buffer_limit = 2
+      # Ensure there is no leftover from the previous request.
+      assert not sockfile.write_buffer_len 
+
       env = dict(default_env)
       env['REMOTE_HOST'] = env['REMOTE_ADDR'] = peer_name[0]
       env['REMOTE_PORT'] = str(peer_name[1])
@@ -313,22 +353,25 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
             return
           content_length = None
           del env['CONTENT_LENGTH']
-        if content_length:
-          sockfile.SetContentLength(content_length)
+        if content_length:  # TODO(pts): Test this branch.
+          # This assertion fails here if the client sends multiple very
+          # small HTTP requests without waiting for the first request to be
+          # served.
+          if content_length < sockfile.read_buffer_len:
+            RespondWithBadRequest(
+                date, server_software, nbf, 'next request too early')
+            return
           env['wsgi.input'] = input = sockfile
-          if len(req_buf) > content_length:
-            input.AppendToReadBuffer(req_buf[:content_length])
-            req_buf = req_buf[content_length:]
-          elif req_buf:
-            input.AppendToReadBuffer(req_buf)
-            req_buf = ''
+          # TODO(pts): Avoid the memcpy() in unread.
+          sockfile.unread(req_buf[:content_length])
+          sockfile.read_limit = content_length - sockfile.read_buffer_len
         else:
           env['wsgi.input'] = input = WsgiEmptyInputStream
 
+      req_buf = ''  # Save memory.
       is_not_head = method != 'HEAD'
       res_content_length = None
       headers_sent_ary[0] = False
-      assert not sockfile.write_buffer_len
 
       def WriteHead(data):
         """HEAD callback returned by StartResponse, the app may call it."""
@@ -340,12 +383,11 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
           do_keep_alive_ary[0] = do_req_keep_alive
           sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
           sockfile.write('\r\n')
+          input.discard_to_read_limit()
           sockfile.flush()
           if not do_keep_alive_ary[0]:
             nbf.close()
           headers_sent_ary[0] = True
-          if input.bytes_remaining:
-            input.ReadAndDiscardRemaining()
 
       def WriteNotHead(data):
         """Non-HEAD callback returned by StartResponse, the app may call it."""
@@ -353,18 +395,19 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
         if not data:
           return
         if headers_sent_ary[0]:
+          # Autoflush because we've set up sockfile.write_buffer_limit = 0
+          # previously.
           sockfile.write(data)
-          sockfile.flush()
         else:
           do_keep_alive_ary[0] = (
               do_req_keep_alive and res_content_length is not None)
           sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
           sockfile.write('\r\n')
           sockfile.write(data)
+          input.discard_to_read_limit()
           sockfile.flush()
+          sockfile.write_buffer_limit = 0  # Unbuffered.
           headers_sent_ary[0] = True
-          if input.bytes_remaining:
-            input.ReadAndDiscardRemaining()
 
       def StartResponse(status, response_headers, exc_info=None):
         """Callback called by wsgi_application."""
@@ -403,67 +446,74 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
 
       # TODO(pts): Handle application-level exceptions here.
       items = wsgi_application(env, StartResponse)
-      # TODO(pts): Handle this error robustly.
-      assert sockfile.write_buffer_len or headers_sent_ary[0], (
-          'WSGI app must have called start_response by now')
-      date = None
-      if (isinstance(items, list) or isinstance(items, tuple) or
-          isinstance(items, str)):
-        if is_not_head:
-          if isinstance(items, str):
-            data = items
-          else:
-            data = ''.join(map(str, items))
-        else:
-          data = ''
-        items = None
-        if not headers_sent_ary[0]:
-          if input.bytes_remaining:
-            input.ReadAndDiscardRemaining()
-          if res_content_length is not None:
-            # TODO(pts): Pad or truncate.
-            assert len(data) == res_content_length
+      try:
+        # TODO(pts): Handle this error robustly (don't let the process exit.)
+        assert sockfile.write_buffer_len or headers_sent_ary[0], (
+            'WSGI app must have called start_response by now')
+        date = None
+        if (isinstance(items, list) or isinstance(items, tuple) or
+            isinstance(items, str)):
           if is_not_head:
-            sockfile.write('Content-Length: %d\r\n' % len(data))
-          do_keep_alive_ary[0] = do_req_keep_alive
-          sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
-          sockfile.write('\r\n')
-        sockfile.write(data)
-        sockfile.flush()
-      elif is_not_head:
-        if not headers_sent_ary[0]:
-          do_keep_alive_ary[0] = (
-              do_req_keep_alive and res_content_length is not None)
-          sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
-          sockfile.write('\r\n')
-        for data in items:
-          if input.bytes_remaining:  # TODO(pts): Check only once.
-            input.ReadAndDiscardRemaining()
+            if isinstance(items, str):
+              data = items
+            else:
+              data = ''.join(map(str, items))
+          else:
+            data = ''
+          items = None
+          if not headers_sent_ary[0]:
+            input.discard_to_read_limit()
+            if res_content_length is not None:
+              # TODO(pts): Pad or truncate.
+              assert len(data) == res_content_length
+            if is_not_head:
+              sockfile.write('Content-Length: %d\r\n' % len(data))
+            do_keep_alive_ary[0] = do_req_keep_alive
+            sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
+            sockfile.write('\r\n')
           sockfile.write(data)
           sockfile.flush()
-        if input.bytes_remaining:
-          input.ReadAndDiscardRemaining()
-      else:  # HTTP HEAD request.
-        if not headers_sent_ary[0]:
-          do_keep_alive_ary[0] = do_req_keep_alive
-          sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
-          sockfile.write('\r\n')
+        elif is_not_head:
+          if not headers_sent_ary[0]:
+            do_keep_alive_ary[0] = (
+                do_req_keep_alive and res_content_length is not None)
+            sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
+            sockfile.write('\r\n')
+            if res_content_length == 0:
+              input.discard_to_read_limit()
+              sockfile.flush()
+          # TODO(pts): Speed: iterate over `items' below in another tasklet
+          # as soon as Content-Length has been reached.
+          for data in items:
+            if data:  # Implement flush-after-first-body-byte.
+              sockfile.write(data)  # Still buffering it. !!
+              break
+          input.discard_to_read_limit()
           sockfile.flush()
-          if not do_keep_alive_ary[0]:
-            nbf.close()
-        # If tasklets could run in parellel, we could iterate over `items'
-        # below in another tasklet,, so the HTTP client could reuse the
-        # connection for another request before the iteration finishes.
-        for data in items:  # Run the generator function through.
-          if input.bytes_remaining:  # TODO(pts): Check only once.
-            input.ReadAndDiscardRemaining()
-        if input.bytes_remaining:
-          input.ReadAndDiscardRemaining()
-      # TODO(pts): Call close() in a finally block.
-      # TODO(pts): Look up the WSGI specification again. What should we be
-      # closing?
-      if hasattr(items, 'close'):  # CherryPyWSGIServer does this.
-        items.close()
+          sockfile.write_buffer_limit = 0  # Unbuffered.
+          for data in items:
+            sockfile.write(data)
+        else:  # HTTP HEAD request.
+          if not headers_sent_ary[0]:
+            do_keep_alive_ary[0] = do_req_keep_alive
+            sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
+            sockfile.write('\r\n')
+            input.discard_to_read_limit()
+            sockfile.flush()
+            if not do_keep_alive_ary[0]:
+              nbf.close()
+
+          # Iterate over `items' below in another tasklet, so we can read
+          # the next request asynchronously from the HTTP client while the
+          # other tasklet is working.
+          # TODO(pts): Is this optimization safe? Limit the number of tasklets
+          # to 1 to prevent DoS attacks.
+          coio.stackless.tasklet(ConsumerWorker)(items)  # Don't run it yet.
+          items = None  # Prevent double items.close(), see below.
+
+      finally:
+        if hasattr(items, 'close'):  # According to the WSGI spec.
+          items.close()
   finally:
     nbf.close()
     if logging.root.level <= DEBUG:
