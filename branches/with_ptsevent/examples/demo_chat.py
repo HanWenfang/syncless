@@ -123,6 +123,8 @@ def ChatListener(addr):
   ss.listen(128)
   print >>sys.stderr, 'info: listening for telnet chat on %r' % (
       ss.getsockname(),)
+  print >>sys.stderr, 'info: to connect, run:  telnet %s %s' % (
+      ss.getsockname()[:2])
   while True:
     cs, csaddr = ss.accept()
     print >>sys.stderr, 'info: connection from %r' % (csaddr,)
@@ -141,6 +143,7 @@ if __name__ == '__main__':
   broadcast_channel.preference = 1  # Prefer the sender.
   stackless.tasklet(BroadcastWorker)()
   stackless.tasklet(ChatListener)(('127.0.0.1', port))
+  # sys.stdin here can be used for writing, as set up by patch_stdin_and_stdout
   stackless.tasklet(ChatWorker)(sys.stdin, 'console')
   stackless.schedule_remove()
   # The program will run indefinitely because BroadcastWorker never exists.

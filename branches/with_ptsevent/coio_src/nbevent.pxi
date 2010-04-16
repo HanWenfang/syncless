@@ -160,6 +160,7 @@ cdef extern from "frameobject.h":  # Needed by core/stackless_structs.h
 cdef extern from "core/stackless_structs.h":
     ctypedef struct PyObject:
         pass
+    ctypedef struct PyTaskletObject
     # This is only for pointer manipulation with reference counting.
     ctypedef struct PyTaskletObject:
         PyTaskletObject *next
@@ -775,6 +776,7 @@ cdef class nbfile:
                  object name=None):
         assert read_fd >= 0 or mode == 'w'
         assert write_fd >= 0 or mode == 'r'
+        assert mode in ('r', 'w', 'r+')
         self.c_read_limit = -1
         self.c_do_close = do_close
         self.read_fd = read_fd
@@ -1736,7 +1738,6 @@ cdef class nbsocket:
 
         This method is not part of normal sockets.
         """
-        assert mode == 'r+'  # !! TODO(pts): Implement other modes
         return nbfile(self.fd, self.fd, bufsize, bufsize)
 
     def makefile(nbsocket self, mode='r', int bufsize=-1):
@@ -1746,11 +1747,10 @@ cdef class nbsocket:
         .close() method will close that file descriptor.
 
         Args:
-          mode: 'r', 'w', 'r+' etc. The default is mode'r', just as for
+          mode: 'r', 'w', 'r+' etc. The default is mode 'r', just as for
             socket.socket.makefile.
         """
         cdef int fd
-        assert mode == 'r+'  # !! TODO(pts): Implement other modes
         fd = dup(self.fd)
         if fd < 0:
             raise socket.error(errno, strerror(errno))

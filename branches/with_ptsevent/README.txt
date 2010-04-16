@@ -210,6 +210,7 @@ syncless.coio.DnsLookupError: [Errno -65] reply truncated or ill-formed
 
 Planned features
 ~~~~~~~~~~~~~~~~
+* TODO(pts): mksleep(secs) and cancel_sleep()
 * TODO(pts): Document the side effect of import syncless.coio on Ctrl-<C>.
 * TODO(pts): TCP communication error handling in the WSGI server
 * TODO(pts): HTTP client library (making urllib non-blocking?)

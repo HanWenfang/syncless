@@ -346,7 +346,8 @@ def dns_resolve_reverse(object ip, int flags=0):
        p = tmp
        for i from 0 <= i < 4:
            # This also ValueError. TODO(pts): Proper parsing.
-           p[i] = <unsigned char>PyInt_FromString(items[i], NULL, 10)
+           j = PyInt_FromString(items[i], NULL, 10)
+           p[i] = <unsigned char>j
        return dns_call(<_evdns_call_t>evdns_resolve_reverse,
                        <char_constp>p, flags)
     elif ':' in ip:  # TODO(pts): Faster, for strings.
