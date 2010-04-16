@@ -57,6 +57,7 @@ cdef extern from "event.h":
     
     int EVLOOP_ONCE
     int EVLOOP_NONBLOCK
+    int EVLIST_INTERNAL
 
     int c_EV_TIMEOUT "EV_TIMEOUT"
     int c_EV_READ "EV_READ"
@@ -107,7 +108,7 @@ cdef class event:
     cdef timeval tv
 
     def __init__(self, callback, arg=None, short evtype=0, handle=-1,
-                 simple=0):
+                 simple=0, is_internal=0):
         cdef event_handler handler
         
         self.callback = callback
@@ -124,6 +125,10 @@ cdef class event:
             if not isinstance(handle, int):
                 handle = handle.fileno()
             event_set(&self.ev, handle, evtype, handler, <void *>self)
+        if is_internal:
+            # Make loop() exit immediately of only EVLIST_INTERNAL events
+            # were added. Add EVLIST_INTERNAL after event_set.
+            self.ev.ev_flags |= EVLIST_INTERNAL
 
     def __simple_callback(self, short evtype):
         try:

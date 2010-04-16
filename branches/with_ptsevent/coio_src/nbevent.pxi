@@ -16,7 +16,11 @@
 #
 # This code is designed for Stackless Python 2.6.
 #
-
+# Please note that stackless.schedule_remove() is ignored for stackless.main
+# (but another tasklet may remove stackless.main), and also if there are no
+# other tasklets in the queue when stackless.schedule_remove() is called, then
+# the process exits (sys.exit(0)).
+#
 # TODO(pts): Add module docstring.
 # !! TODO(pts) there are still long requests, even with listen(2280)
 #Connection Times (ms)
@@ -232,7 +236,7 @@ def MainLoop(tasklet link_helper_tasklet):
     assert c != p
 
     while 1:  # ``while 1`'' is more efficient in Pyrex than ``while True''
-        #print 'MainLoop', PyStackless_GetRunCount()
+        #print 'MainLoop1', PyStackless_GetRunCount()
         # !! TODO(pts): what if nothing registered and we're running MainLoop
         # maybe loop has returned true and
         # stackless.current.prev is stackless.current.
@@ -248,8 +252,12 @@ def MainLoop(tasklet link_helper_tasklet):
         # I/O events and calling callbacks.
         #
         # Exceptions (if any) in event handlers would propagate to here.
-        # !! would they? or only 1 exception?
-        # Argument: nonblocking: don't block if nothing available.
+        # !! would they? or only 1 exception? we don't care
+        # Argument of loop(): is_nonblocking: don't block if nothing
+	# available.
+        #
+        # Please note that loop() is a wrapper around event_loop().
+        # TODO(pts): Don't wrap, call directly.
         #
         # Each callback we (nbevent.pxi)
         # have registered is just a tasklet_obj.insert(), but others may have
@@ -257,7 +265,15 @@ def MainLoop(tasklet link_helper_tasklet):
         #
         # We compare against 2 because of stackless.current
         # (main_loop_tasklet) and link_helper_tasklet.
-        loop(PyStackless_GetRunCount() > 2)
+        if PyStackless_GetRunCount() > 2:
+            loop(True)  # Don't block.
+        elif loop(False):  # Block, wait for events once, without timeout.
+            # No events registered, and no tasklets in the queue. This means
+            # that nothing more can happen in this program. By returning
+            # here the stackless tasklet queue becomes empty, so the process
+            # will exit (sys.exit(0)).
+            PyTasklet_Remove(link_helper_tasklet)
+            return
 
         # Swap link_helper_tasklet and stackless.current in the queue.  We
         # do this so that the tasklets inserted by the loop(...) call above
