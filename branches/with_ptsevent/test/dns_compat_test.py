@@ -176,6 +176,7 @@ def Wrap(function, *args):
     else:
       assert 0, repr(e.args)
 
+
 class DnsCompatTest(unittest.TestCase):
   def setUp(self):
     assert callable(getattr(syncless.coio, 'dns_resolve_ipv4', None))

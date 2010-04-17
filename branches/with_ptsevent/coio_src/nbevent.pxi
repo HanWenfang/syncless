@@ -41,6 +41,7 @@
 #  99%     60
 # 100%   4547 (longest request)
 
+# TODO(pts): Productionize TimeoutReceive
 # TODO(pts): Port to greenlet.
 # TODO(pts): port to pure Python + select() or epoll().
 import stackless
@@ -184,6 +185,9 @@ cdef extern from "stackless_api.h":
     int PyTasklet_Remove(tasklet task) except -1
     tasklet PyStackless_GetCurrent()
     #tasklet PyTasklet_New(type type_type, object func);
+cdef extern from "./coio_c_helper.h":
+    # This involves a call to PyStackless_Schedule(None, 1).
+    object coio_c_wait(event_t *ev, timeval *tv)
 
 def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
     """Send exception to tasklet, even if it's blocked on a channel.
@@ -210,6 +214,9 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
         c.preference = old_preference
     else:
         tasklet_obj.tempval = bomb_obj
+    # TODO(pts): Implement another method, which inserts tasklet_obj before
+    # the current tasklet. tasklet_obj.insert() inserts to the end of the
+    # runnables list (unless already inserted).
     tasklet_obj.insert()
     tasklet_obj.run()
 
@@ -301,6 +308,7 @@ def MainLoop(tasklet link_helper_tasklet):
 # TODO(pts): Use a cdef, and hard-code event_add().
 # !! TODO(pts): Schedule the main thread upon the SIGINT, don't wait for
 # cooperative scheduling.
+# TODO(pts): Rename all capitalized methods, e.g. to _sigint_handler.
 def SigIntHandler(ev, sig, evtype, arg):
     SendExceptionAndRun(stackless.main, (KeyboardInterrupt,))
 
@@ -371,40 +379,24 @@ cdef int nbevent_read(evbuffer_s *read_eb, int fd, int n):
         #    read_eb.cb(read_eb, read_eb.off - got, read_eb.off, read_eb.cbarg)
     return got
 
-
 cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
     # PyStackless_Schedule will return this.
     # No easier way to assign a bool in Pyrex.
     if evtype == c_EV_TIMEOUT:
+        # TODO(pts): Create a bomb here so retval is not needed.
         (<tasklet>arg).tempval = True
     else:
         (<tasklet>arg).tempval = False
     PyTasklet_Insert(<tasklet>arg)  # No NULL- or type checking.
 
+# Since this function returns void, exceptions raised (e.g. if <tasklet>arg)
+# will be ignored (by Pyrex?) and printed to stderr as something like:
+# Exception AssertionError: 'foo' in 'coio.HandleCWakeup' ignored
 cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
+    # Set tempval so coio_c_wait doesn't have to call event_del(...).
+    (<tasklet>arg).tempval = True
     PyTasklet_Insert(<tasklet>arg)
 
-# This works, but it assumes that c.prev is kept in the runnable list during
-# the inserts.
-#def RRR(tasklet a, tasklet b):
-#    """Insert a, b, and make sure they run next."""
-#    cdef PyTaskletObject *p
-#    cdef PyTaskletObject *c
-#    o = PyStackless_GetCurrent()
-#    # This assignment prevents reference counting below.
-#    c = <PyTaskletObject*>o
-#    p = c.prev
-#    PyTasklet_Insert(a);
-#    PyTasklet_Insert(b);
-#    if p != c:
-#      # Move p (stackless.current) right after p.
-#      # TODO(pts): More checks.
-#      c.prev.next = c.next
-#      c.next.prev = c.prev
-#      c.next = p.next
-#      c.next.prev = c
-#      c.prev = p
-#      p.next = c
 
 cdef class evbuffer:
     """A Python wrapper around libevent's I/O buffer: struct evbuffer
@@ -544,8 +536,7 @@ cdef class evbuffer:
                 wakeup_tasklet = PyStackless_GetCurrent()
                 event_set(&self.wakeup_ev, sock.fileno(), c_EV_READ,
                           HandleCWakeup, <void *>wakeup_tasklet)
-                event_add(&self.wakeup_ev, NULL)
-                PyStackless_Schedule(None, 1)  # remove=1
+                coio_c_wait(&self.wakeup_ev, NULL)
 
     def nb_flush(evbuffer self, int fd):
         """Use self.append*, then self.nb_flush. Don't reuse self for reads."""
@@ -562,8 +553,7 @@ cdef class evbuffer:
                 wakeup_tasklet = PyStackless_GetCurrent()
                 event_set(&self.wakeup_ev, fd, c_EV_WRITE, HandleCWakeup,
                           <void *>wakeup_tasklet)
-                event_add(&self.wakeup_ev, NULL)
-                PyStackless_Schedule(None, 1)  # remove=1
+                coio_c_wait(&self.wakeup_ev, NULL)
 
     def nb_readline(evbuffer self, int fd):
         cdef tasklet wakeup_tasklet
@@ -597,8 +587,7 @@ cdef class evbuffer:
                 wakeup_tasklet = PyStackless_GetCurrent()
                 event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
                           <void *>wakeup_tasklet)
-                event_add(&self.wakeup_ev, NULL)
-                PyStackless_Schedule(None, 1)  # remove=1
+                coio_c_wait(&self.wakeup_ev, NULL)
             elif got == 0:  # EOF, return remaining bytes ('' or partial line)
                 n = self.eb.off
                 buf = PyString_FromStringAndSize(<char_constp>self.eb.buf, n)
@@ -733,8 +722,7 @@ cdef object write_to_fd(int fd, event_t *wakeup_ev, char_constp p,
             wakeup_tasklet = PyStackless_GetCurrent()
             event_set(wakeup_ev, fd, c_EV_WRITE, HandleCWakeup,
                       <void *>wakeup_tasklet)
-            event_add(wakeup_ev, NULL)
-            PyStackless_Schedule(None, 1)  # remove=1
+            coio_c_wait(wakeup_ev, NULL)
         p += got
         n -= got
 
@@ -1117,8 +1105,7 @@ cdef class nbfile:
                 wakeup_tasklet = PyStackless_GetCurrent()
                 event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
                           HandleCWakeup, <void *>wakeup_tasklet)
-                event_add(&self.wakeup_ev, NULL)
-                PyStackless_Schedule(None, 1)  # remove=1
+                coio_c_wait(&self.wakeup_ev, NULL)
             elif got == 0:  # EOF
                 return n
             else:
@@ -1152,8 +1139,7 @@ cdef class nbfile:
         if timeout is None:
             event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
                       HandleCWakeup, <void *>wakeup_tasklet)
-            event_add(&self.wakeup_ev, NULL)
-            PyStackless_Schedule(None, 1)  # remove=1
+            coio_c_wait(&self.wakeup_ev, NULL)
             return True
         else:
             timeout_float = timeout
@@ -1166,8 +1152,7 @@ cdef class nbfile:
                       HandleCTimeoutWakeup, <void *>wakeup_tasklet)
             # TODO(pts): Does libevent need a permanent (non-stack) reference
             # to tv? If so, this might segfault.
-            event_add(&self.wakeup_ev, &tv)
-            if PyStackless_Schedule(None, 1):  # remove=1
+            if coio_c_wait(&self.wakeup_ev, &tv):
                 return False  # timed out
             else:
                 return True
@@ -1221,8 +1206,7 @@ cdef class nbfile:
                 wakeup_tasklet = PyStackless_GetCurrent()
                 event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
                           HandleCWakeup, <void *>wakeup_tasklet)
-                event_add(&self.wakeup_ev, NULL)
-                PyStackless_Schedule(None, 1)  # remove=1
+                coio_c_wait(&self.wakeup_ev, NULL)
             elif got == 0:  # EOF
                 n = self.read_eb.off
                 break
@@ -1265,8 +1249,7 @@ cdef class nbfile:
                 wakeup_tasklet = PyStackless_GetCurrent()
                 event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
                           HandleCWakeup, <void *>wakeup_tasklet)
-                event_add(&self.wakeup_ev, NULL)
-                PyStackless_Schedule(None, 1)  # remove=1
+                coio_c_wait(&self.wakeup_ev, NULL)
             elif got == 0:
                 return ''
             else:
@@ -1346,8 +1329,7 @@ cdef class nbfile:
                 wakeup_tasklet = PyStackless_GetCurrent()
                 event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
                           <void *>wakeup_tasklet)
-                event_add(&self.wakeup_ev, NULL)
-                PyStackless_Schedule(None, 1)  # remove=1
+                coio_c_wait(&self.wakeup_ev, NULL)
             elif got == 0:  # EOF, return remaining bytes ('' or partial line)
                 n = read_eb.off
                 buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, n)
@@ -1432,13 +1414,11 @@ cdef object handle_eagain(nbsocket self, int evtype):
     if self.timeout_value < 0.0:
         event_set(&self.wakeup_ev, self.fd, evtype,
                   HandleCWakeup, <void *>wakeup_tasklet)
-        event_add(&self.wakeup_ev, NULL)
-        PyStackless_Schedule(None, 1)  # remove=1
+        coio_c_wait(&self.wakeup_ev, NULL)
     else:
         event_set(&self.wakeup_ev, self.fd, evtype,
                   HandleCTimeoutWakeup, <void *>wakeup_tasklet)
-        event_add(&self.wakeup_ev, &self.tv)
-        if PyStackless_Schedule(None, 1):  # remove=1
+        if coio_c_wait(&self.wakeup_ev, &self.tv):
             # Same error message as in socket.socket.
             raise socket.error('timed out')
 
@@ -1450,13 +1430,11 @@ cdef object handle_ssl_eagain(nbsslsocket self, int evtype):
     if self.timeout_value < 0.0:
         event_set(&self.wakeup_ev, self.fd, evtype,
                   HandleCWakeup, <void *>wakeup_tasklet)
-        event_add(&self.wakeup_ev, NULL)
-        PyStackless_Schedule(None, 1)  # remove=1
+        coio_c_wait(&self.wakeup_ev, NULL)
     else:
         event_set(&self.wakeup_ev, self.fd, evtype,
                   HandleCTimeoutWakeup, <void *>wakeup_tasklet)
-        event_add(&self.wakeup_ev, &self.tv)
-        if PyStackless_Schedule(None, 1):  # remove=1
+        if coio_c_wait(&self.wakeup_ev, &self.tv):
             # Same error message as in socket.socket.
             raise socket.error('timed out')
 
@@ -2341,8 +2319,7 @@ cdef class sleeper:
             tv.tv_sec = <long>duration
             tv.tv_usec = <unsigned int>(
                 (duration - <float>tv.tv_sec) * 1000000.0)
-            event_add(&self.wakeup_ev, &tv)
-            PyStackless_Schedule(None, 1)  # remove=1
+            coio_c_wait(&self.wakeup_ev, &tv)
 
 def sleep(float duration):
     """Non-blocking drop-in replacement for time.sleep."""

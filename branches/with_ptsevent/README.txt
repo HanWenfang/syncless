@@ -208,6 +208,94 @@ syncless.coio.DnsLookupError: [Errno -65] reply truncated or ill-formed
 5. Don't use non-blocking I/O on the same filehandle from multiple
    coroutines (tasklets): there may be race conditions.
 
+FAQ
+~~~
+Q1. I have created quite a few tasklets, put them into the runnables list.
+    How do I make my program run until there are no tasklets? Currently my
+    the process exists as soon as the main tasklet returns.
+
+A1. Call `stackless.schedule_remove()' at the end of your main tasklet code.
+
+    This would make your program run while there are tasklets on the
+    runnables list, or some tasklets are blocked on Syncless I/O.
+
+Q2. What is the `.scheduled' value for tasklets blocked on Syncless I/O?
+
+A2. The value is False, since they are not on the runnables list, and they
+    are not waiting in a channel.
+
+    After I/O is available, and the Syncless event wakeup tasklet gets
+    scheduled, the wakeup tasklet puts back the blocked tasklet to the
+    runnables list, so blocked_tasklet.scheduled becomes True.
+
+Q3. Is it possible to cancel (interrupt) a coio.sleep()?
+
+A3. Yes. If you have a reference to the sleeping tasklet, just send an
+    exception to it in a stackless.bomb, and then insert the tasklet back to
+    the runnables list, and the sleep will be interrupted.
+
+    For example, the following program finishes immediately (not needing 5
+    seconds).
+
+      import stackless
+      from syncless import coio
+      sleep_done_channel = stackless.channel()
+      def Sleeper():
+        try:
+          coio.sleep(5)
+        except AssertionError:
+          sleep_done_channel.send(None)
+      tasklet_obj = stackless.tasklet(Sleeper)()
+      stackless.schedule()  # Start Sleeper and start sleeping.
+      # ...
+      tasklet_obj.tempval = stackless.bomb(AssertionError)
+      tasklet_obj.insert()  # Interrupt the sleep.
+      sleep_done_channel.receive()
+
+    Please note that interrupting can be dangerous if you are not excatly
+    sure that the other tasklet is doing a blocking Syncless I/O operation
+    (such as coio.sleep). Please use synchronization mechanisms (such as
+    channels) to make sure that a sleep is going on in the tasklet.
+
+    Even simpler: it is possible to interrupt a sleep just without sending a
+    bomb. Example (doesn't need 5 seconds):
+
+      import stackless
+      from syncless import coio
+      sleep_done_channel = stackless.channel()
+      def Sleeper():
+        coio.sleep(5)
+      tasklet_obj = stackless.tasklet(Sleeper)()
+      stackless.schedule()  # Start Sleeper and start sleeping.
+      # ...
+      tasklet_obj.insert()  # Interrupt the sleep.
+      sleep_done_channel.receive()
+
+Q4. Is it possible to cancel (interrupt) a blocking Syncless I/O operation?
+
+A4. Yes, by sending an exception wrapped to a stackless.bomb to the tasklet,
+    and reinserting it to the runnables list. See A3 for more details.
+    (Please note that coio.sleep is one of the blocking Syncless I/O
+    operations.)
+
+Q5. Is it possible to insert a tasklet which is blocked on a Syncless I/O
+    operation back to the runnables list?
+
+A5. Yes, you can use tasklet_obj.insert(), tasklet_obj.run() (or any other
+    means to insert the tasklet to the runnables list).
+
+    Please note, however, that for non-sleep I/O operations the tasklet
+    would retry the I/O operation (with the timeout period restarted), so it
+    will most probably become blocked again (and thus removed from the
+    runnables list). To prevent that, send an exception wrapped to a
+    stackless.bomb to the tasklet by setting its tempval before reinserting
+    it to the runnables list. See A3 and examples/demo_multi_read_timeout.py
+    for more examples.
+
+Q6. How do I receive on a channel with a timeout?
+
+    See TimeoutReceive in examples/demo_multi_read_timeout.py.
+
 Planned features
 ~~~~~~~~~~~~~~~~
 * TODO(pts): mksleep(secs) and cancel_sleep()
