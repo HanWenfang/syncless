@@ -65,14 +65,14 @@ def patch_stderr():
 
 def patch_stdin_and_stdout():
   # !! patch stdin and stdout separately (for sys.stdout.fileno())
-  # TODO(pts): add line buffering support and copy the existing settings
   if (not isinstance(sys.stdin,  coio.nbfile) or
       not isinstance(sys.stdout, coio.nbfile)):
+    # Unfortunately it's not possible to get the current buffer size from a
+    # Python file object, so we just set up the defaults here.
     write_buffer_limit = 8192
     import os
-    # Unfortunately it's not possible to get the current buffer size.
-    #if os.isatty(sys.stdout.fileno()):
-    #  write_buffer_limit = 1  # Set up line buffering.
+    if os.isatty(sys.stdout.fileno()):
+      write_buffer_limit = 1  # Set up line buffering.
     new_stdinout = coio.nbfile(sys.stdin.fileno(), sys.stdout.fileno(),
                                write_buffer_limit=write_buffer_limit,
                                do_close=0)

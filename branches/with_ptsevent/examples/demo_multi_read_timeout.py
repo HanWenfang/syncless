@@ -24,7 +24,7 @@ def Asker(timeout, age_answer_channel):
   print 'You have %s seconds altogether to tell me your age.'
   while True:
     sys.stdout.write('How old are you? ')
-    sys.stdout.flush()  # !!
+    sys.stdout.flush()
     answer = sys.stdin.readline()
     assert answer
     answer = answer.strip()
@@ -72,4 +72,3 @@ if __name__ == '__main__':
     print 'You were too slow entering your age.'
   else:
     print 'Got age: %r.' % age
-  sys.stdout.flush()  # !!

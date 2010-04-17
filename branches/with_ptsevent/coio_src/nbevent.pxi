@@ -957,7 +957,7 @@ cdef class nbfile:
 
         if wlimit == 1:  # Line buffering.
             k = n
-            while n > 0 and (<char*>p)[k - 1] != c'\n':
+            while k > 0 and (<char*>p)[k - 1] != c'\n':
                 k -= 1
             if k == 0:  # No newline yet, so add the whole p to write_eb.
                 evbuffer_expand(&self.write_eb, self.c_min_read_buffer_size)
@@ -996,7 +996,7 @@ cdef class nbfile:
                     evbuffer_expand(&self.write_eb,
                                     self.c_min_read_buffer_size)
                 evbuffer_add(&self.write_eb, <void_constp>p, keepc)
-        else:
+        else:  # Non-line buffering.
             if self.write_eb.off != 0:  # Expand and flush if not empty.
                 if self.write_eb.totallen == 0:
                     evbuffer_expand(&self.write_eb, wlimit)
