@@ -282,7 +282,11 @@ Q5. Is it possible to insert a tasklet which is blocked on a Syncless I/O
     operation back to the runnables list?
 
 A5. Yes, you can use tasklet_obj.insert(), tasklet_obj.run() (or any other
-    means to insert the tasklet to the runnables list).
+    means to insert the tasklet to the runnables list). But you are not
+    allowed to change the tempval (None by default) of a tasklet blocked on
+    a Syncless I/O operation. If you do so, event_del() won't be called, and
+    you'll get spurious events later (with exceptions caused by spurious
+    tasklet_obj.insert()).
 
     Please note, however, that for non-sleep I/O operations the tasklet
     would retry the I/O operation (with the timeout period restarted), so it
@@ -294,7 +298,11 @@ A5. Yes, you can use tasklet_obj.insert(), tasklet_obj.run() (or any other
 
 Q6. How do I receive on a channel with a timeout?
 
-    See TimeoutReceive in examples/demo_multi_read_timeout.py.
+    Call coio.receive_with_timeout.
+    
+    But please consider that cleaning up after a timeout is cumbersome. How
+    do you tell the other tasklets to stop generating data on the channel?
+    You'd better create dedicated tasklets for tasks you want to time out.
 
 Planned features
 ~~~~~~~~~~~~~~~~

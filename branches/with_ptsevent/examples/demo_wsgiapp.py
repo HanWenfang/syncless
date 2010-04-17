@@ -45,7 +45,7 @@ def WsgiApp(env, start_response):
       return 'Missing DNS resolver!'
     try:
       result = coio.dns_resolve_ipv4(hostname, 0).values
-    except coio.DNSLookupError, e:
+    except coio.DnsLookupError, e:
       # Example e.__class__.__name__: 'NXDOMAIN', 'Timeout' (after >20 sec).
       return 'Resolve error: %s' % e.__class__.__name__
     return '\n<br>'.join(map(cgi.escape, map(repr, result)))

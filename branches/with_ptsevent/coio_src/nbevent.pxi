@@ -183,6 +183,7 @@ cdef extern from "stackless_api.h":
     # Return -1 on exception, 0 on OK.
     int PyTasklet_Insert(tasklet task) except -1
     int PyTasklet_Remove(tasklet task) except -1
+    int PyTasklet_Alive(tasklet task)
     tasklet PyStackless_GetCurrent()
     #tasklet PyTasklet_New(type type_type, object func);
 cdef extern from "./coio_c_helper.h":
@@ -379,23 +380,29 @@ cdef int nbevent_read(evbuffer_s *read_eb, int fd, int n):
         #    read_eb.cb(read_eb, read_eb.off - got, read_eb.off, read_eb.cbarg)
     return got
 
+# Since this function returns void, exceptions raised (e.g. if <tasklet>arg)
+# will be ignored (by Pyrex?) and printed to stderr as something like:
+# Exception AssertionError: 'foo' in 'coio.HandleCWakeup' ignored
+cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
+    PyTasklet_Insert(<tasklet>arg)
+
+cdef void HandleCSleepWakeup(int fd, short evtype, void *arg) with gil:
+    # Set tempval so coio_c_wait doesn't have to call event_del(...).
+    if (<tasklet>arg).tempval is None:
+        (<tasklet>arg).tempval = True
+    PyTasklet_Insert(<tasklet>arg)
+
 cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
     # PyStackless_Schedule will return this.
     # No easier way to assign a bool in Pyrex.
+    # TODO(pts): make these values (True, False) special instead of
+    # == Py_None in coio_c_wait.
     if evtype == c_EV_TIMEOUT:
         # TODO(pts): Create a bomb here so retval is not needed.
         (<tasklet>arg).tempval = True
     else:
         (<tasklet>arg).tempval = False
     PyTasklet_Insert(<tasklet>arg)  # No NULL- or type checking.
-
-# Since this function returns void, exceptions raised (e.g. if <tasklet>arg)
-# will be ignored (by Pyrex?) and printed to stderr as something like:
-# Exception AssertionError: 'foo' in 'coio.HandleCWakeup' ignored
-cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
-    # Set tempval so coio_c_wait doesn't have to call event_del(...).
-    (<tasklet>arg).tempval = True
-    PyTasklet_Insert(<tasklet>arg)
 
 
 cdef class evbuffer:
@@ -2313,8 +2320,8 @@ cdef class sleeper:
         cdef timeval tv
         if duration > 0:
             wakeup_tasklet = PyStackless_GetCurrent()
-            evtimer_set(&self.wakeup_ev, HandleCWakeup, <void*>wakeup_tasklet)
-            event_add(&self.wakeup_ev, NULL)
+            evtimer_set(&self.wakeup_ev, HandleCSleepWakeup,
+                        <void*>wakeup_tasklet)
             # TODO(pts): Optimize this for integers.
             tv.tv_sec = <long>duration
             tv.tv_usec = <unsigned int>(
@@ -2333,6 +2340,38 @@ def sleep(float duration):
     """
     # TODO(pts): Reuse existing sleepers (thread-local?) to speed this up.
     return sleeper().sleep(duration)
+
+
+# Helper method used by receive_with_timeout.
+def ReceiveSleepHelper(float timeout, tasklet receiver_tasklet):
+  if sleeper().sleep(timeout):  # If timeout has been reached or woken up.
+    if PyTasklet_Alive(receiver_tasklet):
+      # This call immediately activates receiver_tasklet.
+      receiver_tasklet.raise_exception(IndexError)
+
+
+def receive_with_timeout(object timeout, object receive_channel,
+                         object default_value=None):
+  """Receive from receive_channel with a timeout.
+
+  Args:
+    timeout: Number of seconds of timeout, or None if infinite.
+  """
+  cdef timeout_float
+  if timeout is None:  # Infinite timeout.
+    return receive_channel.receive()
+  sleeper_tasklet = stackless.tasklet(ReceiveSleepHelper)(
+      timeout, stackless.current)
+  try:
+    received_value = receive_channel.receive()
+  except IndexError, e:  # Sent by sleeper_tasklet.
+    # The `except' above would segfault without a `, e'.
+    return default_value
+  if PyTasklet_Alive(sleeper_tasklet):
+    # We may reach this if timeout <= 0 and sleeper has not run yet.
+    # Wake up sleep() and make it return None.
+    PyTasklet_Insert(sleeper_tasklet)
+  return received_value
 
 
 def fdopen(int fd, mode='r', int bufsize=-1,
