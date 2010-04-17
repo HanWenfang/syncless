@@ -2,7 +2,7 @@ PYTHON=stackless2.6
 
 # Ignoring DeprecationWarning since Pyrex does an `import md5'
 PYREXC=$(PYTHON) -W ignore::DeprecationWarning -c "from Pyrex.Compiler.Main import main; from Pyrex.Compiler.Errors import warnings_issued; warnings_issued['or_none'] = 1; main(command_line=1)"
-# Anything before 0.9.9 is not good enugh, because it has the exception
+# Anything before 0.9.9 is not good enough, because it has the exception
 # handling bug
 # http://code.google.com/p/pts-mini-gpl/source/browse/trunk/excbug/README.txt
 PYREX_MIN_VERSION=0.9.9
