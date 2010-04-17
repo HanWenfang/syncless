@@ -2319,12 +2319,20 @@ cdef class sleeper:
             tv.tv_sec = <long>duration
             tv.tv_usec = <unsigned int>(
                 (duration - <float>tv.tv_sec) * 1000000.0)
-            coio_c_wait(&self.wakeup_ev, &tv)
+            return coio_c_wait(&self.wakeup_ev, &tv)
 
 def sleep(float duration):
-    """Non-blocking drop-in replacement for time.sleep."""
+    """Non-blocking drop-in replacement for time.sleep.
+
+    Returns:
+      None is returned if duration was not positive. Otherwise, if
+      stackless.current was manually reinserted to the runnables list while
+      it was sleeping, then the stackless.current.tempval value before the
+      reinsertion is returned. Otherwise (when the full sleep amount was slept
+      through), True is returned.
+    """
     # TODO(pts): Reuse existing sleepers (thread-local?) to speed this up.
-    sleeper().sleep(duration)
+    return sleeper().sleep(duration)
 
 
 def fdopen(int fd, mode='r', int bufsize=-1,

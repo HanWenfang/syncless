@@ -21,7 +21,7 @@ from syncless import patch
 
 
 def Asker(timeout, age_answer_channel):
-  print 'You have %s seconds altogether to tell me your age.'
+  print 'You have %s seconds altogether to tell me your age.' % timeout
   while True:
     sys.stdout.write('How old are you? ')
     sys.stdout.flush()
@@ -42,19 +42,26 @@ def Asker(timeout, age_answer_channel):
 
 def TimeoutReceive(timeout, receive_channel, default_value=None):
   """Receive from receive_channel with a timeout."""
-  # TODO(pts): Speed: refactor this and rewrite in Pyrex if needed.
-  got_value = []
+  # TODO(pts): Speed: refactor w/o propagation_channel and rewrite in Pyrex if
+  # needed.
+  assert timeout > 0
+  propagation_channel = stackless.channel()
+  propagation_channel.preference = 1  # Prefer the sender.
+  def Propagator():
+    received_value = receive_channel.receive()
+    if sleeper_tasklet.alive:
+      sleeper_tasklet.tempval = False
+      sleeper_tasklet.insert()
+    propagation_channel.send(received_value)
   def Sleeper():
-    coio.sleep(timeout)
-    if not got_value:
-      receive_channel.send(default_value)  # Works with any channel preference.
+    if coio.sleep(timeout):  # If timeout has been reached:
+      propagation_channel.send(default_value)
+      if propagator_tasklet.alive:
+        # This is the only way to reliably kill a tasklet blocked on a channel.
+        propagator_tasklet.kill()
+  propagator_tasklet = stackless.tasklet(Propagator)()
   sleeper_tasklet = stackless.tasklet(Sleeper)()
-  value = receive_channel.receive()
-  got_value.append(True)
-  if sleeper_tasklet.alive:  # If still not finished:
-    # Cancel sleep immediately, clean up when scheduled.
-    sleeper_tasklet.insert()
-  return value
+  return propagation_channel.receive()
 
 
 if __name__ == '__main__':
