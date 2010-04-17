@@ -20,8 +20,8 @@ from syncless import coio
 from syncless import patch
 
 
-def Asker(timeout_arg):
-  print 'You have %s seconds altogether to tell me your age.' % timeout_arg
+def Asker(timeout, age_answer_channel):
+  print 'You have %s seconds altogether to tell me your age.' % timeout
   while True:
     sys.stdout.write('How old are you? ')
     sys.stdout.flush()
@@ -36,31 +36,9 @@ def Asker(timeout_arg):
     if age < 3:
       print 'That would be too young. Please enter a valid age.'
       continue
-    assert age != 111, 'simulated bug'
-    return age
+    age_answer_channel.send(age)
+    return
 
-def RunInTaskletWithTimeout(function, timeout, default_value=None,
-                            args=(), kwargs={}):
-  # TODO(pts): Productionize this.
-  results = []
-  def Worker(sleeper_tasklet, function, args, kwargs):
-    try:
-      results.append(function(*args, **kwargs))
-    except TaskletExit:
-      raise
-    except:
-      results.extend(sys.exc_info())
-    if sleeper_tasklet.alive:
-      sleeper_tasklet.insert()  # Interrupt coio.sleep().
-  worker_tasklet = stackless.tasklet(Worker)(
-      stackless.current, function, args, kwargs)
-  if coio.sleep(timeout) and worker_tasklet.alive:
-    worker_tasklet.kill()
-    return default_value
-  else:
-    if len(results) > 1:  # Propagate exception.
-      raise results[0], results[1], results[2]
-    return results[0]
 
 if __name__ == '__main__':
   patch.patch_stdin_and_stdout()  # sets sys.stdin = sys.stdout = ...
@@ -68,8 +46,11 @@ if __name__ == '__main__':
   age_answer_channel = stackless.channel()
   age_answer_channel.preference = 1  # Prefer the sender.
   timeout = 3
-  age = RunInTaskletWithTimeout(Asker, timeout, None, (timeout,))
+  asker_tasklet = stackless.tasklet(Asker)(timeout, age_answer_channel)
+  age = coio.receive_with_timeout(timeout, age_answer_channel)
   if age is None:  # Timed out.
+    if asker_tasklet.alive:
+      asker_tasklet.kill()
     print 'You were too slow entering your age.'
   else:
     print 'Got age: %r.' % age
