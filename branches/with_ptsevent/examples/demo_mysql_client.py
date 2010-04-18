@@ -36,7 +36,8 @@ def Worker(db_conn, num_iterations, progress_channel):
         progress_channel.send(i)
         b += 1
 
-if __name__ == '__main__':
+
+def main():
   # Without patch.patch_socket() or patch.patch_mysql_connector() the
   # counter below would jump from 0 to 1000 in one big step. With this
   # patch, MySQL socket communication is done with Syncless, so the counter
@@ -69,6 +70,7 @@ if __name__ == '__main__':
     num_iterations = int(sys.argv)
   else:
     num_iterations = 1000
+
   progress_channel = stackless.channel()
   progress_channel.preference = 1  # Prefer the sender.
   stackless.tasklet(Worker)(db_conn, num_iterations, progress_channel)
@@ -85,3 +87,12 @@ if __name__ == '__main__':
   # to receive, so Worker did multiple iterations per one
   # progress_channel.receive().
   sys.stderr.write('done, receive_count=%d\n' % receive_count)
+  # Needed for exit because we might have done DNS lookups with coio (evdns).
+  sys.exit(0)
+
+
+if __name__ == '__main__':
+  # Moving all work to another tasklet because stackless.main is not allowed
+  # to be blocked on a channel.receive() (StopIteration would be raised).
+  stackless.tasklet(main)()
+  stackless.schedule_remove()

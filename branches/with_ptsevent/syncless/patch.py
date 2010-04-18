@@ -17,12 +17,36 @@ __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import sys
 import types
-from syncless import coio
 
 # TODO(pts): Have a look at Concurrence (or others) for patching everything.
 
+fake_create_connection = None
+
+def get_fake_create_connection():
+  global fake_create_connection
+  if fake_create_connection is None:
+    import socket
+    import coio
+    fake_create_connection_globals = {
+        'getaddrinfo': coio.partial_getaddrinfo,
+        'socket': coio.nbsocket,
+        'SOCK_STREAM': socket.SOCK_STREAM,
+        '_GLOBAL_DEFAULT_TIMEOUT': socket._GLOBAL_DEFAULT_TIMEOUT,
+    }
+    fake_create_connection = types.FunctionType(
+      socket.create_connection.func_code, fake_create_connection_globals,
+      None, socket.create_connection.func_defaults)
+    fake_create_connection.__doc__ = (
+        """Non-blocking drop-in replacement for socket.create_connection.""")
+  return fake_create_connection
+
+
 def _populate_socket_module_with_coio(socket_module):
   """Populate a socket module with coio non-blocking functions and classes."""
+  from syncless import coio
+  # There is no need to afraid that ssl.SSLSocket would pick up coio.nbsocket
+  # as its base class, because when `coio' is loaded above, it loads `ssl' as
+  # well, so loading `ssl' happens before the following assignment.
   socket_module.socket = coio.nbsocket
   # TODO(pts): Maybe make this a class?
   socket_module._realsocket = coio.new_realsocket
@@ -37,6 +61,7 @@ def _populate_socket_module_with_coio(socket_module):
   # TODO(pts): Better indicate NotImplementedError
   socket_module.getaddrinfo = None
   socket_module.getnameinfo = None
+  socket_module.create_connection = get_fake_create_connection()
   return socket_module
 
 fake_coio_socket_module = None
@@ -54,28 +79,43 @@ def get_fake_coio_socket_module():
     _populate_socket_module_with_coio(fake_coio_socket_module)
   return fake_coio_socket_module
 
+
 def patch_socket():
   """Monkey-patch the socket module for non-blocking I/O."""
   import socket
   _populate_socket_module_with_coio(socket)
 
+
+def patch_ssl():
+  """Monkey-patch the standard ssl module for non-blocking I/O."""
+  import ssl
+  from syncless import coio
+  ssl.SSLSocket = coio.nbsslsocket
+  # There is no need to patch ssl.wrap_socket since ssl.SSLSocket is already
+  # patched.
+  #ssl.wrap_socket = coio.ssl_wrap_socket
+
 def patch_mysql_connector():
   from mysql.connector import connection
   connection.socket = get_fake_coio_socket_module()
+
 
 def patch_time():
   import time
   time.sleep = sleep
 
+
 def ExceptHook(orig_excepthook, *args):
+  from syncless import coio
   try:
     old_blocking = coio.set_fd_blocking(2, True)
     orig_excepthook(*args)
   finally:
     coio.set_fd_blocking(2, old_blocking)
 
+
 def patch_stderr():
-  # !! add line buffering (or copy it)
+  from syncless import coio
   if not isinstance(sys.stderr, coio.nbfile):
     new_stderr = coio.fdopen(sys.stderr.fileno(), 'w', bufsize=0, do_close=0)
     logging = sys.modules.get('logging')
@@ -90,7 +130,9 @@ def patch_stderr():
     orig_excepthook = sys.excepthook
     sys.excepthook = lambda *args: ExceptHook(orig_excepthook, *args)
 
+
 def patch_stdin_and_stdout():
+  from syncless import coio
   # !! patch stdin and stdout separately (for sys.stdout.fileno())
   if (not isinstance(sys.stdin,  coio.nbfile) or
       not isinstance(sys.stdout, coio.nbfile)):
@@ -104,6 +146,7 @@ def patch_stdin_and_stdout():
                                write_buffer_limit=write_buffer_limit,
                                do_close=0)
     sys.stdin = sys.stdout = new_stdinout
+
 
 def fix_ssl_makefile():
   """Fix the reference counting in ssl.SSLSocket.makefile().
@@ -121,6 +164,7 @@ def fix_ssl_makefile():
       return socket._fileobject(self, mode, bufsize, close=True)
     ssl.SSLSocket.makefile = types.MethodType(
         SslMakeFileFix, None, ssl.SSLSocket)
+
 
 def fix_ssl_init_memory_leak():
   """Fix the memory leak in ssl.SSLSocket.__init__ in Python 2.6.4.

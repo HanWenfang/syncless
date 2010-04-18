@@ -232,6 +232,7 @@ def LinkHelper():
 
 # TODO(pts): Experiment calling these from Python instead of C.
 def MainLoop(tasklet link_helper_tasklet):
+    # !! fix Segmentation fault with tbug.py; needs link_helper_tasklet
     #cdef PyTaskletObject *pprev
     #cdef PyTaskletObject *pnext
     cdef PyTaskletObject *ptemp
@@ -323,7 +324,7 @@ cdef void set_fd_nonblocking(int fd):
         fcntl3(fd, F_SETFL, old | O_NONBLOCK)
 
 def set_fd_blocking(int fd, is_blocking):
-    """Set a file descriptor blocking or nonblocking.
+    """Set a file descriptor blocking or non-blocking.
 
     Please note that this may affect more than expected, for example it may
     affect sys.stderr when called for sys.stdout.
@@ -743,7 +744,7 @@ cdef enum dummy:
 cdef class nbfile:
     """A non-blocking file (I/O channel).
 
-    The filehandles are assumed to be nonblocking.
+    The filehandles are assumed to be non-blocking.
 
     Please note that nbfile supports line buffering (write_buffer_limit=1),
     but it doesn't set up write buffering by default for terminal devices.
@@ -1762,6 +1763,24 @@ cdef class nbsocket:
         # TODO(pts): Verify proper close semantics for _realsocket emulation.
         return nbfile(fd, fd, bufsize, bufsize, do_close=1, close_ref=self)
 
+
+def new_realsocket(*args):
+    """Non-blocking drop-in replacement for socket._realsocket.
+
+    The most important difference between socket.socket and socket._realsocket
+    is that socket._realsocket.close() closes the filehandle immediately,
+    while socket.socket.close() just breaks the reference.
+    """
+    return nbsocket(*args).setdoclose(1)
+
+
+def new_realsocket_fromfd(*args):
+    """Non-blocking drop-in replacement for socket.fromfd."""
+    return nbsocket(socket_fromfd(*args)).setdoclose(1)
+
+
+# --- SSL sockets
+
 cdef int SSL_ERROR_EOF
 cdef int SSL_ERROR_WANT_READ
 cdef int SSL_ERROR_WANT_WRITE
@@ -1774,6 +1793,7 @@ try:
     SSL_ERROR_WANT_WRITE = ssl.SSL_ERROR_WANT_WRITE
 except ImportError:
     sslsocket_impl = None
+    ssl = None
 
 
 cdef class sockwrapper:
@@ -1786,6 +1806,7 @@ cdef class sockwrapper:
     property _sock:
         def __get__(self):
             return self.c_sock
+
 
 
 # !! TODO(pts): implement all NotImplementedError
@@ -1828,10 +1849,11 @@ cdef class nbsslsocket:
     # Of type ssl.SSLSocket.
     cdef object sslsock
     # Of type ssl._ssl.SSLType, i.e. 'ssl.SSLContext' defined in
-    # modules/_ssl.c.
+    # modules/_ssl.c; or None if not connected.
     cdef object sslobj
 
     def __init__(nbsslsocket self, *args, **kwargs):
+        cdef int do_handshake_now
         if 'sslsocket_impl' in kwargs:
             my_sslsocket_impl = kwargs.pop('sslsocket_impl')
         else:
@@ -1846,6 +1868,13 @@ cdef class nbsslsocket:
             args[0] = sockwrapper(args[0])
         else:
             raise TypeError('bad type for underlying socket: ' + str(args[0]))
+        if len(args) > 7:
+            raise NotImplementedError(
+                'do_handshake_on_connect= specified as positional argument')
+        do_handshake_now = 0
+        if kwargs.get('do_handshake_on_connect'):
+            kwargs['do_handshake_on_connect'] = False
+            do_handshake_now = 1
 
         # TODO(pts): Make sure we do a non-blocking handshake (do_handshake)
         # in my_sslsocket_impl.__init__. Currently it's blocking.
@@ -1857,22 +1886,33 @@ cdef class nbsslsocket:
           for attr in socket._delegate_methods:
             delattr(self.sslsock, attr)
         self.realsock = self.sslsock._sock
-        # This may be None so far.
-        # TODO(pts): Update self.sslobj in .unwrap, .shutdown, .close,
-        # .connect.
         self.sslobj = self.sslsock._sslobj
         self.fd = self.realsock.fileno()
+        timeout = self.realsock.gettimeout()
         # It seems that either of these setblocking calls are enough.
         self.realsock.setblocking(False)
         #self.sslsock.setblocking(False)
         self.timeout_value = -1.0
 
+        # Do the handshake as late as possible, so that we are already
+        # non-blocking.
+        # We do the handshake with infinite timeout, because
+        # ssl.SSLSocket.__init__ does that.
+        if do_handshake_now:
+            # TODO(pts): Maybe set this in a `finally:' block?
+            self.sslsock.do_handshake_on_connect = True
+            if self.sslobj:
+                self.do_handshake()
+
+        # TODO(pts): Set this in a `finally:' block.
+        if timeout is not None:
+            self.timeout_value = timeout
+            
     def fileno(nbsslsocket self):
         return self.fd
 
     def dup(nbsslsocket self):
         """Duplicates to a non-SSL socket (as in SSLSocket.dup)."""
-        # !! TODO(pts): Is settimeout copied?
         # TODO(pts): Skip the fcntl2 in the set_fd_nonblocking call in the
         # constructor.
         return nbsocket(self.realsock.dup())
@@ -2299,19 +2339,18 @@ cdef class nbsslsocket:
         self.sslsock._makefile_refs += 1
         return socket._fileobject(self, mode, bufsize, close=True)
 
-def new_realsocket(*args):
-    """Non-blocking drop-in replacement for socket._realsocket.
+if ssl:
+    _fake_ssl_globals = {'SSLSocket': nbsslsocket}
+    ssl_wrap_socket = types.FunctionType(
+      ssl.wrap_socket.func_code, _fake_ssl_globals,
+      None, ssl.wrap_socket.func_defaults)
+    ssl_wrap_socket.__doc__ = (
+        """Non-blocking drop-in replacement for ssl.wrap_socket.""")
+else:
+    globals()['nbsslsocket'] = None  
 
-    The most important difference between socket.socket and socket._realsocket
-    is that socket._realsocket.close() closes the filehandle immediately,
-    while socket.socket.close() just breaks the reference.
-    """
-    return nbsocket(*args).setdoclose(1)
 
-
-def new_realsocket_fromfd(*args):
-    """Non-blocking drop-in replacement for socket.fromfd."""
-    return nbsocket(socket_fromfd(*args)).setdoclose(1)
+# --- Sleeping.
 
 cdef class sleeper:
     # We must keep self.wakeup_ev on the heap (not on the C stack), because

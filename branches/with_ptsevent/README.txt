@@ -219,6 +219,10 @@ A1. Call `stackless.schedule_remove()' at the end of your main tasklet code.
     This would make your program run while there are tasklets on the
     runnables list, or some tasklets are blocked on Syncless I/O.
 
+    Unfortunately this doesn't work (your program will run forever) if it
+    has done any DNS lookups (like with coio.gethostbyname), because evdns
+    registers and keeps additional event handlers.
+
 Q2. What is the `.scheduled' value for tasklets blocked on Syncless I/O?
 
 A2. The value is False, since they are not on the runnables list, and they
@@ -304,7 +308,7 @@ Q6. How do I receive on a channel with a timeout?
     do you tell the other tasklets to stop generating data on the channel?
     You'd better create dedicated tasklets for tasks you want to time out.
 
-Q7. Can I use my existing DNS, TCP, HTTP, FTP, urllib, urllib2, MySQL,
+Q7. Can I use my existing DNS, TCP, HTTP, HTTPS, FTP, urllib, urllib2, MySQL,
     memcached, Redis, Tokyo Tyrant etc. client with Syncless?
 
 A7. If your client software is written in pure Python, and it uses the
@@ -313,11 +317,10 @@ A7. If your client software is written in pure Python, and it uses the
 
       from syncless import patch
       patch.patch_socket()
+      patch.patch_ssl()  # Only if SSL (e.g. HTTPS) support is needed.
 
     somewhere in your script initialization. This makes all DNS queries,
     TCP-based and other socket-based clients non-blocking.
-
-    Please note that there is no patch for HTTPS, FTPS and SSL in general yet.
 
     If your client software is non-pure Python (such as a Python extension
     written in C, Pyrex or Cython), then non-blocking functionality will
@@ -354,8 +357,28 @@ Q8. How do I connect to a MySQL database with Syncless?
       (http://sourceforge.net/projects/mysql-python/files/), but it seems
       to be less maintained than myconnpy.
 
+Q9. How do I make my SSL connections (client and server) non-blocking?
+
+A9. Use the coio.nbsslsocket class as a drop-in non-blocking replacement for
+    ssl.SSLSocket. If you don't want to modify your source code, call this
+    somewhere the beginning in your script:
+    
+      from syncless import patch
+      patch.patch_socket()  # DNS lookups and socket.socket() non-blocking.
+      patch.patch_ssl()     # Make ssl.SSLSocket non-blocking.
+
+    This makes both the connecting handshake operation and the data
+    transfers (reads and writes) non-blocking.
+
+    Patching affects only Python code using the standard `ssl' Python
+    module. Patching doesn't affect the non-standard `openssl' Python module
+    or C extensions using libssl directly. Maybe in the future Syncless will
+    have a patch.patch_openssl(), but C extensions will never be patched, so
+    please make sure that you create all your SSL sockets in Python code.
+
 Planned features
 ~~~~~~~~~~~~~~~~
+* TODO(pts): Report libevent bug that evdns events are not EVLIST_INTERNAL.
 * TODO(pts): mksleep(secs) and cancel_sleep()
 * TODO(pts): Document the side effect of import syncless.coio on Ctrl-<C>.
 * TODO(pts): TCP communication error handling in the WSGI server
@@ -373,6 +396,7 @@ Planned features
 * TODO(pts): Strip the coio.so files upon installation? It seems to be still
              importable. Some Python installations autostrip. Why not ours?
 * TODO(pts): Fix the AttributeError in socket.socket.close().
+* TODO(pts): channel.send_exception() with a traceback. (Wait for receiver?)
 * !! TODO(pts): Handle starving (when one worker is very fast, even Ctrl-<C>
   is delayed)
 

@@ -519,7 +519,7 @@ def getfqdn(name=''):
 
     This function returns data from /etc/hosts as read at module load time.
     """
-    cdef char* cname
+    cdef char *cname
     cname = NULL
     if not name:
       name = socket.gethostname()
@@ -577,7 +577,42 @@ def gethostbyname_ex(char *name):
     else:
         return (canonical, [name], ips)
 
+# TODO(pts): Implement socket.getnameinfo()
+
 # TODO(pts): Implement socket.getaddrinfo()
 # >>> socket.getaddrinfo('www.ipv6.org', 0, socket.AF_INET6)
 # [(10, 1, 6, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0)), (10, 2, 17, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0)), (10, 3, 0, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0))]
-# TODO(pts): Implement socket.getnameinfo()
+def partial_getaddrinfo(char *host, int port,
+                        int family, int socktype, int proto=0, int flags=0):
+    """A partial implementation of socket.getaddrinfo.
+
+    Please note that this looks up only IPV4 addresses, and it returns
+    None as the canonical name.
+    """
+    if family == 0:
+      family = socket.AF_INET
+    elif family != socket.AF_INET:
+      raise NotImplementedError
+    if socktype != socket.SOCK_STREAM:
+      raise NotImplementedError
+
+    if is_valid_ipv4(host):
+        addrs = [host]
+    else:
+        if is_valid_ipv6(host):
+            raise socket.gaierror(
+                socket.EAI_ADDRFAMILY,
+                'Address family for hostname not supported')
+        if host in names_by_nameip:
+            host = names_by_nameip[host][0]
+        try:
+            # E.g. addrs = ['72.14.221.99', '72.14.221.104']
+            addrs = dns_resolve_ipv4(host).values
+        except DnsLookupError:
+            raise_gaierror(sys.exc_info(), 0)
+
+    items = []
+    for addr in addrs:
+        # canonical hostname is faked as None
+        items.append((family, socktype, proto, None, (addr, port)))
+    return items
