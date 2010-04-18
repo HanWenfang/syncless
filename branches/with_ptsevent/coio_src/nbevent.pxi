@@ -244,7 +244,7 @@ def MainLoop(tasklet link_helper_tasklet):
     p = <PyTaskletObject*>link_helper_tasklet
     assert c != p
 
-    while 1:  # ``while 1`'' is more efficient in Pyrex than ``while True''
+    while 1:  # `while 1' is more efficient in Pyrex than `while True'
         #print 'MainLoop1', PyStackless_GetRunCount()
         # !! TODO(pts): what if nothing registered and we're running MainLoop
         # maybe loop has returned true and

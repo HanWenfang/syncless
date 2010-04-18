@@ -7,15 +7,18 @@ import stackless
 import mysql.connector as mysql_dbapi
 from syncless import patch
 
-MYSQL_CONFIG = {
-    'host': None,  # '127.0.0.1'
-    'port': None,  # '3306'
-    'unix_socket': '/mnt/asz/d/E/D/re/hep/movemetafs/mysqldbdir/our.sock',
-    'user': 'movemetafs_rw',
-    'password': 'croablE4OaqL0tiu',
-    'database': 'movemetafs',
-    'use_unicode': False,  # Use str() instead of unicode() objects.
-}
+try:
+  from mysql_config import MYSQL_CONFIG
+except IMPORT_ERROR:
+  MYSQL_CONFIG = {
+      'host': None,  # '127.0.0.1'
+      'port': None,  # '3306'
+      'unix_socket': '/tmp/mysqld.sock',
+      'user': 'mysql_user',
+      'password': 'mysql_password',
+      'database': 'mysql_database',
+      'use_unicode': False,  # Use str() instead of unicode() objects.
+  }
 
 def Worker(db_conn, num_iterations, progress_channel):
   """Repeat the same query num_iteration times, reporting progress."""
@@ -88,6 +91,7 @@ def main():
   # progress_channel.receive().
   sys.stderr.write('done, receive_count=%d\n' % receive_count)
   # Needed for exit because we might have done DNS lookups with coio (evdns).
+  stackless.main.insert()
   sys.exit(0)
 
 

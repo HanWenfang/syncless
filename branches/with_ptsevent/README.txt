@@ -356,6 +356,9 @@ Q8. How do I connect to a MySQL database with Syncless?
     * There is also the pure Python client ``MySQL for Python''
       (http://sourceforge.net/projects/mysql-python/files/), but it seems
       to be less maintained than myconnpy.
+    * There is also the pure Python client ``pymysql''
+      (http://code.google.com/p/pymysql/), but it seems to be less
+      maintained than myconnpy.
 
 Q9. How do I make my SSL connections (client and server) non-blocking?
 
