@@ -1489,7 +1489,8 @@ cdef class nbsocket:
         else:
             self.realsock = my_socket_impl(*args, **kwargs)
         self.fd = self.realsock.fileno()
-        # TODO(pts): self.realsock.setblocking(False) on non-Unix.
+        # TODO(pts): self.realsock.setblocking(False) on non-Unix operating
+        # systems.
         set_fd_nonblocking(self.fd)
         self.timeout_value = -1.0
 
@@ -1498,8 +1499,9 @@ cdef class nbsocket:
 
     def dup(nbsocket self):
         # TODO(pts): Skip the fcntl2 in the set_fd_nonblocking call in the
-        # constructor.
-        # !! TODO(pts): Is settimeout copied?
+        # constructor, it's superfluous.
+        # socket.socket.dup and socket._realsocket.dup don't copy self.timeout,
+        # so we won't copy either here in nbsocket.dup.
         return type(self)(self.realsock.dup())
 
     # !! TODO: SUXX: __dealloc__ is not allowed to call close() or flush()
@@ -1602,7 +1604,9 @@ cdef class nbsocket:
     def settimeout(nbsocket self, timeout):
         cdef float timeout_float
         if timeout is None:
-            self.timeout_value = None
+            # SUXX: Pyrex or Cython wouldn't catch the type error if we had
+            # None instead of -1.0 here.
+            self.timeout_value = -1.0
         else:
             timeout_float = timeout
             if timeout_float < 0.0:

@@ -21,20 +21,47 @@ from syncless import coio
 
 # TODO(pts): Have a look at Concurrence (or others) for patching everything.
 
+def _populate_socket_module_with_coio(socket_module):
+  """Populate a socket module with coio non-blocking functions and classes."""
+  socket_module.socket = coio.nbsocket
+  # TODO(pts): Maybe make this a class?
+  socket_module._realsocket = coio.new_realsocket
+  if not hasattr(socket_module, '_socket'):
+     # Create new module.
+    socket_module._socket = type(socket_module)('fake_coio_c_socket')
+  socket_module._socket.socket = coio.new_realsocket
+  socket_module.gethostbyname = coio.gethostbyname
+  socket_module.gethostbyname_ex = coio.gethostbyname_ex
+  socket_module.gethostbyaddr = coio.gethostbyaddr
+  socket_module.getfqdn = coio.getfqdn
+  # TODO(pts): Better indicate NotImplementedError
+  socket_module.getaddrinfo = None
+  socket_module.getnameinfo = None
+  return socket_module
+
+fake_coio_socket_module = None
+"""None or a fake socket module containing constants and some coio values."""
+
+def get_fake_coio_socket_module():
+  global fake_coio_socket_module
+  if fake_coio_socket_module is None:
+    import socket
+    fake_coio_socket_module = type(socket)('fake_coio_socket')
+    for name in dir(socket):
+      if (name[0] in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' and
+          isinstance(getattr(socket, name), int)):
+        setattr(fake_coio_socket_module, name, getattr(socket, name))
+    _populate_socket_module_with_coio(fake_coio_socket_module)
+  return fake_coio_socket_module
+
 def patch_socket():
   """Monkey-patch the socket module for non-blocking I/O."""
   import socket
-  socket.socket = nbsocket
-  # TODO(pts): Maybe make this a class?
-  socket._realsocket = new_realsocket
-  socket._socket.socket = new_realsocket
-  socket.gethostbyname = gethostbyname
-  socket.gethostbyname_ex = gethostbyname_ex
-  socket.gethostbyaddr = gethostbyaddr
-  socket.getfqdn = getfqdn
-  # TODO(pts): Better indicate NotImplementedError
-  socket.getaddrinfo = None
-  socket.getnameinfo = None
+  _populate_socket_module_with_coio(socket)
+
+def patch_mysql_connector():
+  from mysql.connector import connection
+  connection.socket = get_fake_coio_socket_module()
 
 def patch_time():
   import time

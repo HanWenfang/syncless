@@ -304,6 +304,56 @@ Q6. How do I receive on a channel with a timeout?
     do you tell the other tasklets to stop generating data on the channel?
     You'd better create dedicated tasklets for tasks you want to time out.
 
+Q7. Can I use my existing DNS, TCP, HTTP, FTP, urllib, urllib2, MySQL,
+    memcached, Redis, Tokyo Tyrant etc. client with Syncless?
+
+A7. If your client software is written in pure Python, and it uses the
+    standard Python `socket' module to connect to the server, then you only
+    have to call
+
+      from syncless import patch
+      patch.patch_socket()
+
+    somewhere in your script initialization. This makes all DNS queries,
+    TCP-based and other socket-based clients non-blocking.
+
+    Please note that there is no patch for HTTPS, FTPS and SSL in general yet.
+
+    If your client software is non-pure Python (such as a Python extension
+    written in C, Pyrex or Cython), then non-blocking functionality will
+    most probably not work. Porting such client software is possible, but
+    it's usually cumbersome and needs lots of work. However, if the client
+    is written in Pyrex or Cython, you get non-blocking functionality by
+    calling patch.patch_socket() as early as possible.
+
+Q8. How do I connect to a MySQL database with Syncless?
+
+    Use ``MySQL Connector/Python'' (https://launchpad.net/myconnpy), which
+    is dbapi2-compatible pure Python MySQL client implementation, and call
+    patch.patch_socket() or patch.patch_mysql_connector(). See
+    examples/demo_mysql_client.py for an example. Please note that myconnpy
+    might be slower than other clients, because it's implemented in pure
+    Python -- but non-blocking functionality is much harder to patch into
+    other clients.
+
+    See also Q7.
+
+    A more detailed analysis:
+
+    * ``MySQL Connector/Python'' (myconnpy) is a pure Python MySQL client, and
+      it works with patch.patch_socket() and patch.patch_mysql_connector(). The
+      disadvantage is that it's slower than C extensions (which don't work).
+      https://launchpad.net/myconnpy
+    * libmysqlclient is inherently blocking, so it wouldn't work
+      http://mysql-python.blogspot.com/
+    * oursql uses libmysqlclient
+    * Concurrence has a non-blocking MySQL client implemented in Pyrex/Cython,
+      but it's quite hard to abstract away the networking part to make it work
+      with Syncless.
+    * There is also the pure Python client ``MySQL for Python''
+      (http://sourceforge.net/projects/mysql-python/files/), but it seems
+      to be less maintained than myconnpy.
+
 Planned features
 ~~~~~~~~~~~~~~~~
 * TODO(pts): mksleep(secs) and cancel_sleep()

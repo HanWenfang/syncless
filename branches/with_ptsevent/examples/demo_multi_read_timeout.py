@@ -42,6 +42,8 @@ def Asker(timeout_arg):
 def RunInTaskletWithTimeout(function, timeout, default_value=None,
                             args=(), kwargs={}):
   # TODO(pts): Productionize this.
+  # !! TODO(pts): Kill the Worker if TaskletExit (or something else) is sent
+  # to us.
   results = []
   def Worker(sleeper_tasklet, function, args, kwargs):
     try:
