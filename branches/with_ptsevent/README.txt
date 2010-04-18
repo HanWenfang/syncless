@@ -356,9 +356,10 @@ Q8. How do I connect to a MySQL database with Syncless?
     * Concurrence has a non-blocking MySQL client implemented in Pyrex/Cython,
       but it's quite hard to abstract away the networking part to make it work
       with Syncless.
-    * There is also the pure Python client ``MySQL for Python''
-      (http://sourceforge.net/projects/mysql-python/files/), but it seems
-      to be less maintained than myconnpy.
+    * The client ``MySQL for Python''
+      (http://sourceforge.net/projects/mysql-python/files/) is implemented
+      as a C extension using the official C client (libmysqlclient), so it's
+      inherently blocking.
     * There is also the pure Python client ``pymysql''
       (http://code.google.com/p/pymysql/), but it seems to be less
       maintained than myconnpy. It also seems a bit immature and not used in

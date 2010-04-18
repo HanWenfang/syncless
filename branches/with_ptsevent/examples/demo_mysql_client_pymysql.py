@@ -13,19 +13,19 @@ with warnings.catch_warnings():
 from syncless import patch
 
 # Hotfix.
-import pymysql.converters
-pymysql.converters.encoders[tuple] = \
-pymysql.converters.encoders[list] = \
-pymysql.converters.escape_sequence = lambda val: (
-    tuple(map(pymysql.converters.escape_item, val)))
-pymysql.converters.ESCAPE_REGEX = re.compile(r'[\0\n\r\032\'\"\\]')
-pymysql.converters.ESCAPE_MAP = {'\0': '\\0', '\n': '\\n', '\r': '\\r',
-                                 '\032': '\\Z', '\'': '\\\'', '"': '\\"',
-                                 '\\': '\\\\'}
-pymysql.converters.encoders[str] = \
-pymysql.converters.escape_string = lambda val: (
-    "'%s'" % pymysql.converters.ESCAPE_REGEX.sub(
-    lambda match: pymysql.converters.ESCAPE_MAP.get(match.group(0)), val))
+#import pymysql.converters
+#pymysql.converters.encoders[tuple] = \
+#pymysql.converters.encoders[list] = \
+#pymysql.converters.escape_sequence = lambda val: (
+#    tuple(map(pymysql.converters.escape_item, val)))
+#pymysql.converters.ESCAPE_REGEX = re.compile(r'[\0\n\r\032\'\"\\]')
+#pymysql.converters.ESCAPE_MAP = {'\0': '\\0', '\n': '\\n', '\r': '\\r',
+#                                 '\032': '\\Z', '\'': '\\\'', '"': '\\"',
+#                                 '\\': '\\\\'}
+#pymysql.converters.encoders[str] = \
+#pymysql.converters.escape_string = lambda val: (
+#    "'%s'" % pymysql.converters.ESCAPE_REGEX.sub(
+#    lambda match: pymysql.converters.ESCAPE_MAP.get(match.group(0)), val))
 
 
 try:
@@ -79,7 +79,7 @@ def main():
     mysql_config['db'] = mysql_config.pop('database')
   if mysql_config.get('unix_socket'):
     mysql_config['host'] = '127.0.0.1'
-  #mysql_config['charset'] = 'UTF-8'
+  #mysql_config['charset'] = 'utf8'
   db_conn = mysql_dbapi.connect(**mysql_config)
   assert mysql_dbapi.paramstyle == 'format'
   cursor = db_conn.cursor()
