@@ -385,6 +385,38 @@ A9. Use the coio.nbsslsocket class as a drop-in non-blocking replacement for
     have a patch.patch_openssl(), but C extensions will never be patched, so
     please make sure that you create all your SSL sockets in Python code.
 
+Q10. Does SQLite3 work with Syncless?
+
+A10. The standard `import sqlite3' works (just like any Python module with C
+     extensions), but it blocks: so if a tasklet is busy running a long
+     SQLite3 query, no other tasklets get scheduled at that time. This is
+     unacceptable in most latency-sensitive situations.
+
+     While it is possible to read (SELECT) from an SQLite3 database in
+     parallel from multiple processes or threads (by connecting to it once
+     per thread), this kind of parallelism is impossible to implement with
+     coroutines (thus with Syncless).
+
+     It is also impossible to make the database file read or write locking
+     fcntl operation non-blocking, e.g. if tasklet A is holding a write lock
+     (for a long-running transaction with thousands of INSERT), and tasklet
+     B wants to acquire a read lock (for a SELECT), then it's impossible to
+     schedule tasklet C (which doesn't need access to the SQLite3 database)
+     while tasklet B is waiting for its lock. Threads or processing would be
+     needed for this kind of parallelism.
+
+     If you really must use SQLite3, then you may consider setting up an
+     sqlite3.connection.set_progress_handler and call stackless.schedule()
+     from there to improve the latency. But this can be become very tricky,
+     because according to http://www.sqlite.org/c3ref/progress_handler.html
+     you have to ensure that you don't use the database connection while a
+     progress handler is running. See
+     examples/demo_sqlite_progress_handler.py for some experiments.
+
+     For real concurrency, you should create one thread per SQLite3
+     connection, and communicate with those threads and the tasklets in your
+     main thread. This is complicated, tiresome and tricky to implement.
+
 Planned features
 ~~~~~~~~~~~~~~~~
 * TODO(pts): Report libevent bug that evdns events are not EVLIST_INTERNAL.
