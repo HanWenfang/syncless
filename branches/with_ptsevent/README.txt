@@ -417,6 +417,29 @@ A10. The standard `import sqlite3' works (just like any Python module with C
      connection, and communicate with those threads and the tasklets in your
      main thread. This is complicated, tiresome and tricky to implement.
 
+Q11. Is it possible to scheduler background work with Syncless for GTK,
+     TCL/Tk or Qt applications?
+
+A11. Not at the moment, since the main event loop of these GUI frameworks doesn't
+     support coroutines. It would be an interesting and complicated project
+     to make Syncless support these main event loops instead of libevent.
+
+Q12. Is it possible to use stacklessocket, asyncore, pyevent, Tornado,
+     Twisted or another event-driven communication library with Syncless?
+
+A12. Not yet, however adding support for Twisted or Tornado would be
+     possible, fun and interesting.
+
+Q13. Is it possible to use gevent, eventlet, Concurrence or another
+     coroutine-based event communication framwork with Syncless?
+
+A13. No, but it might be fun to add support for one of them. gevent,
+     eventlet and Concurrence use libevent, so techincally it wouldn't be
+     too much work to unify the event loops. For eventlet and gevent, one
+     would have to emulate greenlet using Stackless Python. There is emulation
+     code in the Syncless codebase, but it's 20% or even more slower than
+     greenlet.
+
 Planned features
 ~~~~~~~~~~~~~~~~
 * TODO(pts): Report libevent bug that evdns events are not EVLIST_INTERNAL.
