@@ -95,9 +95,15 @@ def patch_ssl():
   # patched.
   #ssl.wrap_socket = coio.ssl_wrap_socket
 
+
 def patch_mysql_connector():
   from mysql.connector import connection
   connection.socket = get_fake_coio_socket_module()
+
+
+def patch_pymysql():
+  from pymysql import connections
+  connections.socket = get_fake_coio_socket_module()
 
 
 def patch_time():

@@ -339,6 +339,9 @@ Q8. How do I connect to a MySQL database with Syncless?
     Python -- but non-blocking functionality is much harder to patch into
     other clients.
 
+    If you want to use pymysql instead, then see
+    examples/demo_mysql_client_pymysql.py .
+
     See also Q7.
 
     A more detailed analysis:
@@ -358,7 +361,9 @@ Q8. How do I connect to a MySQL database with Syncless?
       to be less maintained than myconnpy.
     * There is also the pure Python client ``pymysql''
       (http://code.google.com/p/pymysql/), but it seems to be less
-      maintained than myconnpy.
+      maintained than myconnpy. It also seems a bit immature and not used in
+      production because of trivial escaping bugs and a nonfunctional
+      encoding (UTF-8) support.
 
 Q9. How do I make my SSL connections (client and server) non-blocking?
 
