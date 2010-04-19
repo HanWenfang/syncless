@@ -6,13 +6,14 @@ __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import socket
 
-from syncless import nbio
+from syncless import coio
 
-s = nbio.NonBlockingSslSocket(socket.AF_INET, socket.SOCK_STREAM)
+sock = coio.nbsocket(socket.AF_INET, socket.SOCK_STREAM)
+sslsock = coio.nbsslsocket(sock)
 addr = ('mail.google.com', 443)
-s.connect(addr)
-s.sendall('GET / HTTP/1.0\r\nHost: %s:%s\r\n\r\n' % addr)
-print s.recv(4096)  #:
+sslsock.connect(addr)
+sslsock.sendall('GET / HTTP/1.0\r\nHost: %s:%s\r\n\r\n' % addr)
+print sslsock.recv(4096)  #:
 """HTTP/1.0 200 OK\r
 Cache-Control: public, max-age=604800\r
 Expires: Mon, 11 Jan 2010 15:56:16 GMT\r
