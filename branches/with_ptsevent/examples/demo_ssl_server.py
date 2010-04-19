@@ -86,6 +86,7 @@ if __name__ == '__main__':
   sslsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   sslsock.bind(('127.0.0.1', 44433))
   sslsock.listen(128)
+  # !! Ctrl-<C> doesn't work (won't exit)
   print >>sys.stderr, 'info: visit http%s://%s:%s/' % (
       's' * bool(use_ssl),
       sslsock.getsockname()[0], sslsock.getsockname()[1])
@@ -96,7 +97,7 @@ if __name__ == '__main__':
     except socket.error, e:  # This includes ssl.SSLError.
       # We may get an ssl.SSLError or a socket.socketerror in a failed
       # handshake.
-      print 'PROBLEM'  # !!
+      print 'PROBLEM: %s' % e  # !!
       continue
     stackless.tasklet(HandleRequest)(csslsock, addr)
     # !! SUXX: segfault within the first 3 connections, both with wget(1) and

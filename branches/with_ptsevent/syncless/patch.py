@@ -80,6 +80,18 @@ def get_fake_coio_socket_module():
   return fake_coio_socket_module
 
 
+fake_coio_select_module = None
+"""None or a fake select module containing select()."""
+
+def get_fake_coio_select_module():
+  global fake_coio_select_module
+  if fake_coio_select_module is None:
+    from syncless import coio
+    fake_coio_select_module = type(coio)('fake_coio_select')
+    fake_coio_select_module.select = coio.select
+  return fake_coio_select_module
+
+
 def patch_socket():
   """Monkey-patch the socket module for non-blocking I/O."""
   import socket
@@ -116,6 +128,20 @@ def patch_select():
   import select
   from syncless import coio
   select.select = coio.select
+
+
+def patch_tornado():
+  import tornado.ioloop
+  tornado.ioloop.select = get_fake_coio_select_module()
+  # TODO(pts): Implement a faster class (similar to tornado.ioloop._EPoll),
+  # with less overhead than select(2). Is it possible?
+  tornado.ioloop._poll = tornado.ioloop._Select  # Class.
+  def register(self, fd, events):
+    if events & tornado.ioloop.IOLoop.READ: self.read_fds.add(fd)
+    if events & tornado.ioloop.IOLoop.WRITE: self.write_fds.add(fd)
+    # Ignore IOLoop.ERROR, since libevent con't listen on that.
+  # TODO(pts): Don't we have to wrap this to an instance method?
+  tornado.ioloop._Select.register = register
 
 
 def ExceptHook(orig_excepthook, *args):
@@ -262,6 +288,12 @@ def fix_all():
 def patch_all():
   fix_all()
   patch_socket()
+  patch_ssl()
+  patch_mysql_connector()
+  patch_pymysql()
   patch_time()
+  patch_select()
+  patch_tornado()
   patch_stdin_and_stdout()
   patch_stderr()
+

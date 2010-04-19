@@ -77,7 +77,7 @@ if __name__ == '__main__':
   server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   server_socket.bind(('127.0.0.1', 5454))
   server_socket.listen(100)
-  logging.info('connect with: telnet %s %s' % server_socket.getsockname()[:2])
+  logging.info('connect with:  telnet %s %s' % server_socket.getsockname()[:2])
   while True:
     client_socket, addr = server_socket.accept()
     logging.info('connection from %r, runcount=%d' %

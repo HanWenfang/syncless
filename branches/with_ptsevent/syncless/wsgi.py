@@ -36,6 +36,7 @@ import logging
 import re
 import sys
 import socket
+import stackless
 import time
 import types
 
@@ -125,18 +126,6 @@ class WsgiEmptyInputStream(object):
   @classmethod
   def discard_to_read_limit(cls):
     pass
-
-
-class FixedReadLineInputStream(object):
-  def __init__(self, lines):
-    self.lines_rev = list(lines)
-    self.lines_rev.reverse()
-
-  def readline(self):
-    if self.lines_rev:
-      return self.lines_rev.pop()
-    else:
-      return ''
 
 
 HEADER_WORD_LOWER_LETTER_RE = re.compile(r'(?:\A|-)[a-z]')
@@ -603,7 +592,7 @@ def CherryPyWsgiListener(nbs, wsgi_application):
   """HTTP server serving WSGI, using CherryPy's implementation."""
   # TODO(pts): Why is CherryPy's /infinite twice as fast as ours?
   # Only sometimes.
-  if not isinstance(nbs, coio.NonBlockingSocket):
+  if not isinstance(nbs, coio.nbsocket):
     raise TypeError
   if not callable(wsgi_application):
     raise TypeError
@@ -649,10 +638,10 @@ class FakeBaseHttpWFile(object):
     if not data:
       return
     write_buf = self.write_buf
-    if self.wsgi_write_callback:
+    if self.wsgi_write_callback is not None:
       write_buf.append(data)
     else:
-      assert data.endswith('\r\n')
+      assert data.endswith('\r\n'), [write_buf, data]
       data = data.rstrip('\n\r')
       if data:
         write_buf.append(data)  # Buffer status and headers.
@@ -663,6 +652,8 @@ class FakeBaseHttpWFile(object):
         write_buf.pop(0)
         response_headers = [
             tuple(header_line.split(': ', 1)) for header_line in write_buf]
+        # Set to `false' in case self.start_response raises an error.
+        self.wsgi_write_callback = False
         self.wsgi_write_callback = self.start_response(
             status, response_headers)
         assert callable(self.wsgi_write_callback)
@@ -682,29 +673,34 @@ class FakeBaseHttpWFile(object):
           self.wsgi_write_callback(data)
 
 
-def CloseMethod(self):
-  self.closed = True
-
-
 class ConstantReadLineInputStream(object):
-  def __init__(self, lines):
+  """Used as self.rfile in the BaseHTTPRequestHandler subclass."""
+
+  def __init__(self, lines, body_rfile):
     self.lines_rev = list(lines)
     self.lines_rev.reverse()
     self.closed = False
+    self.body_rfile = body_rfile
 
   def readline(self):
     if self.lines_rev:
       return self.lines_rev.pop()
+    elif self.body_rfile:
+      return self.body_rfile.readline()
     else:
       return ''
 
   def read(self, size):
     assert not self.lines_rev
-    return ''  
+    if self.body_rfile:
+      return self.body_rfile.read(size)
+    else:
+      return ''  
 
   def close(self):
     # We don't clear self.lines_rev[:], the hacked
     # WsgiInputStream doesn't do that eiter.
+    # Don't ever close the self.body_rfile.
     self.closed = True
 
 
@@ -717,15 +713,13 @@ class FakeBaseHttpConnection(object):
   def makefile(self, mode, bufsize):
     if mode.startswith('r'):
       rfile = self.env['wsgi.input']
-      if isinstance(rfile, WsgiInputStream):
-        rfile.close = types.MethodType(CloseMethod, rfile)
-        if rfile.lines_rev:
-          rfile.lines_rev.extend(reversed(self.request_lines))
-        else:
-          rfile.lines_rev = list(self.request_lines)
-          rfile.lines_rev.reverse()
+      assert len(self.request_lines) > 1
+      assert self.request_lines[-1] == '\r\n'
+      assert self.request_lines[-2].endswith('\r\n')
+      if isinstance(rfile, coio.nbfile):
+        rfile = ConstantReadLineInputStream(self.request_lines, rfile)
       elif rfile is WsgiEmptyInputStream:
-        rfile = ConstantReadLineInputStream(self.request_lines)
+        rfile = ConstantReadLineInputStream(self.request_lines, None)
       else:
         assert 0, rfile
       self.request_lines = None  # Save memory.
@@ -783,7 +777,7 @@ def HttpRequestFromEnv(env, connection=None):
 
 
 def BaseHttpWsgiWrapper(bhrh_class):
-  """Return a WSGI application running a BaseHttpRequestHandler."""
+  """Return a WSGI application running a BaseHTTPRequestHandler."""
   BaseHTTPServer = sys.modules['BaseHTTPServer']
   if not ((isinstance(bhrh_class, type) or
            isinstance(bhrh_class, types.ClassType)) and
@@ -793,8 +787,12 @@ def BaseHttpWsgiWrapper(bhrh_class):
   def WsgiApplication(env, start_response):
     request_lines = HttpRequestFromEnv(env, connection='close')
     connection = FakeBaseHttpConnection(env, start_response, request_lines)
-    server = FakeBaseHttpServer(env, start_response)
+    server = FakeBaseHttpServer()
     client_address = (env['REMOTE_ADDR'], int(env['REMOTE_PORT']))
+    # So we'll get a nice HTTP/1.0 answer even for a bad request, and
+    # FakeBaseHttpWFile won't complain about the missing '\r\n'. We have
+    # to set it early, because th bhrh constructor handles the request.
+    bhrh_class.default_request_version = 'HTTP/1.0'
     # The constructor calls bhrh.handle_one_request() automatically.
     bhrh = bhrh_class(connection, client_address, server)
     # If there is an exception in the bhrh_class creation above, then these
@@ -837,8 +835,6 @@ def RunHttpServer(app, server_address=None):
     psyco.full()  # TODO(pts): Measure the speed in Stackless Python.
   except ImportError:
     pass
-  if len(sys.argv) > 1:  # TODO(pts): Use getopt.
-    coio.VERBOSE = True
   webapp = (sys.modules.get('google.appengine.ext.webapp') or
             sys.modules.get('webapp'))
   # Use if already loaded.
@@ -908,7 +904,7 @@ def RunHttpServer(app, server_address=None):
     print type(app)
     assert 0, 'unsupported application type for %r' % (app,)
     
-  listener_nbs = coio.NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
+  listener_nbs = coio.nbsocket(socket.AF_INET, socket.SOCK_STREAM)
   listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   listener_nbs.bind(server_address)
   # Reducing this has a strong negative effect on ApacheBench worst-case
@@ -919,4 +915,4 @@ def RunHttpServer(app, server_address=None):
   logging.info('listening on %r' % (listener_nbs.getsockname(),))
   # From http://webpy.org/install (using with mod_wsgi).
   coio.stackless.tasklet(WsgiListener)(listener_nbs, wsgi_application)
-  coio.RunMainLoop()
+  stackless.schedule_remove()

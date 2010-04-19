@@ -4,6 +4,7 @@ Stackless Python
 by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
 -- Fri Jan  8 03:06:58 CET 2010
 -- Tue Feb  9 19:02:52 CET 2010
+-- Mon Apr 19 02:54:24 CEST 2010
 
 Syncless is an experimental, lightweight, non-blocking (asynchronous) client
 and server socket network communication library for Stackless Python 2.6.
@@ -13,7 +14,7 @@ non-blocking Python communication libraries. Syncless contains an
 asynchronous DNS resolver (using evdns) and a HTTP server capable of serving
 WSGI applications. Syncless aims to be a coroutine-based alternative of
 event-driven networking engines (such as Twisted and FriendFeed's Tornado),
-and it's a competitor of gevent, pyevent, eventlet and Concurrence.
+and it's a competitor of gevent, pyevent, Eventlet and Concurrence.
 
 Features
 ~~~~~~~~
@@ -21,18 +22,27 @@ Features
   using cooperative multitasking provided by Stackless Python (without
   the need for callbacks, threads, subprocesses or locking)
 * non-intruisive I/O multiplexing, easy to integrate with existing code
-  (with a non-blocking, monkey-patchable, almost faithful reimplementation
-  of the socket.socket classes and time.sleep)
+  because locking is not needed and it's monkey-patchable
+* monkey-patchable, almost faithful non-blocking reimplementation of
+  socket.socket, socket.gethostbyname (etc.), ssl.SSLSocket, time.sleep
+  and select.select
+* non-blocking support added by monkey-patching to built-in urllib, urllib2,
+  smtplib, ftplib, imaplib, poplib etc. modules
+* special monkey-patching for pure Python MySQL client libraries
+  mysql.connector and pymysql
+* special monkey-patching for the Tornado web server (slow)
 * compatible timeout handling on individual socket operations
-* I/O event detection using libevent, which can use epoll(7) or kqueue
-  (if available)
-* built-in WSGI server, but can use CherryPy's WSGI server as well
+* I/O event detection using libevent, which can use Linux epoll(7) or BSD
+  kqueue (if available)
+* built-in (non-blocking) WSGI server, but can use CherryPy's WSGI server as
+  well in non-blocking mode
 * non-blocking DNS resolver using evdns
-* TODO(pts): Remimplement this
-  non-blocking stdin/stdout support (can be useful for implementing an
+* non-blocking stdin/stdout support (can be useful for implementing an
   interactive server console)
-* fast (comparable and sometimes faster than Concurrency, eventlet, node.js
-  and eventlet), see benchmark/README.txt
+* built-in WSGI server capable of running not only WSGI applications, but
+  BaseHTTPRequestHandler + BaseHTTPServer applications, CherryPy
+  applications, web.py applications, and Google webapp applications (not
+  supporting most other Google AppEngine technologies) as well
 
 Requirements
 ~~~~~~~~~~~~
@@ -364,7 +374,8 @@ Q8. How do I connect to a MySQL database with Syncless?
       (http://code.google.com/p/pymysql/), but it seems to be less
       maintained than myconnpy. It also seems a bit immature and not used in
       production because of trivial escaping bugs and a nonfunctional
-      encoding (UTF-8) support.
+      encoding (UTF-8) support. pymysql seems to be a bit faster (with less
+      overhead) than myconnpy.
 
 Q9. How do I make my SSL connections (client and server) non-blocking?
 
@@ -427,15 +438,24 @@ A11. Not at the moment, since the main event loop of these GUI frameworks doesn'
 Q12. Is it possible to use stacklessocket, asyncore, pyevent, Tornado,
      Twisted or another event-driven communication library with Syncless?
 
-A12. Not yet, however adding support for Twisted or Tornado would be
-     possible, fun and interesting.
+A12. Tornado (with its own main loop) is already supported with
+     patch.patch_tornado(). See also examples/demo_tornado.py .
 
-Q13. Is it possible to use gevent, eventlet, Concurrence or another
+     Adding support for Twisted would be possible, fun and interesting.
+     Adding asyncore will be similar, but simpler.
+
+     Adding pyevent may become complicated because of the multiple
+     libevent-based I/O loops.
+
+     Adding stacklessocket wouldn't give us too much benefit, because
+     stacklessocket is not for production use.
+
+Q13. Is it possible to use gevent, Eventlet, Concurrence or another
      coroutine-based event communication framwork with Syncless?
 
 A13. No, but it might be fun to add support for one of them. gevent,
-     eventlet and Concurrence use libevent, so techincally it wouldn't be
-     too much work to unify the event loops. For eventlet and gevent, one
+     Eventlet and Concurrence use libevent, so techincally it wouldn't be
+     too much work to unify the event loops. For Eventlet and gevent, one
      would have to emulate greenlet using Stackless Python. There is emulation
      code in the Syncless codebase, but it's 20% or even more slower than
      greenlet.
