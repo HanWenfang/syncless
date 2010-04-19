@@ -34,7 +34,7 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 if __name__ == '__main__':
   import time
   HOST_NAME = '127.0.0.1'
-  PORT_NUMBER = 6666
+  PORT_NUMBER = 8080
   server_class = BaseHTTPServer.HTTPServer
   httpd = server_class((HOST_NAME, PORT_NUMBER), MyHandler)
   print time.asctime(), "Server Starts - %s:%s" % (HOST_NAME, PORT_NUMBER)

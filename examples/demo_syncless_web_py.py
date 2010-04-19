@@ -20,5 +20,11 @@ class hello:
 app = web.application(urls, globals())
 
 if __name__ == '__main__':
+  import logging
+  import sys
   from syncless import wsgi
+  if len(sys.argv) > 1:
+    logging.root.setLevel(logging.DEBUG)
+  else:
+    logging.root.setLevel(logging.INFO)
   wsgi.RunHttpServer(app)

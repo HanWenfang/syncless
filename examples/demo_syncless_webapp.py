@@ -23,8 +23,13 @@ application = webapp.WSGIApplication([
 ], debug=True)
 
 if __name__ == '__main__':
+  import logging
   import sys
   from syncless import wsgi
+  if len(sys.argv) > 1:
+    logging.root.setLevel(logging.DEBUG)
+  else:
+    logging.root.setLevel(logging.INFO)
   if len(sys.argv) > 1 and sys.argv[1] == 'hello':
     del sys.argv[1]
     # self.request.path would be '' or '/' instead of '/hello' in application

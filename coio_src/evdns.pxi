@@ -4,12 +4,12 @@
 # ### pts #### This file has been highly modified by pts@fazekas.hu.
 #
 # Example:
-# import ptsevent
+# import syncless.coio
 # 
-# print ptsevent.dns_resolve_ipv4('www.google.com', 0)
+# print syncless.coio.dns_resolve_ipv4('www.google.com', 0)
 # #: <dnsresult code=0, t=1, ttl=273 values=['74.125.43.147', '74.125.43.99', '74.125.43.104', '74.125.43.105', '74.125.43.106', '74.125.43.103'] at 0xb7bd9734>
 # 
-# print ptsevent.dns_resolve_ipv6('www.ipv6.org')
+# print syncless.coio.dns_resolve_ipv6('www.ipv6.org')
 # #$ host -t AAAA www.ipv6.org
 # #www.ipv6.org is an alias for shake.stacken.kth.se.
 # #shake.stacken.kth.se has IPv6 address 2001:6b0:1:ea:202:a5ff:fecd:13a6
@@ -156,13 +156,13 @@ cdef class dnsresult:
 
     def __repr__(dnsresult self):
         return '<dnsresult t=%d, ttl=%d values=%r at 0x%x>' % (
-            self._t, self._ttl, self._values, <unsigned>self)
+            self._t, self._ttl, self._values, <unsigned><void*>self)
 
 cdef object format_ipv6_word(unsigned hi, unsigned lo):
     lo += hi << 8
     if lo:
         # TODO(pts): Faster.
-        return PyString_FromFormat(<char_constp>'%x', lo)
+        return PyString_FromFormat(<char_constp><char*>'%x', lo)
     else:
         return ''
 
@@ -193,7 +193,7 @@ cdef void _dns_callback(int resultcode, char t, int count, int ttl,
         for i from 0 <= i < count:
             # TODO(pts): Replace all % by PyString_FromFormat.
             xlist.append(PyString_FromFormat(
-                <char_constp>'%d.%d.%d.%d', p[0], p[1], p[2], p[3]))
+                <char_constp><char*>'%d.%d.%d.%d', p[0], p[1], p[2], p[3]))
             p += 4
         x = xlist
     elif t == c_DNS_IPv6_AAAA and count > 0:
@@ -279,7 +279,7 @@ cdef dnsresult dns_call(_evdns_call_t call, char_constp name, int flags):
     wakeup_tasklet.tempval = None
     result = call(name, flags, _dns_callback, <void*>wakeup_tasklet)
     if result:
-        raise DnsLookupError(-err, evdns_err_to_string(err))
+        raise DnsLookupError(-result, evdns_err_to_string(result))
     if wakeup_tasklet.tempval is None:
         tempval = PyStackless_Schedule(None, 1)  # remove=1
     else:  # Not a single wait was needed. 
@@ -346,7 +346,8 @@ def dns_resolve_reverse(object ip, int flags=0):
        p = tmp
        for i from 0 <= i < 4:
            # This also ValueError. TODO(pts): Proper parsing.
-           p[i] = PyInt_FromString(items[i], NULL, 10)
+           j = PyInt_FromString(items[i], NULL, 10)
+           p[i] = <unsigned char>j
        return dns_call(<_evdns_call_t>evdns_resolve_reverse,
                        <char_constp>p, flags)
     elif ':' in ip:  # TODO(pts): Faster, for strings.
@@ -363,7 +364,7 @@ def dns_resolve_reverse(object ip, int flags=0):
        return dns_call(<_evdns_call_t>evdns_resolve_reverse_ipv6,
                        <char_constp>p, flags)
     else:
-        raise ValueError('unknown ip address syntax')
+        raise ValueError('unknown ip address syntax: ' + ip)
 
 # --- socket.gethostbyname etc. emulations
 
@@ -518,7 +519,7 @@ def getfqdn(name=''):
 
     This function returns data from /etc/hosts as read at module load time.
     """
-    cdef char* cname
+    cdef char *cname
     cname = NULL
     if not name:
       name = socket.gethostname()
@@ -576,7 +577,42 @@ def gethostbyname_ex(char *name):
     else:
         return (canonical, [name], ips)
 
+# TODO(pts): Implement socket.getnameinfo()
+
 # TODO(pts): Implement socket.getaddrinfo()
 # >>> socket.getaddrinfo('www.ipv6.org', 0, socket.AF_INET6)
 # [(10, 1, 6, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0)), (10, 2, 17, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0)), (10, 3, 0, '', ('2001:6b0:1:ea:202:a5ff:fecd:13a6', 0, 0, 0))]
-# TODO(pts): Implement socket.getnameinfo()
+def partial_getaddrinfo(char *host, int port,
+                        int family, int socktype, int proto=0, int flags=0):
+    """A partial implementation of socket.getaddrinfo.
+
+    Please note that this looks up only IPV4 addresses, and it returns
+    None as the canonical name.
+    """
+    if family == 0:
+      family = socket.AF_INET
+    elif family != socket.AF_INET:
+      raise NotImplementedError
+    if socktype != socket.SOCK_STREAM:
+      raise NotImplementedError
+
+    if is_valid_ipv4(host):
+        addrs = [host]
+    else:
+        if is_valid_ipv6(host):
+            raise socket.gaierror(
+                socket.EAI_ADDRFAMILY,
+                'Address family for hostname not supported')
+        if host in names_by_nameip:
+            host = names_by_nameip[host][0]
+        try:
+            # E.g. addrs = ['72.14.221.99', '72.14.221.104']
+            addrs = dns_resolve_ipv4(host).values
+        except DnsLookupError:
+            raise_gaierror(sys.exc_info(), 0)
+
+    items = []
+    for addr in addrs:
+        # canonical hostname is faked as None
+        items.append((family, socktype, proto, None, (addr, port)))
+    return items
