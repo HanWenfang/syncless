@@ -108,7 +108,14 @@ def patch_pymysql():
 
 def patch_time():
   import time
-  time.sleep = sleep
+  from syncless import coio
+  time.sleep = coio.sleep
+
+
+def patch_select():
+  import select
+  from syncless import coio
+  select.select = coio.select
 
 
 def ExceptHook(orig_excepthook, *args):

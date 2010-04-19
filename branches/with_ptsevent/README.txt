@@ -440,6 +440,26 @@ A13. No, but it might be fun to add support for one of them. gevent,
      code in the Syncless codebase, but it's 20% or even more slower than
      greenlet.
 
+Q14. Is it possible to use select(2) (select.select) with Syncless?
+
+A14. Yes, either as coio.select, or as select.select after
+     patch.patch_select():
+
+       from coio import patch
+       patch.patch_select()
+       ...
+       import select
+       print select.select(...)
+
+     Limitation: Exceptional filehandles (non-empty xlist) are not
+     supported.
+
+     Please note that select(2) is inherently slow compared to libevent or the
+     combination of Syncless and tasklets. That's because libevent uses
+     faster polling mechanisms such as Linux epoll or BSD kqueue. If your
+     speed-critical program uses select(2), please consider redesigning it
+     so it would use Sycnless non-blocking communication classes and tasklets.
+
 Planned features
 ~~~~~~~~~~~~~~~~
 * TODO(pts): Report libevent bug that evdns events are not EVLIST_INTERNAL.
