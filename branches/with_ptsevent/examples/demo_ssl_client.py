@@ -4,6 +4,11 @@
 # TODO(pts): Add a proper test, with our custom (blocking) SSL server.
 # TODO(pts): Add a proper test for a non-blocking SSL server and its client.
 
+"""Demo for fetching a https:// page using Syncless coio."""
+
+__author__ = 'pts@fazekas.hu (Peter Szabo)'
+
+
 import socket
 import ssl
 import sys
