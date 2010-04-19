@@ -1,4 +1,5 @@
 #! /usr/local/bin/stackless2.6
+# Example invocation: PYTHONPATH="$HOME/prg/google_appengine/google/appengine/ext:$HOME/prg/google_appengine/lib/webob" ./examples/demo_orig_webapp.py
 
 try:
   from google.appengine.ext import webapp
@@ -24,6 +25,9 @@ application = webapp.WSGIApplication([
 
 if __name__ == '__main__':
   import wsgiref.simple_server
-  server = wsgiref.simple_server.make_server('', 8080, application)
-  print 'Serving on port 8080...'
+  server_host = ''
+  server_port = 8080
+  server = wsgiref.simple_server.make_server(
+      server_host, server_port, application)
+  print 'Serving on %s:%s' % (server_host, server_port)
   server.serve_forever()

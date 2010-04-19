@@ -1,46 +1,33 @@
 #! /usr/local/bin/stackless2.6
-# by pts@fazekas.hu at Thu Jan  7 15:19:07 CET 2010
+# by pts@fazekas.hu at Sat Jan 23 20:15:51 CET 2010
 
+import time
 import socket
 import stackless
+import sys
+from syncless import coio
+from syncless import patch
 
 import lprng
 
-from syncless import nbio
+def Handler(cs, csaddr):
+  print >>sys.stderr, 'info: connection from %r' % (
+      cs.getpeername(),)
+  f = cs.makefile('r+')
 
-def Worker(nbs):
   # Read HTTP request.
-  request = ''
-  while True:
-    got = nbs.recv(32768)
-    assert got
-    request += got
-    i = request.find('\n\r\n')
-    if i >= 0:
-      j = request.find('\n\n')
-      if j >= 0 and j < i:
-        i = j + 2
-      else:
-        i += 3
+  line1 = None
+  while True: 
+    line = f.readline().rstrip('\r\n')
+    if not line:  # Empty line, end of HTTP request.
       break
-    else:
-      i = request.find('\n\n')
-      if i >= 0:
-        i + 2
-        break
-  head = request[:i]
-  body = request[i:]
+    if line1 is None:
+      line1 = line   
 
   # Parse HTTP request.
-  # Please note that an assertion here aborts the server.
-  i = head.find('\n')
-  assert i > 0, (head,)
-  if head[i - 1] == '\r':
-    line1 = head[:i - 1]
-  else:
-    line1 = head[:i]
+  # Please note that an assertion here doesn't abort the server.
   items = line1.split(' ')
-  assert 3 == len(items)
+  assert 3 == len(items)  
   assert items[2] in ('HTTP/1.0', 'HTTP/1.1')
   assert items[0] == 'GET'
   assert items[1].startswith('/')
@@ -49,30 +36,29 @@ def Worker(nbs):
   except ValueError:
     num = None
 
-  # Write HTTP response.
   if num is None:
-    nbs.Write('HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n')
-    nbs.Write('<a href="/0">start at 0</a><p>Hello, World!\n')
+    f.write('HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n')
+    f.write('<a href="/0">start at 0</a><p>Hello, World!\n')
   else:
     next_num = lprng.Lprng(num).next()
-    nbs.Write('HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n')
-    nbs.Write('<a href="/%d">continue with %d</a>\n' %
-              (next_num, next_num))
-  nbs.Flush()
-  nbs.close()
+    f.write('HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n')
+    f.write('<a href="/%d">continue with %d</a>\n' %
+            (next_num, next_num))
+  f.flush()
+  cs.close()  # No need for event_del, nothing listening.
 
-def Listener(listener_nbs):
+
+if __name__ == '__main__':
+  patch.patch_stderr()  # Give Ctrl-<C> a chance at infinite logging.
+  ss = coio.new_realsocket(socket.AF_INET, socket.SOCK_STREAM)
+  #ss.settimeout(1)
+  ss.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  # TODO(pts): Use ss._sock.
+  ss.bind(('127.0.0.1', 8080))
+  ss.listen(2280)
+  print >>sys.stderr, 'info: listening on: %r' % (
+      ss.getsockname(),)
   while True:
-    nbs, peer_name = listener_nbs.accept()
-    nbio.LogInfo('connection from %r' % (peer_name,))
-    stackless.tasklet(Worker)(nbs)
-    nbs = None
-
-listener_nbs = nbio.NonBlockingSocket(socket.AF_INET, socket.SOCK_STREAM)
-listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-listener_nbs.bind(('127.0.0.1', 8080))
-listener_nbs.listen(128)
-nbio.LogInfo('listening on %r' % (listener_nbs.getsockname(),))
-stackless.tasklet(Listener)(listener_nbs)
-nbio.RunMainLoop()
-                
+    cs, csaddr = ss.accept()
+    stackless.tasklet(Handler)(cs, csaddr)
+    cs = None  # Save memory.

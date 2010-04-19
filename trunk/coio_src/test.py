@@ -3,7 +3,7 @@
 
 import glob, os, signal, sys, thread, time, unittest
 sys.path.insert(0, glob.glob('./build/lib.*')[0])
-import ptsevent as event
+import syncless.coio as event
 
 class EventTest(unittest.TestCase):
     def test_timeout(self):

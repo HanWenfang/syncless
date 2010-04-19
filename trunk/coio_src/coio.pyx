@@ -1,7 +1,6 @@
 include "event.pxi"
 include "nbevent.pxi"
 include "evdns.pxi"
-include "patch.pxi"
 #include "evhttp.pxi"
 
 # --- Initialization.
@@ -10,7 +9,8 @@ event_init()
 
 # This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
 # gets control) a KeyboardInterrupt in the main tasklet.
-event(SigIntHandler, handle=SIGINT, evtype=EV_SIGNAL | EV_PERSIST).add()
+event(SigIntHandler, handle=SIGINT, evtype=EV_SIGNAL | EV_PERSIST,
+      is_internal=1).add()
 
 # Don't publish it. MainLoop depends on it not being changed.
 cdef tasklet link_helper_tasklet
