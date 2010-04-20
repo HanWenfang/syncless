@@ -128,6 +128,10 @@ def patch_select():
   import select
   from syncless import coio
   select.select = coio.select
+  if hasattr(select, 'poll'):
+    del select.poll  # So smart libs won't try to use it.
+  if hasattr(select, 'epoll'):
+    del select.epoll  # So smart libs won't try to use it.
 
 
 def patch_tornado():

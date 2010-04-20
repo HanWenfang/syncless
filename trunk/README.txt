@@ -44,6 +44,7 @@ Features
   BaseHTTPRequestHandler + BaseHTTPServer applications, CherryPy
   applications, web.py applications, and Google webapp applications (not
   supporting most other Google AppEngine technologies) as well
+* combination of Syncless and (Twisted or Tornado) in the same process
 
 Requirements
 ~~~~~~~~~~~~
