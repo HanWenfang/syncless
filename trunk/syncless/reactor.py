@@ -71,8 +71,6 @@ class SynclessReactor(PosixReactorBase):
         self._selectables = {}
         self._signal_handlers = []
         from syncless import coio
-        self.EV_READ = coio.EV_READ
-        self.EV_WRITE = coio.EV_WRITE
         self._wakeup_info = coio.wakeup_info()
         self._pending_events = self._wakeup_info.pending_events
         PosixReactorBase.__init__(self)
@@ -92,14 +90,14 @@ class SynclessReactor(PosixReactorBase):
         """
         Add a FileDescriptor for notification of data available to read.
         """
-        self._add(reader, 0, self._reads)
+        self._add(reader, 1, self._reads)
 
 
     def addWriter(self, writer):
         """
         Add a FileDescriptor for notification of data available to write.
         """
-        self._add(writer, 1, self._writes)
+        self._add(writer, 2, self._writes)
 
 
     def _remove(self, selectable, mdict, other):
@@ -199,7 +197,7 @@ class SynclessReactor(PosixReactorBase):
             self._signal_handlers.append(evt)
 
 
-    def _doReadOrWrite(self, fd, evtype, selectable):
+    def _doReadOrWrite(self, fd, mode, selectable):
         """
         C{fd} is available for read or write, make the work and raise errors
         if necessary.
@@ -207,10 +205,10 @@ class SynclessReactor(PosixReactorBase):
         why = None
         inRead = False
         try:
-            if evtype & self.EV_READ:
+            if mode & 1:
                 why = selectable.doRead()
                 inRead = True
-            if not why and evtype & self.EV_WRITE:
+            if not why and mode & 2:
                 why = selectable.doWrite()
                 inRead = False
             if selectable.fileno() != fd:
@@ -223,13 +221,13 @@ class SynclessReactor(PosixReactorBase):
             self._disconnectSelectable(selectable, why, inRead)
 
     def _runPendingEvents(self, pending_events):
-        # pending_events is a list of (fd, evtype) pairs.
+        # pending_events is a list of (fd, mode) pairs.
         while pending_events:
-            fd, evtype = pending_events.pop()
+            fd, mode = pending_events.pop()
             if fd in self._selectables:
                 selectable = self._selectables[fd]
                 log.callWithLogger(selectable,
-                        self._doReadOrWrite, fd, evtype, selectable)
+                        self._doReadOrWrite, fd, mode, selectable)
 
     def doIteration(self, timeout):
         """

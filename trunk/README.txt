@@ -31,8 +31,8 @@ Features
   smtplib, ftplib, imaplib, poplib etc. modules
 * special monkey-patching for pure Python MySQL client libraries
   mysql.connector and pymysql
-* special monkey-patching for the Tornado web server (slow) and asyncore
-  (also slow)
+* special monkey-patching for the Tornado web server (fast)
+* special monkey-patching for asyncore
 * compatible timeout handling on individual socket operations
 * I/O event detection using libevent, which can use Linux epoll(7) or BSD
   kqueue (if available)
@@ -45,7 +45,8 @@ Features
   BaseHTTPRequestHandler + BaseHTTPServer applications, CherryPy
   applications, web.py applications, and Google webapp applications (not
   supporting most other Google AppEngine technologies) as well
-* combination of Syncless and (Twisted or Tornado) in the same process
+* combination of Syncless and (Twisted, Tornado or asyncore) in the same
+  process
 
 Requirements
 ~~~~~~~~~~~~

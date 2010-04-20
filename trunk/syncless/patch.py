@@ -147,17 +147,40 @@ def patch_asyncore():
 
 
 def patch_tornado():
+  from syncless import coio
   import tornado.ioloop
-  tornado.ioloop.select = get_fake_coio_select_module()
-  # TODO(pts): Implement a faster class (similar to tornado.ioloop._EPoll),
-  # with less overhead than select(2). Is it possible?
-  tornado.ioloop._poll = tornado.ioloop._Select  # Class.
-  def register(self, fd, events):
-    if events & tornado.ioloop.IOLoop.READ: self.read_fds.add(fd)
-    if events & tornado.ioloop.IOLoop.WRITE: self.write_fds.add(fd)
-    # Ignore IOLoop.ERROR, since libevent con't listen on that.
-  # TODO(pts): Don't we have to wrap this to an instance method?
-  tornado.ioloop._Select.register = register
+
+  # Constants as used by coio.wakeup_info.
+  tornado.ioloop.IOLoop.READ = 1
+  tornado.ioloop.IOLoop.WRITE = 2
+  # Ignore IOLoop.ERROR, libevent cannot poll for that.
+  tornado.ioloop.IOLoop.ERROR = 0
+
+  class TornadoSynclessPoll(object):
+    """A Syncless-based tornado.ioloop.IOLoop polling implementation."""
+    def __init__(self):
+      self.wakeup_info = coio.wakeup_info()
+      self.fd_to_event = {}
+
+    def register(self, fd, events):
+      self.fd_to_event[fd] = self.wakeup_info.create_event(fd, events)
+
+    def modify(self, fd, events):
+      # A combination of unregister + register.
+      event = self.fd_to_event.pop(fd, None)
+      if event:
+        event.delete()
+      self.fd_to_event[fd] = self.wakeup_info.create_event(fd, events)
+
+    def unregister(self, fd):
+      event = self.fd_to_event.pop(fd, None)
+      if event:
+        event.delete()
+
+    def poll(self, timeout):
+      return self.wakeup_info.tick_and_move(timeout)
+
+  tornado.ioloop._poll = TornadoSynclessPoll
 
 
 def ExceptHook(orig_excepthook, *args):

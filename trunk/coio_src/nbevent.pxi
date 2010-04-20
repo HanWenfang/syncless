@@ -2591,9 +2591,17 @@ cdef class wakeup_info
 
 cdef void HandleCWakeupInfoWakeup(int fd, short evtype, void *arg) with gil:
     cdef wakeup_info wakeup_info_obj
+    cdef int mode
     wakeup_info_obj = <wakeup_info>arg
     if fd >= 0:  # fd is -1 for a create_timer.
-        wakeup_info_obj.c_pending_events.append((fd, evtype))
+        mode = 0
+        if evtype & EV_READ:
+            mode |= 1
+        if evtype & EV_WRITE:
+            mode |= 2
+        # Create a list instead of a tuple so `mode' can be modified later by
+        # our users.
+        wakeup_info_obj.c_pending_events.append([fd, mode])
     if wakeup_info_obj.wakeup_tasklet:
         PyTasklet_Insert(wakeup_info_obj.wakeup_tasklet)
 
@@ -2633,7 +2641,11 @@ cdef class wakeup_info_event:
 
 
 cdef class wakeup_info:
-    """Information for event handlers to wake up the main loop tasklet."""
+    """Information for event handlers to wake up the main loop tasklet.
+
+    In the various methods, mode is an or-ed bitmask of 1 for reading, and
+    2 for writing.    
+    """
     cdef tasklet wakeup_tasklet
     cdef list c_pending_events
 
@@ -2647,17 +2659,20 @@ cdef class wakeup_info:
     def create_event(wakeup_info self, fd, mode):
         """Create and return an event object with a .delete() method."""
         cdef int evtype
-        if mode == 0:
-            evtype = c_EV_READ | c_EV_PERSIST
-        else:
-            evtype = c_EV_WRITE | c_EV_PERSIST
+        cdef int c_mode
+        c_mode = mode
+        evtype = c_EV_PERSIST
+        if c_mode & 1:
+            evtype |= c_EV_READ
+        if c_mode & 2:
+            evtype |= c_EV_WRITE
         return wakeup_info_event(self, evtype, fd, None)
 
     def tick(wakeup_info self, timeout):
         """Do one tick of the main loop iteration up to timeout.
 
         Returns:
-          The list of pending (fd, evtype) pairs. The caller must remove
+          The list of pending (fd, mode) pairs. The caller must remove
           items from the list before the next call to tick() as it's
           processing the events, by pop()ping the item before calling the
           event handler.
@@ -2687,3 +2702,11 @@ cdef class wakeup_info:
                 self.wakeup_tasklet = None
                 timeout_event.delete()
         return self.c_pending_events
+
+    def tick_and_move(wakeup_info self, timeout):
+        """Like self.tick(), but create a new list on each call."""
+        cdef list list_obj
+        list_obj = []
+        list_obj.extend(self.tick(timeout))
+        del self.c_pending_events[:]
+        return list_obj
