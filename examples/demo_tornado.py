@@ -62,4 +62,6 @@ if __name__ == "__main__":
   print >>sys.stderr, 'info: listening on %r' % (
       http_server._socket.getsockname(),)
   stackless.tasklet(ProgressReporter)(0.05)
-  tornado.ioloop.IOLoop.instance().start()
+  ioloop_obj = tornado.ioloop.IOLoop.instance()
+  assert 'TornadoSynclessPoll' == type(ioloop_obj._impl).__name__
+  ioloop_obj.start()
