@@ -2541,6 +2541,8 @@ cdef class selecter:
             assert fd >= 0
             event_set(self.wakeup_evs + i, fd, c_EV_WRITE, HandleCSelectWakeup,
                       <void*>self)
+            # We don't need a PyINCREF(self) here because the `finally:' block
+            # below cleans up.
             event_add(self.wakeup_evs + i, NULL)
             i += 1
         if i < c:
@@ -2582,3 +2584,106 @@ def select(rlist, wlist, xlist, timeout=None):
         raise NotImplementedError('except-filehandles for select')
     # TODO(pts): Simplify if len(rlist) == 1 and wlist is empty (etc.).
     return selecter().do_select(rlist, wlist, timeout)
+
+# --- syncless.reactor support classes
+
+cdef class wakeup_info
+
+cdef void HandleCWakeupInfoWakeup(int fd, short evtype, void *arg) with gil:
+    cdef wakeup_info wakeup_info_obj
+    wakeup_info_obj = <wakeup_info>arg
+    if fd >= 0:  # fd is -1 for a create_timer.
+        wakeup_info_obj.c_pending_events.append((fd, evtype))
+    if wakeup_info_obj.wakeup_tasklet:
+        PyTasklet_Insert(wakeup_info_obj.wakeup_tasklet)
+
+cdef class wakeup_info_event:
+    # It's important to hold this reference.
+    cdef event_t ev
+    cdef wakeup_info wakeup_info_obj
+
+    def __cinit__(wakeup_info_event self,
+                  wakeup_info wakeup_info_obj,
+                  int evtype,
+                  int handle,
+                  timeout):
+        cdef timeval tv
+        cdef float timeout_float
+        assert wakeup_info_obj
+        self.wakeup_info_obj = wakeup_info_obj  # Implied Py_INCREF.
+        event_set(&self.ev, handle, evtype, HandleCWakeupInfoWakeup,
+                  <void*>wakeup_info_obj)
+        if timeout is None:
+            event_add(&self.ev, NULL)
+        else:
+            timeout_float = timeout
+            tv.tv_sec = <long>timeout_float
+            tv.tv_usec = <unsigned int>(
+                (timeout_float - <float>tv.tv_sec) * 1000000.0)
+            event_add(&self.ev, &tv)
+        Py_INCREF(self)
+
+    def delete(self):
+        event_del(&self.ev)
+        Py_DECREF(self)
+        self.wakeup_info_obj = None
+
+    # No need for `def __destroy__', Py_INCREF(self) above ensures that the
+    # object is not auto-destroyed.
+
+
+cdef class wakeup_info:
+    """Information for event handlers to wake up the main loop tasklet."""
+    cdef tasklet wakeup_tasklet
+    cdef list c_pending_events
+
+    def __cinit__(wakeup_info self):
+        self.c_pending_events = []
+
+    property pending_events:
+        def __get__(wakeup_info self):
+            return self.c_pending_events
+
+    def create_event(wakeup_info self, fd, mode):
+        """Create and return an event object with a .delete() method."""
+        cdef int evtype
+        if mode == 0:
+            evtype = c_EV_READ | c_EV_PERSIST
+        else:
+            evtype = c_EV_WRITE | c_EV_PERSIST
+        return wakeup_info_event(self, evtype, fd, None)
+
+    def tick(wakeup_info self, timeout):
+        """Do one tick of the main loop iteration up to timeout.
+
+        Returns:
+          The list of pending (fd, evtype) pairs. The caller must remove
+          items from the list before the next call to tick() as it's
+          processing the events, by pop()ping the item before calling the
+          event handler.
+        """
+        cdef event_t timeout_ev
+        cdef wakeup_info_event timeout_event
+        assert self.wakeup_tasklet is None
+        if self.c_pending_events or (timeout is not None and timeout <= 0):
+            # Let the Syncless main loop collect more libevent events.
+            PyStackless_Schedule(None, 0)  # remove=0
+        elif timeout is None:
+            # Event handlers call self.wakeup_tasklet.insert() to cancel this
+            # stackless.schedule_remove().
+            try:
+                PyStackless_Schedule(None, 1)  # remove=1
+            finally:
+                self.wakeup_tasklet = None
+        else:
+            timeout_event = wakeup_info_event(self, c_EV_TIMEOUT, -1,
+                                              timeout)
+            self.wakeup_tasklet = stackless.current
+            # Event handlers call self.wakeup_tasklet.insert() to cancel this
+            # stackless.schedule_remove().
+            try:
+                PyStackless_Schedule(None, 1)  # remove=1
+            finally:
+                self.wakeup_tasklet = None
+                timeout_event.delete()
+        return self.c_pending_events

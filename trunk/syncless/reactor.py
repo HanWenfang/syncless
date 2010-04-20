@@ -4,14 +4,15 @@
 """
 A Syncless-based implementation of the twisted main loop.
 
-This Python module is based on libevent.reacator, available from
-https://launchpad.net/python-libevent
+This Python module was written by reusing the source code of
+libevent.reactor v0.3, available from http://launchpad.net/python-libevent
+(simple BSD license).
 
 To install the event loop (and you should do this before any connections,
-listeners or connectors are added)::
+listeners or connectors are added):
 
-    import libevent.reactor
-    libevent.reactor.install()
+    import syncless.reactor
+    syncless.reactor.install()
 
 API Stability: stable
 
@@ -30,52 +31,13 @@ from twisted.python import log
 from twisted.internet.interfaces import IReactorFDSet
 from twisted.python.runtime import platformType
 
-import libevent
-
-class WakeupInfo(object):
-    """Information for event handlers to wake up the main loop tasklet."""
-    def __init__(self):
-        self.wakeup_tasklet = None
-        self.pending_events = []
-
-    def event_callback(self, fd, events, eventObj):
-        """Called when an event id available."""
-        if fd >= 0:  # fd is -1 for a create_timer.
-            self.pending_events.append((fd, events))
-        if self.wakeup_tasklet:
-            self.wakeup_tasklet.insert()
-
-    def tick(self, timeout):
-        """Do one tick of the main loop iteration up to timeout.
-
-        Returns:
-          The list of pending (fd, eventmask) pairs. The caller must remove
-          items from the list before the next call to tick() as it's
-          processing the events, by pop()ping the item before calling the
-          event handler.
-        """
-        assert self.wakeup_tasklet is None
-        if self.pending_events or (timeout is not None and timeout <= 0):
-            # Let the Syncless main loop collect more libevent events.
-            stackless.schedule()
-        else:
-            if timeout is not None:
-                libevent.create_timer(
-                    self.event_callback, persist=False
-                    ).add_to_loop(float(timeout))
-            self.wakeup_tasklet = stackless.current
-            # Event handlers call self.wakeup_tasklet.insert() to cancel this
-            # stackless.schedule_remove().
-            try:
-                stackless.schedule_remove()
-            finally:
-                self.wakeup_tasklet = None
-        return self.pending_events
-
+# We don't want to import anything from syncless at the top-level (so the
+# Syncless event wakeup tasklet won't be created). We only import syncless
+# from within the install() function.
 
 class SynclessReactor(PosixReactorBase):
     """
-    A reactor that uses libevent.
+    A reactor that uses Syncless (which uses libevent).
 
     @ivar _selectables: A dictionary mapping integer file descriptors to
         instances of L{FileDescriptor} which have been registered with the
@@ -108,21 +70,21 @@ class SynclessReactor(PosixReactorBase):
         self._writes = {}
         self._selectables = {}
         self._signal_handlers = []
-        self._wakeup_info = WakeupInfo()
+        from syncless import coio
+        self.EV_READ = coio.EV_READ
+        self.EV_WRITE = coio.EV_WRITE
+        self._wakeup_info = coio.wakeup_info()
         self._pending_events = self._wakeup_info.pending_events
         PosixReactorBase.__init__(self)
 
 
-    def _add(self, xer, flags, mdict):
+    def _add(self, xer, mode, mdict):
         """
         Create the event for reader/writer.
         """
         fd = xer.fileno()
         if fd not in mdict:
-            event = libevent.create_event(fd, flags,
-                                          self._wakeup_info.event_callback)
-            mdict[fd] = event
-            event.add_to_loop()
+            mdict[fd] = self._wakeup_info.create_event(fd, mode)
             self._selectables[fd] = xer
 
 
@@ -130,14 +92,14 @@ class SynclessReactor(PosixReactorBase):
         """
         Add a FileDescriptor for notification of data available to read.
         """
-        self._add(reader, libevent.EV_READ|libevent.EV_PERSIST, self._reads)
+        self._add(reader, 0, self._reads)
 
 
     def addWriter(self, writer):
         """
         Add a FileDescriptor for notification of data available to write.
         """
-        self._add(writer, libevent.EV_WRITE|libevent.EV_PERSIST, self._writes)
+        self._add(writer, 1, self._writes)
 
 
     def _remove(self, selectable, mdict, other):
@@ -152,11 +114,8 @@ class SynclessReactor(PosixReactorBase):
             else:
                 return
         if fd in mdict:
-            event = mdict.pop(fd)
-            try:
-                event.remove_from_loop()
-            except libevent.EventError:
-                pass
+            # Call event_del() on the event object.
+            mdict.pop(fd).delete()
             if fd not in other:
                 del self._selectables[fd]
 
@@ -190,7 +149,7 @@ class SynclessReactor(PosixReactorBase):
         self._selectables.clear()
 
         for event in events.values():
-            event.remove_from_loop()
+            event.delete()
         if self.waker is not None:
             self.addReader(self.waker)
         return result
@@ -205,36 +164,42 @@ class SynclessReactor(PosixReactorBase):
 
 
     def _handleSignals(self):
-        # !!!
         import signal
+        from syncless import coio
 
-        evt = libevent.create_signal_handler(signal.SIGINT, self.sigInt, True)
-        evt.add_to_loop()
+        coio.sigint_event.delete()
+        coio.sigint_event = evt = coio.event(
+            callback=self.sigInt, handle=signal.SIGINT,
+            evtype=coio.EV_SIGNAL | coio.EV_PERSIST, is_internal=1)
+        evt.add()
         self._signal_handlers.append(evt)
 
-        evt = libevent.create_signal_handler(
-            signal.SIGTERM, self.sigTerm, True)
-        evt.add_to_loop()
+        evt = coio.event(
+            callback=self.sigTerm, handle=signal.SIGTERM,
+            evtype=coio.EV_SIGNAL | coio.EV_PERSIST, is_internal=1)
+        evt.add()
         self._signal_handlers.append(evt)
 
         # Catch Ctrl-Break in windows
         if hasattr(signal, "SIGBREAK"):
-            evt = libevent.create_signal_handler(
-                signal.SIGBREAK, self.sigBreak, True)
-            evt.add_to_loop()
+            evt = coio.event(
+                callback=self.sigBreak, handle=signal.SIGBREAK,
+                evtype=coio.EV_SIGNAL | coio.EV_PERSIST, is_internal=1)
+            evt.add()
             self._signal_handlers.append(evt)
         if platformType == "posix":
             # Install a dummy SIGCHLD handler, to shut up warning. We could
             # install the normal handler, but it would lead to unnecessary reap
             # calls
             signal.signal(signal.SIGCHLD, lambda *args: None)
-            evt = libevent.create_signal_handler(signal.SIGCHLD,
-                                                 self._handleSigchld, True)
-            evt.add_to_loop()
+            evt = coio.event(
+                callback=self._handleSigchld, handle=signal.SIGCHLD,
+                evtype=coio.EV_SIGNAL | coio.EV_PERSIST, is_internal=1)
+            evt.add()
             self._signal_handlers.append(evt)
 
 
-    def _doReadOrWrite(self, fd, eventmask, selectable):
+    def _doReadOrWrite(self, fd, evtype, selectable):
         """
         C{fd} is available for read or write, make the work and raise errors
         if necessary.
@@ -242,10 +207,10 @@ class SynclessReactor(PosixReactorBase):
         why = None
         inRead = False
         try:
-            if eventmask & libevent.EV_READ:
+            if evtype & self.EV_READ:
                 why = selectable.doRead()
                 inRead = True
-            if not why and eventmask & libevent.EV_WRITE:
+            if not why and evtype & self.EV_WRITE:
                 why = selectable.doWrite()
                 inRead = False
             if selectable.fileno() != fd:
@@ -258,48 +223,35 @@ class SynclessReactor(PosixReactorBase):
             self._disconnectSelectable(selectable, why, inRead)
 
     def _runPendingEvents(self, pending_events):
-        # pending_events is a list of (fd, eventmask) pairs.
+        # pending_events is a list of (fd, evtype) pairs.
         while pending_events:
-            fd, eventmask = pending_events.pop()
+            fd, evtype = pending_events.pop()
             if fd in self._selectables:
                 selectable = self._selectables[fd]
                 log.callWithLogger(selectable,
-                        self._doReadOrWrite, fd, eventmask, selectable)
+                        self._doReadOrWrite, fd, evtype, selectable)
 
     def doIteration(self, timeout):
         """
-        Call one iteration of the libevent loop.
+        Call one iteration of the Syncless loop.
         """
-        # !!! no need for reactor.run() == twisted.internet.base.mainLoop.
         self._runPendingEvents(self._wakeup_info.tick(timeout))
 
     def crash(self):
         PosixReactorBase.crash(self)
         for handler in self._signal_handlers:
-            handler.remove_from_loop()
-        self._signal_handlers[:] = []
-
-
-# !! use the coio main loop instead
-def mainLoop():
-    while True:
-        if stackless.runcount > 1:
-            libevent.loop(libevent.EVLOOP_ONCE | libevent.EVLOOP_NONBLOCK)
-        else:
-            libevent.loop(libevent.EVLOOP_ONCE)
-        stackless.schedule()
+            handler.delete()
+        del self._signal_handlers[:]
 
 
 def install():
     """
-    Install the libevent reactor.
+    Install the Syncless reactor.
     """
-    p = SynclessReactor()
-    installReactor(p)
-    # As a side effect, this import creates and starts the
-    # coio.main_loop_tasklet.
-    #from syncless import coio
-    stackless.tasklet(mainLoop)()
+    # As a side effect, this calls `from syncless import coio', which
+    # creates and starts the coio.main_loop_tasklet, which calls
+    # event_loop() indefinitely.
+    installReactor(SynclessReactor())
 
 
 __all__ = ["SynclessReactor", "install"]
