@@ -14,7 +14,8 @@ non-blocking Python communication libraries. Syncless contains an
 asynchronous DNS resolver (using evdns) and a HTTP server capable of serving
 WSGI applications. Syncless aims to be a coroutine-based alternative of
 event-driven networking engines (such as Twisted and FriendFeed's Tornado),
-and it's a competitor of gevent, pyevent, Eventlet and Concurrence.
+and it's a competitor of gevent, pyevent, python-libevent, Eventlet and
+Concurrence.
 
 Features
 ~~~~~~~~
@@ -119,6 +120,7 @@ Related projects
 * stacklesswsgi
   http://code.google.com/p/stacklessexamples/wiki/StacklessWSGI
 * pyevent (uses callbacks instead of coroutines)
+* python-libevent (uses callbacks instead of coroutines)
 * Twisted (uses callbacks instead of coroutines)
 * Tornado (uses callbacks instead of coroutines)
 
@@ -166,8 +168,10 @@ Features removed from old Syncless:
 * edge-triggered epoll operation
 * ability to use greenlet instead of Stackless (may be added later)
 
-Code used for syncless.io
-~~~~~~~~~~~~~~~~~~~~~~~~~
+External code used
+~~~~~~~~~~~~~~~~~~
+Code used for syncless.coio
+"""""""""""""""""""""""""""
 Copied files from the BSD-licensed pyevent (libevent Python bindings),
 revision 60 from
 svn checkout http://pyevent.googlecode.com/svn/trunk/ pyevent-read-only
@@ -176,6 +180,12 @@ svn checkout http://pyevent.googlecode.com/svn/trunk/ pyevent-read-only
 * event.pyx
 * setup.py
 * test.py
+
+Code used for the Twisted reactor
+"""""""""""""""""""""""""""""""""
+libevent.reactor v0.3 (2008-11-22), available from
+http://launchpad.net/python-libevent (simple BSD license).
+
 
 Limitations
 ~~~~~~~~~~~
@@ -435,17 +445,26 @@ A11. Not at the moment, since the main event loop of these GUI frameworks doesn'
      support coroutines. It would be an interesting and complicated project
      to make Syncless support these main event loops instead of libevent.
 
-Q12. Is it possible to use stacklessocket, asyncore, pyevent, Tornado,
-     Twisted or another event-driven communication library with Syncless?
+Q12. Is it possible to use stacklessocket, asyncore, pyevent,
+     python-libevent, Tornado, Twisted or another event-driven communication
+     library with Syncless?
 
 A12. Tornado (with its own main loop) is already supported with
-     patch.patch_tornado(). See also examples/demo_tornado.py .
+     patch.patch_tornado(). See also examples/demo_tornado.py . Please note
+     that the speed would be slower than native Tornado because of the
+     select(2) emulation with coio.select.
+
+     Twisted (with a Syncless-specific reactor as its main loop) is already
+     supported. See examples/demo_twisted.py .
 
      Adding support for Twisted would be possible, fun and interesting.
-     Adding asyncore will be similar, but simpler.
+     Adding asyncore would be possible and fun.
 
-     Adding pyevent may become complicated because of the multiple
-     libevent-based I/O loops.
+     Adding pyevent or python-libevent may become complicated because of the
+     multiple libevent-based I/O loops. (Most importantly: the Syncless main
+     loop adds EVLOOP_NONBLOCK if more tasklets are in the runnables list
+     (stackless.runcount > 1). Thus EVLOOP_NONBLOCK would always be
+     specified with multiple main loops, which would result in busy waiting.
 
      Adding stacklessocket wouldn't give us too much benefit, because
      stacklessocket is not for production use.

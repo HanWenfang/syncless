@@ -98,9 +98,10 @@ cdef class event:
 
     callback -- user callback with (ev, handle, evtype, arg) prototype
     arg      -- optional callback arguments
-    evtype   -- bitmask of EV_READ or EV_WRITE, or EV_SIGNAL
+    evtype   -- bitmask of EV_READ or EV_WRITE, EV_TIMEOUT, or EV_SIGNAL
     handle   -- for EV_READ or EV_WRITE, a file handle, descriptor, or socket
                 for EV_SIGNAL, a signal number
+                for EV_TIMEOUT, -1
     """
     cdef event_t ev
     cdef object handle, evtype, callback, args
@@ -114,7 +115,7 @@ cdef class event:
         self.callback = callback
         self.args = arg
         self.evtype = evtype
-        self.handle = handle
+        self.handle = handle  # fd, file descriptor
         if simple:
             handler = __simple_event_handler
         else:
@@ -180,10 +181,13 @@ cdef class event:
         if self.pending():
             event_del(&self.ev)
             Py_DECREF(self)
-    
-    def __dealloc__(self):
-        self.delete()
-    
+
+    # This wouldn't make sense: __dealloc__ is called if there are
+    # no more references to self, but then why would it call Py_DECREF on
+    # itself?
+    #def __dealloc__(self):
+    #    self.delete()
+
     def __repr__(self):
         return '<event flags=0x%x, handle=%s, callback=%s, arg=%s>' % \
                (self.ev.ev_flags, self.handle, self.callback, self.args)
