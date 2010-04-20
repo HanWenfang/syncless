@@ -134,6 +134,18 @@ def patch_select():
     del select.epoll  # So smart libs won't try to use it.
 
 
+def patch_asyncore():
+  import asyncore
+  import select
+  from syncless import coio
+  select_module = type(asyncore)('fake_asyncore_select')
+  # Ignore the xlist.
+  select_module.select = (lambda rlist, wlist, xlist, timeout = None:
+                          coio.select(rlist, wlist, (), timeout))
+  select_module.error = select.error
+  asyncore.select = select_module
+
+
 def patch_tornado():
   import tornado.ioloop
   tornado.ioloop.select = get_fake_coio_select_module()
@@ -284,20 +296,20 @@ def validate_new_sslsock(**kwargs):
     nsock.close()
 
 
-def fix_all():
+def fix_all_std():
   fix_ssl_makefile()
   fix_ssl_init_memory_leak()
 
 
-def patch_all():
-  fix_all()
+def patch_all_std():
+  fix_all_std()
   patch_socket()
   patch_ssl()
   patch_mysql_connector()
   patch_pymysql()
   patch_time()
   patch_select()
-  patch_tornado()
+  #patch_tornado()  # Non-standard module, don't patch.
   patch_stdin_and_stdout()
   patch_stderr()
 

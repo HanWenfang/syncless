@@ -1,11 +1,12 @@
 #! /usr/local/bin/stackless2.6
 
-"""Simple HTTP server based on the asyncore / asynchat framework
+"""Demo for cooperation of Syncless and asyncore.
+
+Based on: Simple HTTP server based on the asyncore / asynchat framework.
 
 Original script downloaded from
 http://code.activestate.com/recipes/259148-simple-http-server-based-on-asyncoreasynchat/
 at Tue Apr 20 18:21:00 CEST 2010
-
 
 Under asyncore, every time a socket is created it enters a table which is
 scanned through select calls by the asyncore.loop() function
@@ -246,9 +247,20 @@ class Server(asyncore.dispatcher):
 
 if __name__=="__main__":
     # launch the server on the specified port
-    port = 8081
+    port = 8080
     s=Server('',port,RequestHandler)
     print "SimpleAsyncHTTPServer running on port %s" %port
+
+    import stackless
+    from syncless import coio
+    from syncless import patch
+    def ProgressWorker(sleep_amount):
+        while True:
+            os.write(2, '.')
+            coio.sleep(sleep_amount)
+    stackless.tasklet(ProgressWorker)(0.1)
+    patch.patch_asyncore()
+
     try:
         asyncore.loop(timeout=2)
     except KeyboardInterrupt:

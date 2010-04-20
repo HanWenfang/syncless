@@ -31,7 +31,8 @@ Features
   smtplib, ftplib, imaplib, poplib etc. modules
 * special monkey-patching for pure Python MySQL client libraries
   mysql.connector and pymysql
-* special monkey-patching for the Tornado web server (slow)
+* special monkey-patching for the Tornado web server (slow) and asyncore
+  (also slow)
 * compatible timeout handling on individual socket operations
 * I/O event detection using libevent, which can use Linux epoll(7) or BSD
   kqueue (if available)
@@ -455,8 +456,13 @@ A12. Tornado (with its own main loop) is already supported with
      that the speed would be slower than native Tornado because of the
      select(2) emulation with coio.select.
 
-     Twisted (with a Syncless-specific reactor as its main loop) is already
-     supported. See examples/demo_twisted.py .
+     asyncore (with its own main loop) is already supported with
+     patch.patch_asyncore(). See also examples/demo_asyncore.py . But, if
+     possible, please don't use asyncore in production (but write your
+     application using a modern framework like Syncless, Tornado, Twisted or
+     Concurrence), because asyncore lacks core functionality like proper
+     timed event handling, some developers don't like its error handling
+     design, and it's slow.
 
      Adding support for Twisted would be possible, fun and interesting.
      Adding asyncore would be possible and fun.
