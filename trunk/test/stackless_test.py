@@ -333,6 +333,86 @@ class StacklessTest(unittest.TestCase):
       # Don't check the traceback (tb2), should be in stackless.schedule().
     self.assertTrue(tb2)
 
+  def testKillJumpsInRunnablesList(self):
+    items = []
+
+    def Worker():
+      items.append('worker')
+
+    def Dead():
+      items.append('dead')
+
+    dead_tasklet = stackless.tasklet(Dead)()
+    worker_tasklet = stackless.tasklet(Worker)()
+    items.append('before')
+    dead_tasklet.kill()
+    items.append('after')
+    self.assertEqual('before,worker,after', ','.join(items))
+
+  def testChannelReceiveLinkedList(self):
+    """Test how the linked lists are formed when blocked on a channel."""
+    channel_obj = stackless.channel()
+    tasklet1 = stackless.tasklet(channel_obj.receive)()
+    #tasklet2 = stackless.tasklet(channel_obj.receive)()
+    #tasklet3 = stackless.tasklet(channel_obj.receive)()
+    assert tasklet1.next is stackless.current
+
+    stackless.schedule()
+    assert tasklet1.next is None
+    assert tasklet1.prev is None
+
+    tasklet2 = stackless.tasklet(channel_obj.receive)()
+    stackless.schedule()
+    assert tasklet1.next is tasklet2
+    assert tasklet1.prev is None
+
+    tasklet3 = stackless.tasklet(channel_obj.receive)()
+    stackless.schedule()
+    assert tasklet1.next is tasklet2
+    assert tasklet2.next is tasklet3
+    assert tasklet3.next is None
+    assert tasklet1.prev is None
+    assert tasklet2.prev is tasklet1
+    assert tasklet3.prev is tasklet2
+
+  def testRunBlockedTasklet(self):
+    def Worker(channel_obj):
+      print repr(channel_obj.receive())
+
+    channel_obj = stackless.channel()
+    tasklet1 = stackless.tasklet(Worker)(channel_obj)
+    assert not tasklet1.blocked
+    stackless.schedule()
+    assert tasklet1.blocked
+    # RuntimeError('You cannot run a blocked tasklet')
+    self.assertRaises(RuntimeError, tasklet1.insert)
+
+  def testRunnablesOrderAtKill(self):
+    def Safe(items):
+      try:
+        items.append('start')
+        stackless.schedule()
+      except ValueError:
+        items.append('caught')
+
+    stackless.schedule()
+    tasklet1 = stackless.tasklet(lambda: 1 / 0)()
+    items = []
+    tasklet2 = stackless.tasklet(Safe)(items)
+    tasklet2.run()
+    assert 'start' == ','.join(items)
+    tasklet3 = stackless.tasklet(lambda: 1 / 0)()
+    tasklet2.remove()
+    tasklet2.remove()
+    tasklet2.raise_exception(ValueError)
+    assert 'start,caught' == ','.join(items)
+    assert tasklet1.alive
+    assert not tasklet2.alive
+    assert tasklet3.alive
+    tasklet1.remove()
+    tasklet1.kill()  # Don't run tasklet3.
+    tasklet3.kill()
+    tasklet2.kill()
 
 if __name__ == '__main__':
   unittest.main()
