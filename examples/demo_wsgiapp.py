@@ -20,6 +20,7 @@ def WsgiApp(env, start_response):
   response_headers = [('Content-type', 'text/html')]
   write = start_response(status, response_headers)
   if env['REQUEST_METHOD'] in ('POST', 'PUT'):
+    #print env['wsgi.input']
     return ['Posted/put %r.' % env['wsgi.input'].read(10)]
   elif env['PATH_INFO'] == '/hello':
     return ['Hello, <i>World</i> @ %s!\n' % time.time()]
