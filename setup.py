@@ -34,15 +34,21 @@ event = Extension(name='syncless.coio',
                   library_dirs=library_dirs,
                   libraries=['event'])
 
+version = {}
+f = open(os.path.join(os.path.dirname(__file__), 'syncless', 'version.py'))
+exec f in version
+assert isinstance(version.get('VERSION'), str)
+
 setup(name='syncless',
-      version='0.02',
+      version=version['VERSION'],
       description='Syncless: asynchronous client and server library using Stackless Python',
       author='Peter Szabo',
       author_email='pts@fazekas.hu',
       maintainer='Peter Szabo',
       maintainer_email='pts@fazekas.hu',
       url='http://code.google.com/p/syncless/',
-      download_url='http://syncless.googlecode.com/files/syncless-0.01.tar.gz',
+      download_url='http://syncless.googlecode.com/files/syncless-%s.tar.gz' %
+                   version['VERSION'],
       packages=['syncless'],
       long_description=
           "Syncless is an experimental, lightweight, non-blocking "
