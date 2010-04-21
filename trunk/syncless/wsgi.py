@@ -42,15 +42,14 @@ import types
 
 from syncless import coio
 
-# !! TODO(pts): Fix all methods to use coio (instead of nbf and nbs).
-#               Add tests.
+# TODO(pts): Add tests.
 
-# TODO(pts): Use this.
+# !! TODO(pts): Use this.
 ERRLIST_REQHEAD_RAISE = [
     errno.EBADF, errno.EINVAL, errno.EFAULT]
 """Errnos to be raised when reading the HTTP request headers."""
 
-# TODO(pts): Use this.
+# !! TODO(pts): Use this.
 ERRLIST_REQBODY_RAISE = [
     errno.EBADF, errno.EINVAL, errno.EFAULT]
 """Errnos to be raised when reading the HTTP request headers."""
@@ -96,7 +95,6 @@ class WsgiErrorsStream(object):
       cls.write(msg)
 
 
-# !! test all methods
 class WsgiEmptyInputStream(object):
   """Empty POST data input stream sent to the WSGI application as
   env['wsgi.input'].
@@ -154,16 +152,16 @@ def GetHttpDate(at):
       WDAY[now[6]], now[2], MON[now[1]], now[0], now[3], now[4], now[5])
       
 
-def RespondWithBadRequest(date, server_software, nbf, reason):
+def RespondWithBadRequest(date, server_software, sockfile, reason):
   msg = 'Bad request: ' + str(reason)
   # TODO(pts): Add Server: and Date:
   sockfile.write('HTTP/1.0 400 Bad Request\r\n'
-            'Server: %s\r\n'
-            'Date: %s\r\n'
-            'Connection: close\r\n'
-            'Content-Type: text/plain\r\n'
-            'Content-Length: %d\r\n\r\n%s\n' %
-            (server_software, date, len(msg) + 1, msg))
+                 'Server: %s\r\n'
+                 'Date: %s\r\n'
+                 'Connection: close\r\n'
+                 'Content-Type: text/plain\r\n'
+                 'Content-Length: %d\r\n\r\n%s\n' %
+                 (server_software, date, len(msg) + 1, msg))
   sockfile.flush()
 
 
@@ -181,7 +179,7 @@ def ConsumerWorker(items):
       items.close()
 
 
-def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
+def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
   if not isinstance(date, str):
@@ -190,7 +188,7 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
   do_keep_alive_ary = [True]
   headers_sent_ary = [False]
   server_software = default_env['SERVER_SOFTWARE']
-  sockfile = nbf.makefile_samefd()
+  sockfile = sock.makefile_samefd()
   reqhead_continuation_re = REQHEAD_CONTINUATION_RE
   try:
     while do_keep_alive_ary[0]:
@@ -222,7 +220,7 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
       # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
       # req_buf may contain some bytes after the previous request.
       if logging.root.level <= DEBUG:
-        logging.debug('reading HTTP request on nbf=%x' % id(nbf))
+        logging.debug('reading HTTP request on sock=%x' % id(sock))
       while True:
         if req_buf:
           # TODO(pts): Support HTTP/0.9 requests without headers.
@@ -242,8 +240,8 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
             return
         # TODO(pts): Handle read errors (such as ECONNRESET etc.).
         # TODO(pts): Better buffering than += (do we need that?)
-        # TODO(pts): Use sockfile (nbfile) instead.
-        req_new = nbf.recv(4096)
+        # !! TODO(pts): Use sockfile (nbfile) instead.
+        req_new = sock.recv(4096)
         if not req_new:
           # The HTTP client has closed the connection before sending the headers.
           return
@@ -260,20 +258,20 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
       req_lines = req_head.split('\n')
       req_line1_items = req_lines.pop(0).split(' ', 2)
       if len(req_line1_items) != 3:
-        RespondWithBadRequest(date, server_software, nbf, 'bad line1')
+        RespondWithBadRequest(date, server_software, sockfile, 'bad line1')
         return  # Don't reuse the connection.
       method, suburl, http_version = req_line1_items
       if http_version not in HTTP_VERSIONS:
         RespondWithBadRequest(date, 
-            server_software, nbf, 'bad HTTP version: %r' % http_version)
+            server_software, sockfile, 'bad HTTP version: %r' % http_version)
         return  # Don't reuse the connection.
       # TODO(pts): Support more methods for WebDAV.
       if method not in HTTP_1_1_METHODS:
-        RespondWithBadRequest(date, server_software, nbf, 'bad method')
+        RespondWithBadRequest(date, server_software, sockfile, 'bad method')
         return  # Don't reuse the connection.
       if not SUB_URL_RE.match(suburl):
         # This also fails for HTTP proxy URLS http://...
-        RespondWithBadRequest(date, server_software, nbf, 'bad suburl')
+        RespondWithBadRequest(date, server_software, sockfile, 'bad suburl')
         return  # Don't reuse the connection.
       env['REQUEST_METHOD'] = method
       env['SERVER_PROTOCOL'] = http_version
@@ -293,7 +291,8 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
       for line in req_lines:
         i = line.find(':')
         if i < 0:
-          RespondWithBadRequest(date, server_software, nbf, 'bad header line')
+          RespondWithBadRequest(date, server_software,
+                                sockfile, 'bad header line')
           return
         j = line.find(': ', i)
         if j >= 0:
@@ -309,7 +308,8 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
           try:
             content_length = int(value)
           except ValueError:
-            RespondWithBadRequest(date, server_software, nbf, 'bad content-length')
+            RespondWithBadRequest(
+                date, server_software, sockfile, 'bad content-length')
             return
           env['CONTENT_LENGTH'] = value
         elif name == 'content-type':
@@ -331,14 +331,15 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
 
       if content_length is None:
         if method in ('POST', 'PUT'):
-          RespondWithBadRequest(date, server_software, nbf, 'missing content')
+          RespondWithBadRequest(
+              date, server_software, sockfile, 'missing content')
           return
         env['wsgi.input'] = input = WsgiEmptyInputStream
       else:
         if method not in ('POST', 'PUT'):
           if content_length:
             RespondWithBadRequest(
-                date, server_software, nbf, 'unexpected content')
+                date, server_software, sockfile, 'unexpected content')
             return
           content_length = None
           del env['CONTENT_LENGTH']
@@ -348,7 +349,7 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
           # served.
           if content_length < sockfile.read_buffer_len:
             RespondWithBadRequest(
-                date, server_software, nbf, 'next request too early')
+                date, server_software, sockfile, 'next request too early')
             return
           env['wsgi.input'] = input = sockfile
           # TODO(pts): Avoid the memcpy() in unread.
@@ -375,7 +376,7 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
           input.discard_to_read_limit()
           sockfile.flush()
           if not do_keep_alive_ary[0]:
-            nbf.close()
+            sock.close()
           headers_sent_ary[0] = True
 
       def WriteNotHead(data):
@@ -490,7 +491,7 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
             input.discard_to_read_limit()
             sockfile.flush()
             if not do_keep_alive_ary[0]:
-              nbf.close()
+              sock.close()
 
           # Iterate over `items' below in another tasklet, so we can read
           # the next request asynchronously from the HTTP client while the
@@ -504,9 +505,9 @@ def WsgiWorker(nbf, peer_name, wsgi_application, default_env, date):
         if hasattr(items, 'close'):  # According to the WSGI spec.
           items.close()
   finally:
-    nbf.close()
+    sock.close()
     if logging.root.level <= DEBUG:
-      logging.debug('connection closed nbf=%x' % id(nbf))
+      logging.debug('connection closed sock=%x' % id(sock))
 
 
 def WsgiListener(server_socket, wsgi_application):
@@ -550,28 +551,28 @@ def WsgiListener(server_socket, wsgi_application):
 class FakeServerSocket(object):
   """A fake TCP server socket, used as CherryPyWSGIServer.socket."""
 
-  __attrs__ = ['accepted_nbs', 'accepted_addr']
+  __attrs__ = ['accepted_sock', 'accepted_addr']
 
   def __init__(self):
-    self.accepted_nbs = None
+    self.accepted_sock = None
     self.accepted_addr = None
 
   def accept(self):
-    """Return and clear self.accepted_nbs.
+    """Return and clear self.accepted_sock.
 
     This method is called by CherryPyWSGIServer.tick().
     """
-    accepted_nbs = self.accepted_nbs
-    assert accepted_nbs
+    accepted_sock = self.accepted_sock
+    assert accepted_sock
     accepted_addr = self.accepted_addr
-    self.accepted_nbs = None
+    self.accepted_sock = None
     self.accepted_addr = None
-    return accepted_nbs, accepted_addr
+    return accepted_sock, accepted_addr
 
-  def ProcessAccept(self, accepted_nbs, accepted_addr):
-    assert accepted_nbs
-    assert self.accepted_nbs is None
-    self.accepted_nbs = accepted_nbs
+  def ProcessAccept(self, accepted_sock, accepted_addr):
+    assert accepted_sock
+    assert self.accepted_sock is None
+    self.accepted_sock = accepted_sock
     self.accepted_addr = accepted_addr
 
 
@@ -588,11 +589,11 @@ class FakeRequests(object):
     self.requests.append(request)
 
 
-def CherryPyWsgiListener(nbs, wsgi_application):
+def CherryPyWsgiListener(server_sock, wsgi_application):
   """HTTP server serving WSGI, using CherryPy's implementation."""
-  # TODO(pts): Why is CherryPy's /infinite twice as fast as ours?
+  # !! TODO(pts): Speed: Why is CherryPy's /infinite twice as fast as ours?
   # Only sometimes.
-  if not isinstance(nbs, coio.nbsocket):
+  if not isinstance(server_sock, coio.nbsocket):
     raise TypeError
   if not callable(wsgi_application):
     raise TypeError
@@ -601,7 +602,7 @@ def CherryPyWsgiListener(nbs, wsgi_application):
   except ImportError:
     from web import wsgiserver  # Another implementation in (web.py).
   wsgi_server = wsgiserver.CherryPyWSGIServer(
-      nbs.getsockname(), wsgi_application)
+      server_sock.getsockname(), wsgi_application)
   wsgi_server.ready = True
   wsgi_server.socket = FakeServerSocket()
   wsgi_server.requests = FakeRequests()
@@ -609,20 +610,20 @@ def CherryPyWsgiListener(nbs, wsgi_application):
 
   try:
     while True:
-      accepted_nbs, peer_name = nbs.accept()
+      sock, peer_name = server_sock.accept()
       if logging.root.level <= DEBUG:
-        logging.debug('cpw connection accepted from=%r nbf=%x' %
-                      (peer_name, id(accepted_nbs)))
-      wsgi_server.socket.ProcessAccept(accepted_nbs, peer_name)
+        logging.debug('cpw connection accepted from=%r sock=%x' %
+                      (peer_name, id(sock)))
+      wsgi_server.socket.ProcessAccept(sock, peer_name)
       assert not wsgi_server.requests.requests
       wsgi_server.tick()
       assert len(wsgi_server.requests.requests) == 1
       http_connection = wsgi_server.requests.requests.pop()
       coio.stackless.tasklet(http_connection.communicate)()
       # Help the garbage collector.
-      http_connection = accepted_nbs = peer_name = None
+      http_connection = sock = peer_name = None
   finally:
-    nbf.close()
+    sock.close()
 
 
 class FakeBaseHttpWFile(object):
@@ -822,7 +823,7 @@ def CanBeCherryPyApp(app):
   return False
 
 
-def RunHttpServer(app, server_address=None):
+def RunHttpServer(app, server_address=None, listen_queue_size=100):
   """Listen as a HTTP server, and run the specified application forever.
 
   Args:
@@ -904,15 +905,15 @@ def RunHttpServer(app, server_address=None):
     print type(app)
     assert 0, 'unsupported application type for %r' % (app,)
     
-  listener_nbs = coio.nbsocket(socket.AF_INET, socket.SOCK_STREAM)
-  listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-  listener_nbs.bind(server_address)
+  server_sock = coio.nbsocket(socket.AF_INET, socket.SOCK_STREAM)
+  server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  server_sock.bind(server_address)
   # Reducing this has a strong negative effect on ApacheBench worst-case
   # connection times, as measured with:
   # ab -n 100000 -c 50 http://127.0.0.1:6666/ >ab.stackless3.txt
   # It increases the maximum Connect time from 8 to 9200 milliseconds.
-  listener_nbs.listen(100)
-  logging.info('listening on %r' % (listener_nbs.getsockname(),))
+  server_sock.listen(listen_queue_size)
+  logging.info('listening on %r' % (server_sock.getsockname(),))
   # From http://webpy.org/install (using with mod_wsgi).
-  coio.stackless.tasklet(WsgiListener)(listener_nbs, wsgi_application)
+  coio.stackless.tasklet(WsgiListener)(server_sock, wsgi_application)
   stackless.schedule_remove()
