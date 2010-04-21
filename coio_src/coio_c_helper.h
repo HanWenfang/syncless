@@ -1,3 +1,5 @@
+static PyObject *waiting_token;
+
 /*
  * coio_c_helper.c: helper functions implemented in pure C (not Pyrex)
  * by pts@fazekas.hu at Sat Apr 17 00:55:39 CEST 2010
@@ -34,9 +36,9 @@ static inline PyObject *coio_c_wait(struct event *ev,
   PyObject *tempval;
   event_add(ev, timeout);
   /* This also sets stackless.current.tempval = None */
-  tempval = PyStackless_Schedule(Py_None, /*do_remove:*/1);
+  tempval = PyStackless_Schedule(waiting_token, /*do_remove:*/1);
   if (!tempval ||  /* exception occured (maybe stackless.bomb) */
-      tempval == Py_None  /* tasklet reinserted without tempval change */
+      tempval == waiting_token /* reinserted while waiting */
      ) {
     event_del(ev);  /* harmless if event_del(ev) has already been called */
   }

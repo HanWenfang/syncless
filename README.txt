@@ -507,6 +507,11 @@ A14. Yes, either as coio.select, or as select.select after
      speed-critical program uses select(2), please consider redesigning it
      so it would use Sycnless non-blocking communication classes and tasklets.
 
+Links
+~~~~~
+* doc: related: eventlet vs gevent:
+  http://blog.gevent.org/2010/02/27/why-gevent/
+
 Planned features
 ~~~~~~~~~~~~~~~~
 * TODO(pts): Report libevent bug that evdns events are not EVLIST_INTERNAL.

@@ -17,6 +17,7 @@ import stackless
 import sys
 
 from syncless import coio
+from syncless import util
 from syncless import patch
 
 
@@ -39,38 +40,11 @@ def Asker(timeout_arg):
     assert age != 111, 'simulated bug'
     return age
 
-def RunInTaskletWithTimeout(function, timeout, default_value=None,
-                            args=(), kwargs={}):
-  # TODO(pts): Productionize this.
-  # !! TODO(pts): Kill the Worker if TaskletExit (or something else) is sent
-  # to us.
-  results = []
-  def Worker(sleeper_tasklet, function, args, kwargs):
-    try:
-      results.append(function(*args, **kwargs))
-    except TaskletExit:
-      raise
-    except:
-      results.extend(sys.exc_info())
-    if sleeper_tasklet.alive:
-      sleeper_tasklet.insert()  # Interrupt coio.sleep().
-  worker_tasklet = stackless.tasklet(Worker)(
-      stackless.current, function, args, kwargs)
-  if coio.sleep(timeout) and worker_tasklet.alive:
-    worker_tasklet.kill()
-    return default_value
-  else:
-    if len(results) > 1:  # Propagate exception.
-      raise results[0], results[1], results[2]
-    return results[0]
-
 if __name__ == '__main__':
   patch.patch_stdin_and_stdout()  # sets sys.stdin = sys.stdout = ...
   patch.patch_stderr()  # For fair exeption reporting.
-  age_answer_channel = stackless.channel()
-  age_answer_channel.preference = 1  # Prefer the sender.
   timeout = 3
-  age = RunInTaskletWithTimeout(Asker, timeout, None, (timeout,))
+  age = util.run_in_tasklet_with_timeout(Asker, timeout, None, (timeout,))
   if age is None:  # Timed out.
     print 'You were too slow entering your age.'
   else:

@@ -185,14 +185,17 @@ cdef extern from "stackless_api.h":
         cdef object curexc_value
         cdef object curexc_traceback
     # Return -1 on exception, 0 on OK.
-    int PyTasklet_Insert(tasklet task) except -1
-    int PyTasklet_Remove(tasklet task) except -1
-    int PyTasklet_Alive(tasklet task)
+    int PyTasklet_Insert(tasklet) except -1
+    int PyTasklet_Remove(tasklet) except -1
+    int PyTasklet_Kill(tasklet) except -1
+    int PyTasklet_Alive(tasklet)
     tasklet PyStackless_GetCurrent()
     #tasklet PyTasklet_New(type type_type, object func);
 cdef extern from "./coio_c_helper.h":
     # This involves a call to PyStackless_Schedule(None, 1).
     object coio_c_wait(event_t *ev, timeval *tv)
+
+# --- Utility functions
 
 def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
     """Send exception to tasklet, even if it's blocked on a channel.
@@ -214,9 +217,13 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
         c = tasklet_obj._channel
         old_preference = c.preference
         c.preference = 1    # Prefer the sender.
+        # TODO(pts): Don't send to other tasklets (manipulate the
+        # c.head and c.tail so that our tasklet becomes the first on the
+        # channel)
         for i in xrange(-c.balance):
             c.send(bomb_obj)
         c.preference = old_preference
+        assert not tasklet_obj.blocked
     else:
         tasklet_obj.tempval = bomb_obj
     # TODO(pts): Implement another method, which inserts tasklet_obj before
@@ -224,6 +231,8 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
     # runnables list (unless already inserted).
     tasklet_obj.insert()
     tasklet_obj.run()
+
+# ---
 
 # Example code:
 #def Sayer(object name):
@@ -385,23 +394,43 @@ cdef int nbevent_read(evbuffer_s *read_eb, int fd, int n):
         #    read_eb.cb(read_eb, read_eb.off - got, read_eb.off, read_eb.cbarg)
     return got
 
+# TODO(pts): doc:
+# It is assumed that the user never sets a waiting_tasklet.tempval to
+# timeout_token.
+cdef object timeout_token "timeout_token"
+timeout_token = object()
+def get_timeout_token():
+    return timeout_token
+
+# The token in waiting_tasklet.tempval to signify that the event-waiting is
+# pending. This token is intentionally not exported to Python code, so they
+# can't easily mess with it. (But they can still get it from a
+# waiting_tasklet.tempval.)
+#
+# TODO(pts): doc:
+# It is assumed that the user never sets a waiting_tasklet.tempval to
+# timeout_token.
+cdef object waiting_token "waiting_token"
+waiting_token = object()
+
 # Since this function returns void, exceptions raised (e.g. if <tasklet>arg)
 # will be ignored (by Pyrex?) and printed to stderr as something like:
 # Exception AssertionError: 'foo' in 'coio.HandleCWakeup' ignored
 cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
+    if (<tasklet>arg).tempval is waiting_token:
+        (<tasklet>arg).tempval = None
     PyTasklet_Insert(<tasklet>arg)
 
 cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
-    # PyStackless_Schedule will return this.
-    # No easier way to assign a bool in Pyrex.
-    # TODO(pts): make these values (True, False) special instead of
-    # == Py_None in coio_c_wait.
-    if evtype == c_EV_TIMEOUT:
-        # TODO(pts): Create a bomb here so retval is not needed.
-        (<tasklet>arg).tempval = True
-    else:
-        (<tasklet>arg).tempval = False
-    PyTasklet_Insert(<tasklet>arg)  # No NULL- or type checking.
+    # PyStackless_Schedule will return tempval.
+    # Writing <tasklet>arg will use arg as a tasklet without a NULL-check or a
+    # type-check in Pyrex. This is what we want here.
+    if (<tasklet>arg).tempval is waiting_token:
+        if evtype == c_EV_TIMEOUT:
+            (<tasklet>arg).tempval = timeout_token
+        else:
+            (<tasklet>arg).tempval = None
+    PyTasklet_Insert(<tasklet>arg)
 
 
 cdef class evbuffer:
@@ -1151,6 +1180,7 @@ cdef class nbfile:
             timeout_float = timeout
             if timeout_float < 0.0:
                 raise ValueError('Timeout value out of range')
+            # TODO(pts): Precompute tv.
             tv.tv_sec = <long>timeout_float
             tv.tv_usec = <unsigned int>(
                 (timeout_float - <float>tv.tv_sec) * 1000000.0)
@@ -1158,7 +1188,7 @@ cdef class nbfile:
                       HandleCTimeoutWakeup, <void*>wakeup_tasklet)
             # TODO(pts): Does libevent need a permanent (non-stack) reference
             # to tv? If so, this might segfault.
-            if coio_c_wait(&self.wakeup_ev, &tv):
+            if coio_c_wait(&self.wakeup_ev, &tv) is timeout_token:
                 return False  # timed out
             else:
                 return True
@@ -1454,7 +1484,7 @@ cdef object handle_eagain(nbsocket self, int evtype):
     else:
         event_set(&self.wakeup_ev, self.fd, evtype,
                   HandleCTimeoutWakeup, <void*>wakeup_tasklet)
-        if coio_c_wait(&self.wakeup_ev, &self.tv):
+        if coio_c_wait(&self.wakeup_ev, &self.tv) is timeout_token:
             # Same error message as in socket.socket.
             raise socket.error('timed out')
 
@@ -1470,7 +1500,7 @@ cdef object handle_ssl_eagain(nbsslsocket self, int evtype):
     else:
         event_set(&self.wakeup_ev, self.fd, evtype,
                   HandleCTimeoutWakeup, <void*>wakeup_tasklet)
-        if coio_c_wait(&self.wakeup_ev, &self.tv):
+        if coio_c_wait(&self.wakeup_ev, &self.tv) is timeout_token:
             # Same error message as in socket.socket.
             raise socket.error('timed out')
 
@@ -2382,8 +2412,8 @@ else:
 
 cdef void HandleCSleepWakeup(int fd, short evtype, void *arg) with gil:
     # Set tempval so coio_c_wait doesn't have to call event_del(...).
-    if (<tasklet>arg).tempval is None:
-        (<tasklet>arg).tempval = True
+    if (<tasklet>arg).tempval is waiting_token:
+        (<tasklet>arg).tempval = timeout_token
     PyTasklet_Insert(<tasklet>arg)
 
 cdef class sleeper:
@@ -2408,12 +2438,23 @@ cdef class sleeper:
 def sleep(float duration):
     """Non-blocking drop-in replacement for time.sleep.
 
-    Returns:
-      None is returned if duration was not positive. Otherwise, if
-      stackless.current was manually reinserted to the runnables list while
-      it was sleeping, then the stackless.current.tempval value before the
-      reinsertion is returned. Otherwise (when the full sleep amount was slept
-      through), True is returned.
+    * If sleeping_tasklet.raise_exception(...) or sleeping_tasklet.kill()
+      was called while sleeping, then cancel the sleep and raise that
+      exception.
+    * Otherwise, if sleeping_tasklet.tempval was set to a stackless.bomb(...)
+      value and then sleeping_tasklet.insert() was called, and then
+      sleeping_tasklet got scheduled, then cancel the sleep and raise the
+      exception in the bomb.
+    * Otherwise, if sleeping_tasklet.tempval was set, and then
+      sleeping_tasklet.insert() was called, and then sleeping_tasklet got
+      scheduled, then cancel the sleep and return sleeping_tasklet.tempval.
+    * Otherwise, if sleeping_tasklet.tempval was not set, and then
+      sleeping_tasklet.insert() was called, and then sleeping_tasklet got
+      scheduled, then cancel the sleep and return waiting_token (a true value).
+      (Please don't explicitly check for that.)
+    * Otherwise sleep for the whole sleep duration, and return
+      coio.get_timeout_token() (a true value).
+      TODO(pts): Maybe change this to a false value.
     """
     # TODO(pts): Reuse existing sleepers (thread-local?) to speed this up.
     return sleeper().sleep(duration)
@@ -2443,11 +2484,17 @@ def receive_with_timeout(object timeout, object receive_channel,
     received_value = receive_channel.receive()
   except IndexError, e:  # Sent by sleeper_tasklet.
     # The `except' above would segfault without a `, e'.
-    return default_value
+    received_value = default_value
+  except:  # TODO(pts): Test this.
+    if PyTasklet_Alive(sleeper_tasklet):
+      PyTasklet_Remove(sleeper_tasklet)
+      PyTasklet_Kill(sleeper_tasklet)
+    raise  # TODO(pts): Isn't this too late?
   if PyTasklet_Alive(sleeper_tasklet):
-    # We may reach this if timeout <= 0 and sleeper has not run yet.
-    # Wake up sleep() and make it return None.
-    PyTasklet_Insert(sleeper_tasklet)
+    PyTasklet_Remove(sleeper_tasklet)
+    # Since it was removed above from the runnables list, this kill gives us
+    # back the control once sleeper_tasklet is done.
+    PyTasklet_Kill(sleeper_tasklet)
   return received_value
 
 # --- select() emulation.
@@ -2706,7 +2753,6 @@ cdef class wakeup_info:
     def tick_and_move(wakeup_info self, timeout):
         """Like self.tick(), but create a new list on each call."""
         cdef list list_obj
-        list_obj = []
-        list_obj.extend(self.tick(timeout))
+        list_obj = list(self.tick(timeout))
         del self.c_pending_events[:]
         return list_obj
