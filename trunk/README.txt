@@ -257,12 +257,26 @@ A2. The value is False, since they are not on the runnables list, and they
 
 Q3. Is it possible to cancel (interrupt) a coio.sleep()?
 
-A3. Yes. If you have a reference to the sleeping tasklet, just send an
-    exception to it in a stackless.bomb, and then insert the tasklet back to
-    the runnables list, and the sleep will be interrupted.
+A3. Yes. If you have a reference to the sleeping tasklet, just insert the
+    tasklet back to the runnables list (or send an exception to it in a
+    stackless.bomb, and then insert it back), and the sleep will be
+    interrupted.
 
     For example, the following program finishes immediately (not needing 5
     seconds).
+
+      import stackless
+      from syncless import coio
+      sleep_done_channel = stackless.channel()
+      def Sleeper():
+        coio.sleep(5)
+      tasklet_obj = stackless.tasklet(Sleeper)()
+      stackless.schedule()  # Start Sleeper and start sleeping.
+      # ...
+      tasklet_obj.insert()  # Interrupt the sleep.
+      sleep_done_channel.receive()
+
+    Same example with a bomb (not recommended):
 
       import stackless
       from syncless import coio
@@ -283,20 +297,6 @@ A3. Yes. If you have a reference to the sleeping tasklet, just send an
     sure that the other tasklet is doing a blocking Syncless I/O operation
     (such as coio.sleep). Please use synchronization mechanisms (such as
     channels) to make sure that a sleep is going on in the tasklet.
-
-    Even simpler: it is possible to interrupt a sleep just without sending a
-    bomb. Example (doesn't need 5 seconds):
-
-      import stackless
-      from syncless import coio
-      sleep_done_channel = stackless.channel()
-      def Sleeper():
-        coio.sleep(5)
-      tasklet_obj = stackless.tasklet(Sleeper)()
-      stackless.schedule()  # Start Sleeper and start sleeping.
-      # ...
-      tasklet_obj.insert()  # Interrupt the sleep.
-      sleep_done_channel.receive()
 
 Q4. Is it possible to cancel (interrupt) a blocking Syncless I/O operation?
 
@@ -515,25 +515,24 @@ Links
 Planned features
 ~~~~~~~~~~~~~~~~
 * TODO(pts): Report libevent bug that evdns events are not EVLIST_INTERNAL.
-* TODO(pts): mksleep(secs) and cancel_sleep()
 * TODO(pts): Document the side effect of import syncless.coio on Ctrl-<C>.
 * TODO(pts): TCP communication error handling in the WSGI server
 * TODO(pts): HTTP client library (making urllib non-blocking?)
-* TODO(pts): Twisted integration
 * TODO(pts): support webob as a web framework
 * TODO(pts): productionization
-* TODO(pts): timeout on socket and SSLSocket operations
-* TODO(pts): monkey-patching socket and SSLSocket
 * TODO(pts): setsockopt TCP_DEFER_ACCEPT
 * TODO(pts): setsockopt SO_LINGER non-immediate close() for writing
 * TODO(pts): use SO_RCVTIMEO and SO_SNDTIMEO for timeout
-* TODO(pts): is it smaller or faste in Cython?
+* TODO(pts): is it faster in Cython? (it's not smaller though)
 * TODO(pts): measure if evhttp is faster for WSGI than in pure Python
 * TODO(pts): Strip the coio.so files upon installation? It seems to be still
              importable. Some Python installations autostrip. Why not ours?
 * TODO(pts): Fix the AttributeError in socket.socket.close().
 * TODO(pts): channel.send_exception() with a traceback. (Wait for receiver?)
-* !! TODO(pts): Handle starving (when one worker is very fast, even Ctrl-<C>
-  is delayed)
+* TODO(pts): Handle starving (when one worker is very busy, even Ctrl-<C>
+  is delayed) This is hard to achieve (but the main tasklet can be given
+  priority on Ctrl-<C>, so it would be the next to be scheduled).
+* !! TODO(pts): Allocate the pool of event_t objects on the heap, so a
+  socket can be waited for both reading and writing at the same time.
 
 __EOF__

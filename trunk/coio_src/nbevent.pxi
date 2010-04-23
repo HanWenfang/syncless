@@ -21,6 +21,7 @@
 # other tasklets in the queue when stackless.schedule_remove() is called, then
 # the process exits (sys.exit(0)).
 #
+# TODO(pts): Test when multiple events are registered with the same fd.
 # TODO(pts): Add module docstring.
 # !! TODO(pts) there are still long requests, even with listen(2280)
 #Connection Times (ms)
@@ -333,7 +334,7 @@ cdef void set_fd_nonblocking(int fd):
     cdef int old
     # TODO(pts): Don't silently ignore the errors.
     old = fcntl2(fd, F_GETFL)
-    if old >= 0 and (old & ~O_NONBLOCK):
+    if old >= 0 and not (old & O_NONBLOCK):
         fcntl3(fd, F_SETFL, old | O_NONBLOCK)
 
 def set_fd_blocking(int fd, is_blocking):
@@ -738,8 +739,8 @@ cdef class evbuffer:
         return n
 
 
-cdef object write_to_fd(int fd, event_t *wakeup_ev, char_constp p,
-                        Py_ssize_t n):
+cdef object write_all_to_fd(int fd, event_t *wakeup_ev, char_constp p,
+                            Py_ssize_t n):
     """Write all n bytes at p to fd, waking up based on wakeup_ev.
 
     Returns:
@@ -750,7 +751,7 @@ cdef object write_to_fd(int fd, event_t *wakeup_ev, char_constp p,
     cdef int got
     while n > 0:
         got = os_write(fd, p, n)
-        if got < 0:
+        while got < 0:
             if errno != EAGAIN:
                 # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
                 raise IOError(errno, strerror(errno))
@@ -758,6 +759,7 @@ cdef object write_to_fd(int fd, event_t *wakeup_ev, char_constp p,
             event_set(wakeup_ev, fd, c_EV_WRITE, HandleCWakeup,
                       <void*>wakeup_tasklet)
             coio_c_wait(wakeup_ev, NULL)
+            got = os_write(fd, p, n)
         p += got
         n -= got
 
@@ -765,8 +767,94 @@ cdef enum dummy:
     DEFAULT_MIN_READ_BUFFER_SIZE  = 8192  # TODO(pts): Do speed tests.
     DEFAULT_WRITE_BUFFER_LIMIT = 8192  # TODO(pts): Do speed tests.
 
-# TODO(pts): Implement all methods.
-# TODO(pts): Implement close().
+# --- nbfile
+
+cdef class nbfile
+
+# Read from nbfile at most limit characters.
+#
+# Precondition: limit > 0.
+# Precondition: self.c_read_limit < 0 ||
+#               limit <= self.read_eb.off + self.c_read_limit
+cdef object nbfile_readline_with_limit(nbfile self, int limit):
+    cdef tasklet wakeup_tasklet
+    cdef int n
+    cdef int got
+    cdef int min_off
+    cdef char_constp q
+    cdef int fd
+    cdef evbuffer_s *read_eb
+    cdef int had_short_read
+    #DEBUG assert limit > 0
+    #DEBIG assert (self.c_read_limit < 0 ||
+    #              limit <= self.read_eb.off + self.c_read_limit)
+    read_eb = &self.read_eb
+    fd = self.read_fd
+    had_short_read = 0
+    min_off = 0
+    if limit <= read_eb.off:  # All data already in buffer.
+        q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n', limit)
+        if q != NULL:
+            limit = q - <char_constp>read_eb.buf + 1
+        buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, limit)
+        evbuffer_drain(read_eb, limit)
+        return buf
+    q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n',
+                            read_eb.off)
+    while q == NULL:
+        if had_short_read:
+            evbuffer_expand(read_eb, 1)
+        elif read_eb.totallen == 0:
+            evbuffer_expand(read_eb, self.c_min_read_buffer_size)
+        else:
+            evbuffer_expand(read_eb, read_eb.totallen >> 1)
+        n = read_eb.totallen - read_eb.off - read_eb.misalign
+        if self.c_read_limit >= 0 and self.c_read_limit < n:
+            n = self.c_read_limit
+
+        got = nbevent_read(read_eb, fd, n)
+        while got < 0:
+            if errno != EAGAIN:
+                # TODO(pts): Do it more efficiently with Pyrex?
+                # Twisted does exactly this.
+                raise IOError(errno, strerror(errno))
+            wakeup_tasklet = PyStackless_GetCurrent()
+            event_set(&self.read_wakeup_ev, fd, c_EV_READ, HandleCWakeup,
+                      <void*>wakeup_tasklet)
+            coio_c_wait(&self.read_wakeup_ev, NULL)
+            got = nbevent_read(read_eb, fd, n)
+
+        if got == 0:  # EOF, return remaining bytes ('' or partial line)
+            n = read_eb.off
+            if limit < n:
+                # TODO(pts): Cache EOF, don't nbevent_read(...) again.
+                if limit == 0:
+                    return ''
+                n = limit
+            buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, n)
+            evbuffer_drain(read_eb, n)
+            return buf
+        if self.c_read_limit >= 0:
+            self.c_read_limit -= got
+        if limit <= read_eb.off:  # All data already in buffer.
+            q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n', limit)
+            if q != NULL:
+                limit = q - <char_constp>read_eb.buf + 1
+            buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, limit)
+            evbuffer_drain(read_eb, limit)
+            return buf
+        if got < n:
+            # Most proably we'll get an EOF next time, so we shouldn't
+            # pre-increase our buffer.
+            had_short_read = 1
+        q = <char_constp>memchr(<void_constp>(read_eb.buf + min_off),
+                                c'\n', read_eb.off - min_off)
+        min_off = read_eb.off
+    n = q - <char_constp>read_eb.buf + 1
+    buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, n)
+    evbuffer_drain(read_eb, n)
+    return buf
+
 # !! implement timeout (does socket._realsocket.makefile do that?)
 cdef class nbfile:
     """A non-blocking file (I/O channel).
@@ -783,7 +871,11 @@ cdef class nbfile:
     # We must keep self.wakeup_ev on the heap, because
     # Stackless scheduling swaps the C stack.
     cdef object close_ref
-    cdef event_t wakeup_ev
+    cdef event_t read_wakeup_ev
+    # We have different event buffers for reads and writes, because one tasklet
+    # might be waiting for read, and another one waiting for write.
+    # !! what if multiple tasklets waiting for read?
+    cdef event_t write_wakeup_ev
     cdef int read_fd
     cdef int write_fd
     # This must not be negative. Allowed values:
@@ -810,6 +902,7 @@ cdef class nbfile:
 
     def __init__(nbfile self, int read_fd, int write_fd,
                  int write_buffer_limit=-1, int min_read_buffer_size=-1,
+                 char do_set_fd_nonblocking=1,
                  char do_close=0,
                  object close_ref=None, object mode='r+',
                  object name=None):
@@ -820,6 +913,11 @@ cdef class nbfile:
         self.c_do_close = do_close
         self.read_fd = read_fd
         self.write_fd = write_fd
+        if do_set_fd_nonblocking:
+            if read_fd >= 0:
+                set_fd_nonblocking(read_fd)
+            if write_fd >=0 and write_fd != read_fd:
+                set_fd_nonblocking(write_fd)
         if write_buffer_limit < 0:  # -1
             self.c_write_buffer_limit = DEFAULT_WRITE_BUFFER_LIMIT
         else:
@@ -988,7 +1086,7 @@ cdef class nbfile:
             # above so we wouldn't take this shortcut if the buffer wasn't
             # empty.
             # TODO(pts): Use the socket timeout.
-            return write_to_fd(self.write_fd, &self.wakeup_ev, p, n)
+            return write_all_to_fd(self.write_fd, &self.write_wakeup_ev, p, n)
 
         if wlimit == 1:  # Line buffering.
             k = n
@@ -1006,23 +1104,23 @@ cdef class nbfile:
                 self.write_eb.off + self.write_eb.misalign)
             if k > n:  # Buffer not full yet.
                 evbuffer_add(&self.write_eb, <void_constp>p, n)
-                write_to_fd(self.write_fd, &self.wakeup_ev,
-                            <char_constp>self.write_eb.buf,
-                            self.write_eb.off)
+                write_all_to_fd(self.write_fd, &self.write_wakeup_ev,
+                                <char_constp>self.write_eb.buf,
+                                self.write_eb.off)
                 self.write_eb.buf = self.write_eb.orig_buffer
                 self.write_eb.misalign = 0
                 self.write_eb.off = 0
             else:
                 if self.write_eb.off > 0:
                     # Flush self.write_eb.
-                    write_to_fd(self.write_fd, &self.wakeup_ev,
-                                <char_constp>self.write_eb.buf,
-                                self.write_eb.off)
+                    write_all_to_fd(self.write_fd, &self.write_wakeup_ev,
+                                    <char_constp>self.write_eb.buf,
+                                    self.write_eb.off)
                     self.write_eb.buf = self.write_eb.orig_buffer
                     self.write_eb.misalign = 0
                     self.write_eb.off = 0
                 # Flush lines directly from the argument.
-                write_to_fd(self.write_fd, &self.wakeup_ev, p, n)
+                write_all_to_fd(self.write_fd, &self.write_wakeup_ev, p, n)
             if keepc > 0:
                 p += n
                 if self.write_eb.totallen == 0:
@@ -1045,17 +1143,18 @@ cdef class nbfile:
                 n -= k
 
                 # Flush self.write_eb.
-                # TODO(pts): Speed: return early even if write_to_fd couldn't
-                # write everything yet (EAGAIN). Do this everywhere.
-                write_to_fd(self.write_fd, &self.wakeup_ev,
-                            <char_constp>self.write_eb.buf, self.write_eb.off)
+                # TODO(pts): Speed: return early even if write_all_to_fd
+                # couldn't write everything yet (EAGAIN). Do this everywhere.
+                write_all_to_fd(self.write_fd, &self.write_wakeup_ev,
+                                <char_constp>self.write_eb.buf,
+                                self.write_eb.off)
                 self.write_eb.buf = self.write_eb.orig_buffer
                 self.write_eb.misalign = 0
                 self.write_eb.off = 0
 
             if n >= wlimit:
                 # Flush directly from the argument.
-                write_to_fd(self.write_fd, &self.wakeup_ev, p, n)
+                write_all_to_fd(self.write_fd, &self.write_wakeup_ev, p, n)
             else:
                 if self.write_eb.totallen == 0:
                     evbuffer_expand(&self.write_eb, wlimit)
@@ -1065,8 +1164,8 @@ cdef class nbfile:
         # Please note that this method may raise an error even if parts of the
         # buffer has been flushed.
         if self.write_eb.off > 0:
-            write_to_fd(self.write_fd, &self.wakeup_ev,
-                        <char_constp>self.write_eb.buf, self.write_eb.off)
+            write_all_to_fd(self.write_fd, &self.write_wakeup_ev,
+                            <char_constp>self.write_eb.buf, self.write_eb.off)
             self.write_eb.buf = self.write_eb.orig_buffer
             self.write_eb.misalign = 0
             self.write_eb.off = 0
@@ -1138,9 +1237,9 @@ cdef class nbfile:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
+                event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
                           HandleCWakeup, <void*>wakeup_tasklet)
-                coio_c_wait(&self.wakeup_ev, NULL)
+                coio_c_wait(&self.read_wakeup_ev, NULL)
             elif got == 0:  # EOF
                 return n
             else:
@@ -1172,9 +1271,9 @@ cdef class nbfile:
         wakeup_tasklet = PyStackless_GetCurrent()
         # !! TODO(pts): Speed: return early if already readable.
         if timeout is None:
-            event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
+            event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
                       HandleCWakeup, <void*>wakeup_tasklet)
-            coio_c_wait(&self.wakeup_ev, NULL)
+            coio_c_wait(&self.read_wakeup_ev, NULL)
             return True
         else:
             timeout_float = timeout
@@ -1184,11 +1283,11 @@ cdef class nbfile:
             tv.tv_sec = <long>timeout_float
             tv.tv_usec = <unsigned int>(
                 (timeout_float - <float>tv.tv_sec) * 1000000.0)
-            event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
+            event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
                       HandleCTimeoutWakeup, <void*>wakeup_tasklet)
             # TODO(pts): Does libevent need a permanent (non-stack) reference
             # to tv? If so, this might segfault.
-            if coio_c_wait(&self.wakeup_ev, &tv) is timeout_token:
+            if coio_c_wait(&self.read_wakeup_ev, &tv) is timeout_token:
                 return False  # timed out
             else:
                 return True
@@ -1240,9 +1339,9 @@ cdef class nbfile:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
+                event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
                           HandleCWakeup, <void*>wakeup_tasklet)
-                coio_c_wait(&self.wakeup_ev, NULL)
+                coio_c_wait(&self.read_wakeup_ev, NULL)
             elif got == 0:  # EOF
                 n = self.read_eb.off
                 break
@@ -1283,9 +1382,9 @@ cdef class nbfile:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.wakeup_ev, self.read_fd, c_EV_READ,
+                event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
                           HandleCWakeup, <void*>wakeup_tasklet)
-                coio_c_wait(&self.wakeup_ev, NULL)
+                coio_c_wait(&self.read_wakeup_ev, NULL)
             elif got == 0:
                 return ''
             else:
@@ -1296,7 +1395,8 @@ cdef class nbfile:
                     self.c_read_limit -= got
                 return buf
 
-    def readline(nbfile self):
+    def readline(nbfile self, int limit=-1):
+        # TODO(pts): Add a read limit for the line length.
         # TODO(pts): Implement helper method for reading a HTTP request.
         # TODO(pts): Make this just as fast as Python's file() object
         #            (which always reads 8192 bytes).
@@ -1319,54 +1419,40 @@ cdef class nbfile:
         fd = self.read_fd
         had_short_read = 0
         min_off = 0
+        if self.c_read_limit >= 0:
+            if limit < 0 or limit > read_eb.off + self.c_read_limit:
+                limit = read_eb.off + self.c_read_limit
+        if limit >= 0:
+            if limit == 0:
+                return ''
+            return nbfile_readline_with_limit(self, limit)
+        #DEBUG assert limit < 0
+        #DEBUG assert self.c_read_limit < 0
         q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n', read_eb.off)
         while q == NULL:
-            if self.c_read_limit >= 0:
-                n = self.c_read_limit
-                if n == 0:  # self.c_read_limit reached, so simulate EOF.
-                    n = read_eb.off
-                    buf = PyString_FromStringAndSize(
-                        <char_constp>read_eb.buf, n)
-                    evbuffer_drain(read_eb, n)
-                    return buf
-                elif read_eb.totallen == 0:
-                    evbuffer_expand(read_eb, self.c_min_read_buffer_size)
-                    if n > read_eb.totallen:
-                         n = read_eb.totallen
-                elif had_short_read:
-                    evbuffer_expand(read_eb, 1)
-                    got = read_eb.totallen - read_eb.off - read_eb.misalign
-                    if n > got:
-                        n = got
-                elif n > read_eb.totallen >> 1:
-                    # Read limit is way too large, don't increase buffer yet,
-                    # maybe the actual read will yield a short line.
-                    evbuffer_expand(read_eb, read_eb.totallen >> 1)
-                    got = read_eb.totallen - read_eb.off - read_eb.misalign
-                    if n > got:
-                        n = got
-                else:
-                    evbuffer_expand(read_eb, n)
+            if had_short_read:
+                evbuffer_expand(read_eb, 1)
+            elif read_eb.totallen == 0:
+                evbuffer_expand(read_eb, self.c_min_read_buffer_size)
             else:
-                if had_short_read:
-                    evbuffer_expand(read_eb, 1)
-                elif read_eb.totallen == 0:
-                    evbuffer_expand(read_eb, self.c_min_read_buffer_size)
-                else:
-                    evbuffer_expand(read_eb, read_eb.totallen >> 1)
-                n = read_eb.totallen - read_eb.off - read_eb.misalign
+                evbuffer_expand(read_eb, read_eb.totallen >> 1)
+            # TODO(pts): fix bug in libevent-1.4.13 evbuffer_expand
+            # need = buf->off + datlen when reallocing.
+            n = read_eb.totallen - read_eb.off - read_eb.misalign
 
             got = nbevent_read(read_eb, fd, n)
-            if got < 0:
+            while got < 0:
                 if errno != EAGAIN:
                     # TODO(pts): Do it more efficiently with Pyrex?
                     # Twisted does exactly this.
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.wakeup_ev, fd, c_EV_READ, HandleCWakeup,
+                event_set(&self.read_wakeup_ev, fd, c_EV_READ, HandleCWakeup,
                           <void*>wakeup_tasklet)
-                coio_c_wait(&self.wakeup_ev, NULL)
-            elif got == 0:  # EOF, return remaining bytes ('' or partial line)
+                coio_c_wait(&self.read_wakeup_ev, NULL)
+                got = nbevent_read(read_eb, fd, n)
+
+            if got == 0:  # EOF, return remaining bytes ('' or partial line)
                 n = read_eb.off
                 buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, n)
                 evbuffer_drain(read_eb, n)
@@ -1375,9 +1461,7 @@ cdef class nbfile:
                 if got < n:
                     # Most proably we'll get an EOF next time, so we shouldn't
                     # pre-increase our buffer.
-                    had_full_read = 1
-                if self.c_read_limit >= 0:
-                    self.c_read_limit -= got
+                    had_short_read = 1
                 q = <char_constp>memchr(<void_constp>(read_eb.buf + min_off),
                                         c'\n', read_eb.off - min_off)
                 min_off = read_eb.off
@@ -1441,7 +1525,6 @@ def fdopen(int fd, mode='r', int bufsize=-1,
     cdef int read_fd
     cdef int write_fd
     assert fd >= 0
-    set_fd_nonblocking(fd)
     read_fd = fd
     write_fd = fd
     # TODO(pts): Handle mode='rb' etc.
@@ -1456,8 +1539,7 @@ def fdopen(int fd, mode='r', int bufsize=-1,
         # os.fdopen() and open() do.
         write_buffer_limit = 1
     return nbfile(read_fd, write_fd, write_buffer_limit=write_buffer_limit,
-                  min_read_buffer_size=bufsize,
-                  do_close=do_close, mode=mode)
+                  min_read_buffer_size=bufsize, do_close=do_close, mode=mode)
 
 # TODO(pts): Add new_file and nbfile(...)
 # TODO(pts): If the buffering argument is given, 0 means unbuffered, 1 means
@@ -1802,7 +1884,8 @@ cdef class nbsocket:
 
         This method is not part of normal sockets.
         """
-        return nbfile(self.fd, self.fd, bufsize, bufsize)
+        return nbfile(self.fd, self.fd, bufsize, bufsize,
+                      do_set_fd_nonblocking=0)
 
     def makefile(nbsocket self, mode='r', int bufsize=-1):
         """Create an nbfile (non-blocking file-like) object from self.
@@ -1819,7 +1902,8 @@ cdef class nbsocket:
         if fd < 0:
             raise socket.error(errno, strerror(errno))
         # TODO(pts): Verify proper close semantics for _realsocket emulation.
-        return nbfile(fd, fd, bufsize, bufsize, do_close=1, close_ref=self)
+        return nbfile(fd, fd, bufsize, bufsize, do_close=1, close_ref=self,
+                      do_set_fd_nonblocking=0)
 
 
 def new_realsocket(*args):
