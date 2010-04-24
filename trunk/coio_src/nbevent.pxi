@@ -194,7 +194,11 @@ cdef extern from "stackless_api.h":
     #tasklet PyTasklet_New(type type_type, object func);
 cdef extern from "./coio_c_helper.h":
     # This involves a call to PyStackless_Schedule(None, 1).
-    object coio_c_wait(event_t *ev, timeval *tv)
+    object coio_c_wait(event_t *ev, timeval *timeout)
+    # A temporary event_t will be allocated, and its ev_arg would be set to
+    # stackless.current.
+    object coio_c_wait_for(int fd, short evtype, event_handler handler,
+                           timeval *timeout)
 
 # --- Utility functions
 
@@ -2196,27 +2200,13 @@ def sleep(float duration):
       coio.get_timeout_token() (a true value).
       TODO(pts): Maybe change this to a false value.
     """
-    cdef event_t *wakeup_ev_ptr
     cdef timeval tv
-    cdef object retval
     if duration <= 0:
         return
-    # We must keep the event_t structure on the heap (not on the C stack),
-    # because hard switching in Stackless scheduling swaps the C stack, and
-    # that would clobber our event_t with another tasklet's data, and
-    # libevent needs all pending event_t structures always available.
-    #
-    # We might want to reuse existing sleepers (tasklet-local?) to get rid of
-    # memory allocation, but that's just cumbersome and probably impossible.
-    wakeup_ev_ptr = <event_t*>PyMem_Malloc(sizeof(wakeup_ev_ptr[0]))
-    if wakeup_ev_ptr == NULL:
-        raise MemoryError
-    evtimer_set(wakeup_ev_ptr, HandleCSleepWakeup, NULL)
     tv.tv_sec = <long>duration
     tv.tv_usec = <unsigned int>((duration - <float>tv.tv_sec) * 1000000.0)
-    retval = coio_c_wait(wakeup_ev_ptr, &tv)
-    PyMem_Free(wakeup_ev_ptr)
-    return retval
+    # See #define evtimer_set(...) in event.h.
+    return coio_c_wait_for(-1, 0, HandleCSleepWakeup, &tv)
 
 
 # ---
