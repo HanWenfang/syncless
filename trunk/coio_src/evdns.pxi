@@ -183,8 +183,7 @@ cdef void _dns_callback(int resultcode, char t, int count, int ttl,
         # Make it negative to prevent confusion with errno objects,
         # just like socket.gaierror (gethostbyname).
         exc = DnsLookupError(-resultcode, evdns_err_to_string(resultcode))
-        (<tasklet>arg).tempval = bomb(
-            type(exc), exc, None)
+        (<tasklet>arg).tempval = bomb(type(exc), exc, None)
         PyTasklet_Insert(<tasklet>arg)
         return
     if t == c_DNS_IPv4_A and count > 0:
@@ -455,8 +454,8 @@ def gethostbyname(char *name):
         return names_by_nameip[name][0]
     try:
         return dns_resolve_ipv4(name).values[0]
-    except DnsLookupError:
-        raise_gaierror(sys.exc_info(), 0)
+    except DnsLookupError, e:
+        raise_gaierror((type(e), e, None), 0)
 
 cdef object c_gethostbyname(object address, int family):
     """Helper function for the connect() methods in nbevent.pyx.
@@ -472,8 +471,8 @@ cdef object c_gethostbyname(object address, int family):
         if not is_valid_ipv6(name):
             try:
                 return (dns_resolve_ipv4(name).values[0], address[1])
-            except DnsLookupError:
-                raise_gaierror(sys.exc_info(), 0)
+            except DnsLookupError, e:
+                raise_gaierror((type(e), e, None), 0)
     elif family == AF_INET6:
         name = address[0]
         if is_valid_ipv6(name):
@@ -481,8 +480,8 @@ cdef object c_gethostbyname(object address, int family):
         if not is_valid_ipv4(name):
             try:
                 return (dns_resolve_ipv6(name).values[0], address[1])
-            except DnsLookupError:
-                raise_gaierror(sys.exc_info(), 0)
+            except DnsLookupError, e:
+                raise_gaierror((type(e), e, None), 0)
     else:
         return address  # for AF_UNIX etc.
     raise socket.gaierror(socket.EAI_ADDRFAMILY,
@@ -504,15 +503,17 @@ def gethostbyaddr(char *name):
     else:
         try:
             ip = dns_resolve_ipv4(name).values[0]
-        except DnsLookupError:
-            raise_gaierror(sys.exc_info(), 0)
+        except DnsLookupError, e:
+            raise_gaierror((type(e), e, None), 0)
     if ip in names_by_ip:
         items = names_by_ip[ip]
         return (items[1], items[2:], [ip])
     try:
         return (dns_resolve_reverse(ip).values[0], [], [ip])
-    except DnsLookupError:
-        raise_herror(sys.exc_info())
+    except DnsLookupError, e:
+        # SUXX: Pyrex 0.9.9 returns (None, None, None) for sys.exc_info(),
+        # so we just use e here.
+        raise_herror((type(e), e, None))
 
 def getfqdn(name=''):
     """Non-blocking drop-in replacement for socket.getfqdn.
@@ -527,18 +528,18 @@ def getfqdn(name=''):
     if is_valid_ipv4(cname) or is_valid_ipv6(cname):
         ip = cname
     elif cname in names_by_nameip:
-        ip = names_by_nameip[cname][0]
+        ip = names_by_nameip[name][0]
     else:
         try:
             ip = dns_resolve_ipv4(cname).values[0]
-        except DnsLookupError:
-            return cname
+        except DnsLookupError, e:
+            return name
     if ip in names_by_ip:
         return names_by_ip[ip][1]
     try:
         return dns_resolve_reverse(ip).values[0]
-    except DnsLookupError:
-        return cname
+    except DnsLookupError, e:
+        return name
 
 def gethostbyname_ex(char *name):
     """Non-blocking drop-in replacement for socket.gethostbyname_ex.
@@ -562,16 +563,16 @@ def gethostbyname_ex(char *name):
         return (items[1], items[2:], [items[0]])
     try:
         ips = dns_resolve_ipv4(name).values
-    except DnsLookupError:
-        raise_gaierror(sys.exc_info(), 0)
+    except DnsLookupError, e:
+        raise_gaierror((type(e), e, None), 0)
 
     if ips[0] in names_by_ip:
         canonical = names_by_ip[ips[0]][1]
     else:
         try:
             canonical = dns_resolve_reverse(ips[0]).values[0]
-        except DnsLookupError:
-            raise_gaierror(sys.exc_info(), 0)
+        except DnsLookupError, e:
+            raise_gaierror((type(e), e, None), 0)
     if canonical == name:
         return (name, [], ips)
     else:
@@ -608,8 +609,8 @@ def partial_getaddrinfo(char *host, int port,
         try:
             # E.g. addrs = ['72.14.221.99', '72.14.221.104']
             addrs = dns_resolve_ipv4(host).values
-        except DnsLookupError:
-            raise_gaierror(sys.exc_info(), 0)
+        except DnsLookupError, e:
+            raise_gaierror((type(e), e, None), 0)
 
     items = []
     for addr in addrs:

@@ -6,6 +6,7 @@ import syncless.coio
 import socket
 import unittest
 
+# !! fix these tests for full faking.
 # TODO(pts): Test reverse lookup without canonical name.
 # TODO(pts): Test for IPv6 addresses:
 #    print syncless.coio.dns_resolve_ipv6('www.ipv6.org')
@@ -180,9 +181,11 @@ def Wrap(function, *args):
 class DnsCompatTest(unittest.TestCase):
   def setUp(self):
     assert callable(getattr(syncless.coio, 'dns_resolve_ipv4', None))
+    # !! fake more functions
     syncless.coio.dns_resolve_ipv4 = FakeDnsResolveIpv4
     syncless.coio.names_by_ip.clear()
     syncless.coio.names_by_nameip.clear()
+    # TODO(pts): fake 127.5.6.7 for reverse DNS lookup.
     f = cStringIO.StringIO()
     f.write("#127.0.0.1\t \tbad1\n")
     f.write("  127.0.0.1\t \tlocalhost\n")
