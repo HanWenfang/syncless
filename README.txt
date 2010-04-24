@@ -8,9 +8,9 @@ by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
 
 Syncless is an experimental, lightweight, non-blocking (asynchronous) client
 and server socket network communication library for Stackless Python 2.6.
-For high speed, Syncless uses libevent, and parts of Syncless' code is
-implemented in C (Pyrex). Thus Syncless can be faster than many other
-non-blocking Python communication libraries. Syncless contains an
+For high speed, Syncless uses libev (similar to libevent), and parts of
+Syncless' code is implemented in C (Pyrex). Thus Syncless can be faster than
+many other non-blocking Python communication libraries. Syncless contains an
 asynchronous DNS resolver (using evdns) and a HTTP server capable of serving
 WSGI applications. Syncless aims to be a coroutine-based alternative of
 event-driven networking engines (such as Twisted and FriendFeed's Tornado),
@@ -34,7 +34,7 @@ Features
 * special monkey-patching for the Tornado web server (fast)
 * special monkey-patching for asyncore
 * compatible timeout handling on individual socket operations
-* I/O event detection using libevent, which can use Linux epoll(7) or BSD
+* I/O event detection using libev, which can use Linux epoll(7) or BSD
   kqueue (if available)
 * built-in (non-blocking) WSGI server, but can use CherryPy's WSGI server as
   well in non-blocking mode
@@ -64,18 +64,26 @@ How to use
 1. Download and install Stackless Python 2.6.x from http://stackless.com/
    For convenience, rename the executable to /usr/local/bin/stackless2.6
 
-2. Download and extract Syncless.
+2. Download and install libev from http://software.schmorp.de/pkg/libev.html
+   Syncless has been tested on Linux with libev-3.9. The version shipped
+   with your Linux distribution will probably also be OK.
 
-3. Install Syncless:
+3. Download and install libevhdns from http://code.google.com/p/libevhdns/ .
+   Most probably your Linux distribution doesn't have this package, so you
+   should install libevhdns from source.
+
+4. Download and extract Syncless.
+
+5. Install Syncless:
 
      $ stackless2.6 ./setup.py build
      $ sudo stackless2.6 ./setup.py install
 
-4. In the Syncless directory, run
+6. In the Syncless directory, run
 
      $ stackless2.6 ./demo.py
 
-6. Have a look at examples/demo_*.py in the source directory to study the
+7. Have a look at examples/demo_*.py in the source directory to study the
    examples.
 
 The original blog announcement of Syncless' precedessor:
@@ -129,11 +137,13 @@ Related projects
 
 Feature design of the new event loop (syncless.coio)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+FYI This has already been implemented.
+
 My conclusion was that in order to get the fastest coroutine-based,
 non-blocking, line-buffering-capable I/O library for Python, I should wrap
-libevent (including event registration and I/O buffering) and Stackless and
+something like libevent (including event registration and I/O buffering) and Stackless and
 the WSGI server in hand-optimized Pyrex, manually checking the .c file Pyrex
-generates for inefficiencies. I'll be doing so soon.
+generates for inefficiencies.
 
 syncless.coio will provide the following features:
 
@@ -237,10 +247,13 @@ Q1. I have created quite a few tasklets, put them into the runnables list.
     How do I make my program run until there are no tasklets? Currently my
     the process exists as soon as the main tasklet returns.
 
-A1. Call `stackless.schedule_remove()' at the end of your main tasklet code.
+A1. It's impossible to do that since Syncless has migrated from libevent to
+    libev. The rest of the answer documents the old, now obsolete behavior.
 
-    This would make your program run while there are tasklets on the
-    runnables list, or some tasklets are blocked on Syncless I/O.
+    OBSOLETE. Call `stackless.schedule_remove()' at the end of your main tasklet code.
+
+    OBSOLETE. This would make your program run while there are tasklets on
+    the runnables list, or some tasklets are blocked on Syncless I/O.
 
     Unfortunately this doesn't work (your program will run forever) if it
     has done any DNS lookups (like with coio.gethostbyname), because evdns
@@ -517,6 +530,17 @@ A15. No. You must ensure that there are no other tasklets using the filehandle
      (Please note that in some systems and some libevent drivers it might be
      safe -- try it for yourself.)
 
+Q16. Can multiple tasklets wait on the same file descriptor at the same time?
+     Will all of them get notified?
+
+A16. Yes and yes, this is fully supported by libev-3.9, see the
+     testTwoReaders method in test/nbfile_test.py.
+
+     Before syncless-0.06 this was not possible, because libevent-1.4.13
+     doesn't support this. If you attempted it with libevent, only the last
+     tasklet would get notified and the others would be discarded (never
+     woken up).
+
 Links
 ~~~~~
 * doc: related: eventlet vs gevent:
@@ -545,6 +569,7 @@ Planned features
   is delayed) This is hard to achieve (but the main tasklet can be given
   priority on Ctrl-<C>, so it would be the next to be scheduled).
 # TODO(pts): Evaluate how fast stack copying is.
+* TODO(pts): Make stackless.schedule_remove() work again.
 * !! TODO(pts): Allocate the pool of event_t objects on the heap, so a
   socket can be waited for both reading and writing at the same time; and
   also multiple tasklets can wait on the readability of an nbfile (do we
@@ -553,5 +578,6 @@ Planned features
   multi-wait in libevent entirely possible?)
 * !! SUXX: libevent doesn't let us register multiple event handlers for the
   same event (at least not with epoll -- would it work with select?)
+  libev is incomplete: no evbuffer or evdns
 
 __EOF__

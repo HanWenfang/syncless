@@ -11,7 +11,7 @@ CYTHON=$(PYTHON) -c "from Cython.Compiler.Main import main; main(command_line = 
 
 .PHONY: all install clean
 
-all: coio.c coio_c_helper.h
+all: coio.c coio_c_helper.h coio_c_evbuffer.h ev-event.h
 	cd .. && $(PYTHON) setup.py build
 
 install:

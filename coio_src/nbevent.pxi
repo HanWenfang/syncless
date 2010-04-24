@@ -124,7 +124,7 @@ cdef extern from "sys/socket.h":
     int AF_INET6
     int AF_INET
 
-cdef extern from "event.h":
+cdef extern from "coio_c_evbuffer.h":
     struct evbuffer_s "evbuffer":
         uchar_p buf "buffer"
         uchar_p orig_buffer
@@ -133,27 +133,20 @@ cdef extern from "event.h":
         int off
         void *cbarg
         void (*cb)(evbuffer_s*, int, int, void*)
-    struct event_watermark:
-        int low
-        int high
-    struct bufev_t "bufferevent":
-        evbuffer_s *input
-        event_watermark wm_read
-        event_watermark wm_write
 
     # These must match other declarations of the same name.
     evbuffer_s *evbuffer_new()
     void evbuffer_free(evbuffer_s *)
     int evbuffer_expand(evbuffer_s *, int)
     int evbuffer_add(evbuffer_s *, void_constp, int)
-    int evbuffer_remove(evbuffer_s *, void *, int)
-    #char *evbuffer_readline(evbuffer_s *)
-    int evbuffer_add_buffer(evbuffer_s *, evbuffer_s *)
+    #UNUSED int evbuffer_remove(evbuffer_s *, void *, int)
+    #UNUSED char *evbuffer_readline(evbuffer_s *)
+    #UNUSED int evbuffer_add_buffer(evbuffer_s *, evbuffer_s *)
     int evbuffer_drain(evbuffer_s *b, int size)
-    int evbuffer_write(evbuffer_s *, int)
-    int evbuffer_read(evbuffer_s *, int, int)
-    uchar_p evbuffer_find(evbuffer_s *, uchar_constp, int)
-    # void evbuffer_setcb(evbuffer_s *, void (*)(struct evbuffer_s *, int, int, void *), void *)
+    #UNUSED int evbuffer_write(evbuffer_s *, int)
+    #UNUSED int evbuffer_read(evbuffer_s *, int, int)
+    #UNUSED uchar_p evbuffer_find(evbuffer_s *, uchar_constp, int)
+    #UNUSED void evbuffer_setcb(evbuffer_s *, void (*)(struct evbuffer_s *, int, int, void *), void *)
 
 cdef extern from "Python.h":
     object PyString_FromFormat(char_constp fmt, ...)
@@ -231,9 +224,7 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
         assert not tasklet_obj.blocked
     else:
         tasklet_obj.tempval = bomb_obj
-    # TODO(pts): Implement another method, which inserts tasklet_obj before
-    # the current tasklet. tasklet_obj.insert() inserts to the end of the
-    # runnables list (unless already inserted).
+    tasklet_obj.remove()
     tasklet_obj.insert()
     tasklet_obj.run()
 
