@@ -1,3 +1,4 @@
+recursive-include greenlet_stackless *.py
 recursive-include examples *.txt *.py
 recursive-include test *.py
 recursive-include coio_src *.c *.py *.pyx *.pxi
