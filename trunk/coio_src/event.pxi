@@ -34,7 +34,7 @@ cdef extern from "Python.h":
 
 ctypedef void (*event_handler)(int fd, short evtype, void *arg)
     
-cdef extern from "event.h":
+cdef extern from "ev-event.h":
     struct timeval:
         unsigned int tv_sec
         unsigned int tv_usec
@@ -49,7 +49,7 @@ cdef extern from "event.h":
                    event_handler handler, void *arg)
     void evtimer_set(event_t *ev, event_handler handler, void *arg)
     int  event_add(event_t *ev, timeval *tv)
-    int  event_loopbreak()
+    #int  event_loopbreak()
     int  event_del(event_t *ev)
     int  event_dispatch() nogil
     int  event_loop(int loop) nogil
@@ -78,7 +78,7 @@ __event_exc = None
 cdef void __event_abort():
     global __event_exc
     cdef timeval tv
-    event_loopbreak()
+    #event_loopbreak()  # libev-3.9 doesn't have it, and we don't need it
     __event_exc = sys.exc_info()
     if __event_exc[0] is None:
         __event_exc = None

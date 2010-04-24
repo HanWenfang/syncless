@@ -89,8 +89,9 @@ class NbfileTest(unittest.TestCase):
     self.AssertReadLineWait(ksn, ksn + 'foo')
     self.AssertReadLineWait('foo', '', 3)
 
-  def ZZZtestTwoReaders(self):
-    # !!! SUXX: libevent-1.4.13 doesn't support this.
+  def testTwoReaders(self):
+    # libevent-1.4.13 doesn't support multiple events on the same handle,
+    # libev-3.9 does support this.
     read_chars = []
     def Reader():
       read_chars.append(self.f.read(1))
@@ -101,10 +102,11 @@ class NbfileTest(unittest.TestCase):
     assert not reader2_tasklet.scheduled
     self.f.write('ab')
     self.f.flush()
+    self.assertEqual([], read_chars)
     stackless.schedule()
-    stackless.schedule()
-    stackless.schedule()
-    print read_chars
+    self.assertEqual(['a', 'b'], read_chars)
+    assert not reader1_tasklet.alive
+    assert not reader2_tasklet.alive
 
 
 class NbfileSocketPairTest(NbfileTest):

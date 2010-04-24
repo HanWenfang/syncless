@@ -49,4 +49,6 @@ if __name__ == '__main__':
     print 'You were too slow entering your age.'
   else:
     print 'Got age: %r.' % age
-  stackless.schedule_remove()  # Run until all tasklets exit.
+  if len(sys.argv) > 1:
+    # Run until all tasklets exit. This doesn't work anymore with libev.
+    stackless.schedule_remove()

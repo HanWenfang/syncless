@@ -116,17 +116,18 @@ def symlink(link_to, link_from):
     pass
   os.symlink(link_to, link_from)
 
-def FindLibEvent():
+def FindLibEv():
   # We could add more directories (e.g. those in /etc/ld.so.conf), but that's
   # system-specific, see http://stackoverflow.com/questions/2230467 .
+  # TODO(pts): Issue a fatal error if libev or libevhdns was not found.
+  # TODO(pts): Find libevhdns separately.
   retval = {'include_dirs': [], 'library_dirs': []}
   for prefix in os.getenv('LD_LIBRARY_PATH', '').split(':') + [
                 sys.prefix, '/usr']:
     if (prefix and
-        os.path.isfile(prefix + '/include/event.h') and
-        os.path.isfile(prefix + '/include/evdns.h') and
-        glob.glob(prefix + '/lib/libevent.*')):
-      print 'found libevent in', prefix
+        os.path.isfile(prefix + '/include/ev.h') and
+        glob.glob(prefix + '/lib/libev.*')):
+      print 'found libev in', prefix
       retval['include_dirs'].append('%s/include' % prefix)
       retval['library_dirs'].append('%s/lib' % prefix)
       return retval
@@ -136,11 +137,14 @@ def FindLibEvent():
 
 event = Extension(name='syncless.coio',
                   sources=['coio_src/coio.c'],
-                  depends=['coio_src/coio_c_helper.h'],
+                  depends=['coio_src/coio_c_helper.h',
+                           'coio_src/coio_c_evbuffer.h',
+                           'coio_src/ev-event.h',
+                          ],
                   # Using a function for library_dirs here is a nonstandard
                   # distutils extension, see also MyBuildExtDirs.
-                  library_dirs=FindLibEvent,
-                  libraries=['event'])
+                  library_dirs=FindLibEv,
+                  libraries=['ev', 'evhdns'])
 
 # chdir to to the directory containing setup.py. Building extensions wouldn't
 # work otherwise.
@@ -165,16 +169,15 @@ setup(name='syncless',
                    version['VERSION'],
       packages=['syncless'],
       long_description=
-          "Syncless is an experimental, lightweight, non-blocking "
-          "(asynchronous) client and server socket network communication "
-          "library for Stackless Python 2.6. For high speed, Syncless uses "
-          "libevent, and parts of Syncless' code is implemented in C (Pyrex). "
-          "Thus Syncless can be faster than many other non-blocking Python "
-          "communication libraries. Syncless contains an asynchronous DNS "
-          "resolver (using evdns) and a HTTP server capable of serving WSGI "
-          "applications. Syncless aims to be a coroutine-based alternative of "
-          "event-driven networking engines (such as Twisted and FriendFeed's "
-          "Tornado), and it's a competitor of gevent, pyevent, eventlet and "
+          "Syncless is an experimental, lightweight, non-blocking (asynchronous) client "
+          "and server socket network communication library for Stackless Python 2.6. "
+          "For high speed, Syncless uses libev (similar to libevent), and parts of "
+          "Syncless' code is implemented in C (Pyrex). Thus Syncless can be faster than "
+          "many other non-blocking Python communication libraries. Syncless contains an "
+          "asynchronous DNS resolver (using evdns) and a HTTP server capable of serving "
+          "WSGI applications. Syncless aims to be a coroutine-based alternative of "
+          "event-driven networking engines (such as Twisted and FriendFeed's Tornado), "
+          "and it's a competitor of gevent, pyevent, python-libevent, Eventlet and "
           "Concurrence.",
       license="GPL v2",
       platforms=["Unix"],
