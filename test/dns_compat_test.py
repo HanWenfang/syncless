@@ -37,6 +37,14 @@ RESOLVE_IPV4_RESULT = {
     'unknown':             None,
 }
 
+RESOLVE_REVERSE_RESULT = {
+    '152.66.84.8': ['fourier.szit.bme.hu'],
+    '2001:6b0:1:ea:202:a5ff:fecd:13a6': ['igloo.stacken.kth.se'],
+    '74.125.39.106': ['fx-in-f106.1e100.net'],
+    '130.237.234.40': ['igloo.stacken.kth.se'],
+    '127.5.6.7': None,
+}
+
 GETHOSTBYNAME_RESULT = {
     'other':               '1.2.3.5',
     '1.2.3.5':             '1.2.3.5',
@@ -151,12 +159,19 @@ GETHOSTBYNAME_EX_RESULT = {
     'unknown': ERR_NODATA,
 }
 
+#xx = syncless.coio.dns_resolve_reverse  # !!
 
 def FakeDnsResolveIpv4(name):
   values = RESOLVE_IPV4_RESULT[name]
   if values is None:
     raise syncless.coio.DnsLookupError(-3, 'fake error')  # name does not exist
   return syncless.coio.dnsresult(1, 1, values)
+
+def FakeDnsResolveReverse(name):
+  values = RESOLVE_REVERSE_RESULT[name]
+  if values is None:
+    raise syncless.coio.DnsLookupError(-3, 'fake error')
+  return syncless.coio.dnsresult(2, 1, values)
 
 def Wrap(function, *args):
   try:
@@ -181,8 +196,8 @@ def Wrap(function, *args):
 class DnsCompatTest(unittest.TestCase):
   def setUp(self):
     assert callable(getattr(syncless.coio, 'dns_resolve_ipv4', None))
-    # !! fake more functions
     syncless.coio.dns_resolve_ipv4 = FakeDnsResolveIpv4
+    syncless.coio.dns_resolve_reverse = FakeDnsResolveReverse
     syncless.coio.names_by_ip.clear()
     syncless.coio.names_by_nameip.clear()
     # TODO(pts): fake 127.5.6.7 for reverse DNS lookup.
