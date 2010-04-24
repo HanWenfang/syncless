@@ -144,7 +144,7 @@ event = Extension(name='syncless.coio',
 
 # chdir to to the directory containing setup.py. Building extensions wouldn't
 # work otherwise.
-os.chdir(os.path.dirname(__file__))
+os.chdir(os.path.join('.', os.path.dirname(__file__)))
 if __file__[0] != '/':
     __file__ = os.path.basename(__file__)
 
