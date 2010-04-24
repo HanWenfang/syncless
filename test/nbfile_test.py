@@ -89,5 +89,31 @@ class NbfileTest(unittest.TestCase):
     self.AssertReadLineWait(ksn, ksn + 'foo')
     self.AssertReadLineWait('foo', '', 3)
 
+  def ZZZtestTwoReaders(self):
+    # !!! SUXX: libevent-1.4.13 doesn't support this.
+    read_chars = []
+    def Reader():
+      read_chars.append(self.f.read(1))
+    reader1_tasklet = stackless.tasklet(Reader)()
+    reader2_tasklet = stackless.tasklet(Reader)()
+    stackless.schedule()
+    assert not reader1_tasklet.scheduled
+    assert not reader2_tasklet.scheduled
+    self.f.write('ab')
+    self.f.flush()
+    stackless.schedule()
+    stackless.schedule()
+    stackless.schedule()
+    print read_chars
+
+
+class NbfileSocketPairTest(NbfileTest):
+  def setUp(self):
+    import socket
+    sock1, sock2 = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+    self.f = coio.nbfile(sock1.fileno(), sock2.fileno(),
+                         write_buffer_limit=0, do_close=0,
+                         close_ref=(sock1, sock2))
+
 if __name__ == '__main__':
   unittest.main()

@@ -382,12 +382,12 @@ cdef int nbevent_read(evbuffer_s *read_eb, int fd, int n):
       Number of bytes read, or -1 on error. Error code is in errno.
     """
     cdef int got
-    assert read_eb.totallen
     if n > 0:
         evbuffer_expand(read_eb, n)
     elif n == 0:
         return 0
     else:
+        assert read_eb.totallen
         n = read_eb.totallen - read_eb.off - read_eb.misalign
         if n == 0:
             return 0
@@ -422,6 +422,7 @@ waiting_token = object()
 # will be ignored (by Pyrex?) and printed to stderr as something like:
 # Exception AssertionError: 'foo' in 'coio.HandleCWakeup' ignored
 cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
+    #os_write(2, <char_constp>'W', 1)
     if (<tasklet>arg).tempval is waiting_token:
         (<tasklet>arg).tempval = None
     PyTasklet_Insert(<tasklet>arg)
@@ -992,7 +993,7 @@ cdef class nbfile:
         """Read exactly n bytes (or less on EOF), and return string
 
         Args:
-          n: Number of bytes to read. Negative values are treated as 0.
+          n: Number of bytes to read. Negative values are not allowed.
         Returns:
           String containing the bytes read; an empty string on EOF.
         Raises:
@@ -1000,6 +1001,9 @@ cdef class nbfile:
         """
         cdef int got
         cdef object buf
+
+        if n < 0:
+            raise NotImplementedError  # TODO(pts): Read up to EOF.
 
         if self.read_eb.off >= n:  # Satisfy read from read_eb.
             if n <= 0:
@@ -1020,6 +1024,8 @@ cdef class nbfile:
             if n <= 0:
                 return ''
         while self.read_eb.off < n:  # Data not fully in the buffer.
+            # !! Fill the buffer, it might be helpful.
+            # !! Should we always pre-read?
             got = n - self.read_eb.off
             if got > 65536 and got > self.read_eb.totallen:
                 # Limit the total number of bytes read to the double of the
@@ -1028,8 +1034,7 @@ cdef class nbfile:
                 # EVBUFFER_MAX_READ == 4096.
                 # !! TODO(pts): Get rid of magic constant 65536.
                 got = self.read_eb.totallen
-            # !! don't do ioctl(FIONREAD) if not necessary (in libevent)
-            got = evbuffer_read(&self.read_eb, self.read_fd, got)
+            got = nbevent_read(&self.read_eb, self.read_fd, got)
             if got < 0:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
@@ -1040,7 +1045,6 @@ cdef class nbfile:
             else:
                 if self.c_read_limit >= 0:
                     self.c_read_limit -= got
-                evbuffer_drain(&self.read_eb, got)
         buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
         evbuffer_drain(&self.read_eb, n)
         return buf
@@ -1048,11 +1052,15 @@ cdef class nbfile:
     def read_at_most(nbfile self, int n):
         """Read at most n bytes and return the string.
 
+        Negative values for n are not allowed.
+
         If the read buffer is not empty (self.read_buffer_len), data inside it
         will be returned, and no attempt is done to read self.read_fd.
         """
         cdef int got
         if n <= 0:
+            if n < 0:
+                raise NotImplementedError  # TODO(pts): Read up to EOF.
             return ''
         if self.read_eb.off > 0:
             if self.read_eb.off < n:
@@ -1068,7 +1076,7 @@ cdef class nbfile:
         while 1:
             # TODO(pts): Don't read it to the buffer, read without memcpy.
             #            We'd need the readinto method for that.
-            got = evbuffer_read(&self.read_eb, self.read_fd, n)
+            got = nbevent_read(&self.read_eb, self.read_fd, n)
             if got < 0:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
@@ -1271,6 +1279,8 @@ socket_impl = socket._realsocket
 # The original socket._realsocket class. Reference saved so further patching
 # (in syncless.path) won't have an effect on it.
 socket_realsocket = socket._realsocket
+
+socket_realsocketpair = socket._socket.socketpair
 
 socket_fromfd = socket.fromfd
 
@@ -1592,6 +1602,12 @@ def new_realsocket(*args):
     while socket.socket.close() just breaks the reference.
     """
     return nbsocket(*args).setdoclose(1)
+
+
+def socketpair(*args):
+    """Non-blocking drop-in replacement for socket.socketpair."""
+    sock1, sock2 = socket_realsocketpair(*args)
+    return nbsocket(sock1), nbsocket(sock2)
 
 
 def new_realsocket_fromfd(*args):

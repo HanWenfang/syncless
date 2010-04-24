@@ -62,6 +62,7 @@ def _populate_socket_module_with_coio(socket_module):
   socket_module.getaddrinfo = None
   socket_module.getnameinfo = None
   socket_module.create_connection = get_fake_create_connection()
+  socket_module.socketpair = coio.socketpair
   return socket_module
 
 fake_coio_socket_module = None
