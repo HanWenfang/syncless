@@ -507,6 +507,16 @@ A14. Yes, either as coio.select, or as select.select after
      speed-critical program uses select(2), please consider redesigning it
      so it would use Sycnless non-blocking communication classes and tasklets.
 
+Q15. Is it OK to close() an nbfile or an nbsocket while other tasklets are
+     reading from it?
+
+A15. No. You must ensure that there are no other tasklets using the filehandle
+     in any way by the time you close(). Otherwise you may get a
+     segmentation fault.
+
+     (Please note that in some systems and some libevent drivers it might be
+     safe -- try it for yourself.)
+
 Links
 ~~~~~
 * doc: related: eventlet vs gevent:
@@ -541,6 +551,7 @@ Planned features
   need that or is the current scheme good enough? -- the same event added
   twice, last wins; no, because the first will never get woken up; is a
   multi-wait in libevent entirely possible?)
-* !! SUXX: dns_compat_test segfaults
+* !! SUXX: libevent doesn't let us register multiple event handlers for the
+  same event (at least not with epoll -- would it work with select?)
 
 __EOF__
