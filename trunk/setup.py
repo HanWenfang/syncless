@@ -30,6 +30,7 @@ if not include_dirs:
   print 'libevent not found, may be present anyway, going on'
 event = Extension(name='syncless.coio',
                   sources=['coio_src/coio.c'],
+                  depends=['coio_src/coio_c_helper.h'],
                   include_dirs=include_dirs,
                   library_dirs=library_dirs,
                   libraries=['event'])
