@@ -2500,24 +2500,6 @@ cdef void HandleCSleepWakeup(int fd, short evtype, void *arg) with gil:
         (<tasklet>arg).tempval = timeout_token
     PyTasklet_Insert(<tasklet>arg)
 
-cdef class sleeper:
-    # We must keep self.wakeup_ev on the heap (not on the C stack), because
-    # hard switching in Stackless scheduling swaps the C stack, and libevent
-    # needs all pending event_t structures available.
-    cdef event_t wakeup_ev
-
-    def sleep(sleeper self, float duration):
-        cdef tasklet wakeup_tasklet
-        cdef timeval tv
-        if duration > 0:
-            wakeup_tasklet = PyStackless_GetCurrent()
-            evtimer_set(&self.wakeup_ev, HandleCSleepWakeup,
-                        <void*>wakeup_tasklet)
-            # TODO(pts): Optimize this for integers.
-            tv.tv_sec = <long>duration
-            tv.tv_usec = <unsigned int>(
-                (duration - <float>tv.tv_sec) * 1000000.0)
-            return coio_c_wait(&self.wakeup_ev, &tv)
 
 def sleep(float duration):
     """Non-blocking drop-in replacement for time.sleep.
@@ -2540,8 +2522,32 @@ def sleep(float duration):
       coio.get_timeout_token() (a true value).
       TODO(pts): Maybe change this to a false value.
     """
-    # TODO(pts): Reuse existing sleepers (thread-local?) to speed this up.
-    return sleeper().sleep(duration)
+    cdef event_t *wakeup_ev_ptr
+    cdef tasklet wakeup_tasklet
+    cdef timeval tv
+    cdef object retval
+    if duration <= 0:
+        return
+    # We must keep the event_t structure on the heap (not on the C stack),
+    # because hard switching in Stackless scheduling swaps the C stack, and
+    # that would clobber our event_t with another tasklet's data, and
+    # libevent needs all pending event_t structures always available.
+    #
+    # We might want to reuse existing sleepers (tasklet-local?) to get rid of
+    # memory allocation, but that's just cumbersome and probably impossible.
+    wakeup_ev_ptr = <event_t*>PyMem_Malloc(sizeof(wakeup_ev_ptr[0]))
+    if wakeup_ev_ptr == NULL:
+        raise MemoryError
+    wakeup_tasklet = PyStackless_GetCurrent()
+    evtimer_set(wakeup_ev_ptr, HandleCSleepWakeup, <void*>wakeup_tasklet)
+    tv.tv_sec = <long>duration
+    tv.tv_usec = <unsigned int>((duration - <float>tv.tv_sec) * 1000000.0)
+    retval = coio_c_wait(wakeup_ev_ptr, &tv)
+    PyMem_Free(wakeup_ev_ptr)
+    return retval
+
+
+# ---
 
 
 # Helper method used by receive_with_timeout.
@@ -2605,7 +2611,6 @@ cdef class selecter:
     shared.
     """
     cdef event_t *wakeup_evs
-    #cdef int wakeup_ev_count  # Just overhead.
     cdef list readable_fds
     cdef list writeable_fds
     cdef tasklet wakeup_tasklet
@@ -2645,6 +2650,8 @@ cdef class selecter:
         if self.wakeup_evs != NULL:
             PyMem_Free(self.wakeup_evs)
         self.wakeup_evs = <event_t*>PyMem_Malloc(sizeof(event_t) * c)
+        if self.wakeup_evs == NULL:
+            raise MemoryError
         i = 0
         for fh in rlist:
             if isinstance(fh, int):

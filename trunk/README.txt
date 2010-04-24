@@ -532,6 +532,7 @@ Planned features
 * TODO(pts): Handle starving (when one worker is very busy, even Ctrl-<C>
   is delayed) This is hard to achieve (but the main tasklet can be given
   priority on Ctrl-<C>, so it would be the next to be scheduled).
+# TODO(pts): Evaluate how fast stack copying is.
 * !! TODO(pts): Allocate the pool of event_t objects on the heap, so a
   socket can be waited for both reading and writing at the same time.
 
