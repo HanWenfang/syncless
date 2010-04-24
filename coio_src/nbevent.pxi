@@ -441,8 +441,6 @@ cdef object write_all_to_fd(int fd, event_t *write_wakeup_ev, char_constp p,
     Returns:
       None
     """
-    # wakeup_ev must be on the heap (not stack).
-    cdef tasklet wakeup_tasklet
     cdef int got
     while n > 0:
         got = os_write(fd, p, n)
@@ -450,9 +448,7 @@ cdef object write_all_to_fd(int fd, event_t *write_wakeup_ev, char_constp p,
             if errno != EAGAIN:
                 # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
                 raise IOError(errno, strerror(errno))
-            wakeup_tasklet = PyStackless_GetCurrent()
             # Assuming caller has called event_set(...).
-            write_wakeup_ev.ev_arg = <void*>wakeup_tasklet
             coio_c_wait(write_wakeup_ev, NULL)
             got = os_write(fd, p, n)
         p += got
@@ -472,7 +468,6 @@ cdef class nbfile
 # Precondition: self.c_read_limit < 0 ||
 #               limit <= self.read_eb.off + self.c_read_limit
 cdef object nbfile_readline_with_limit(nbfile self, int limit):
-    cdef tasklet wakeup_tasklet
     cdef int n
     cdef int got
     cdef int min_off
@@ -513,8 +508,6 @@ cdef object nbfile_readline_with_limit(nbfile self, int limit):
                 # TODO(pts): Do it more efficiently with Pyrex?
                 # Twisted does exactly this.
                 raise IOError(errno, strerror(errno))
-            wakeup_tasklet = PyStackless_GetCurrent()
-            self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
             coio_c_wait(&self.read_wakeup_ev, NULL)
             got = nbevent_read(read_eb, fd, n)
 
@@ -912,7 +905,6 @@ cdef class nbfile:
         Raises:
           IOError: (but not EOFError)
         """
-        cdef tasklet wakeup_tasklet
         cdef int got
         if n <= 0:
             return 0
@@ -936,8 +928,6 @@ cdef class nbfile:
             if got < 0:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
-                wakeup_tasklet = PyStackless_GetCurrent()
-                self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
                 coio_c_wait(&self.read_wakeup_ev, NULL)
             elif got == 0:  # EOF
                 return n
@@ -965,13 +955,10 @@ cdef class nbfile:
 
     def wait_for_readable(nbfile self, object timeout=None):
         cdef event_t *wakeup_ev_ptr
-        cdef tasklet wakeup_tasklet
         cdef timeval tv
         cdef float timeout_float
-        wakeup_tasklet = PyStackless_GetCurrent()
         # !! TODO(pts): Speed: return early if already readable.
         if timeout is None:
-            self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
             coio_c_wait(&self.read_wakeup_ev, NULL)
             return True
         else:
@@ -988,7 +975,7 @@ cdef class nbfile:
             if wakeup_ev_ptr == NULL:
                 raise MemoryError
             event_set(wakeup_ev_ptr, self.read_fd, c_EV_READ,
-                      HandleCTimeoutWakeup, <void*>wakeup_tasklet)
+                      HandleCTimeoutWakeup, NULL)
             if coio_c_wait(wakeup_ev_ptr, &tv) is timeout_token:
                 PyMem_Free(wakeup_ev_ptr)
                 return False  # timed out
@@ -1007,7 +994,6 @@ cdef class nbfile:
         Raises:
           IOError: (but not EOFError)
         """
-        cdef tasklet wakeup_tasklet
         cdef int got
         cdef object buf
 
@@ -1043,8 +1029,6 @@ cdef class nbfile:
             if got < 0:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
-                wakeup_tasklet = PyStackless_GetCurrent()
-                self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
                 coio_c_wait(&self.read_wakeup_ev, NULL)
             elif got == 0:  # EOF
                 n = self.read_eb.off
@@ -1063,7 +1047,6 @@ cdef class nbfile:
         If the read buffer is not empty (self.read_buffer_len), data inside it
         will be returned, and no attempt is done to read self.read_fd.
         """
-        cdef tasklet wakeup_tasklet
         cdef int got
         if n <= 0:
             return ''
@@ -1085,8 +1068,6 @@ cdef class nbfile:
             if got < 0:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
-                wakeup_tasklet = PyStackless_GetCurrent()
-                self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
                 coio_c_wait(&self.read_wakeup_ev, NULL)
             elif got == 0:
                 return ''
@@ -1110,7 +1091,6 @@ cdef class nbfile:
         #  return syncless.coio.nbfile(fd, -1, 16384, 16384, mode='r', do_close=True)
         #  # 100 iterations real    0m1.074s; user    0m0.892s; sys     0m0.172s
         #  #return os.fdopen(fd, 'r', 8192)
-        cdef tasklet wakeup_tasklet
         cdef int n
         cdef int got
         cdef int min_off
@@ -1149,8 +1129,6 @@ cdef class nbfile:
                     # TODO(pts): Do it more efficiently with Pyrex?
                     # Twisted does exactly this.
                     raise IOError(errno, strerror(errno))
-                wakeup_tasklet = PyStackless_GetCurrent()
-                self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
                 coio_c_wait(&self.read_wakeup_ev, NULL)
                 got = nbevent_read(read_eb, fd, n)
 
@@ -1257,33 +1235,27 @@ cdef class nbsslsocket
 # we just do a `cdef object'. We don't make this a method so it won't
 # be virtual.
 cdef object handle_eagain(nbsocket self, int evtype):
-    cdef tasklet wakeup_tasklet
     if self.timeout_value == 0.0:
         raise socket.error(EAGAIN, strerror(EAGAIN))
-    wakeup_tasklet = PyStackless_GetCurrent()
     if self.timeout_value < 0.0:
         event_set(&self.wakeup_ev, self.fd, evtype,
-                  HandleCWakeup, <void*>wakeup_tasklet)
+                  HandleCWakeup, NULL)
         coio_c_wait(&self.wakeup_ev, NULL)
     else:
-        event_set(&self.wakeup_ev, self.fd, evtype,
-                  HandleCTimeoutWakeup, <void*>wakeup_tasklet)
         if coio_c_wait(&self.wakeup_ev, &self.tv) is timeout_token:
             # Same error message as in socket.socket.
             raise socket.error('timed out')
 
 cdef object handle_ssl_eagain(nbsslsocket self, int evtype):
-    cdef tasklet wakeup_tasklet
     if self.timeout_value == 0.0:
         raise socket.error(EAGAIN, strerror(EAGAIN))
-    wakeup_tasklet = PyStackless_GetCurrent()
     if self.timeout_value < 0.0:
         event_set(&self.wakeup_ev, self.fd, evtype,
-                  HandleCWakeup, <void*>wakeup_tasklet)
+                  HandleCWakeup, NULL)
         coio_c_wait(&self.wakeup_ev, NULL)
     else:
         event_set(&self.wakeup_ev, self.fd, evtype,
-                  HandleCTimeoutWakeup, <void*>wakeup_tasklet)
+                  HandleCTimeoutWakeup, NULL)
         if coio_c_wait(&self.wakeup_ev, &self.tv) is timeout_token:
             # Same error message as in socket.socket.
             raise socket.error('timed out')
@@ -2225,7 +2197,6 @@ def sleep(float duration):
       TODO(pts): Maybe change this to a false value.
     """
     cdef event_t *wakeup_ev_ptr
-    cdef tasklet wakeup_tasklet
     cdef timeval tv
     cdef object retval
     if duration <= 0:
@@ -2240,8 +2211,7 @@ def sleep(float duration):
     wakeup_ev_ptr = <event_t*>PyMem_Malloc(sizeof(wakeup_ev_ptr[0]))
     if wakeup_ev_ptr == NULL:
         raise MemoryError
-    wakeup_tasklet = PyStackless_GetCurrent()
-    evtimer_set(wakeup_ev_ptr, HandleCSleepWakeup, <void*>wakeup_tasklet)
+    evtimer_set(wakeup_ev_ptr, HandleCSleepWakeup, NULL)
     tv.tv_sec = <long>duration
     tv.tv_usec = <unsigned int>((duration - <float>tv.tv_sec) * 1000000.0)
     retval = coio_c_wait(wakeup_ev_ptr, &tv)

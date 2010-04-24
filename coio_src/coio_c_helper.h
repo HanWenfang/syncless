@@ -34,9 +34,11 @@ static PyObject *waiting_token;
 static inline PyObject *coio_c_wait(struct event *ev,
                                     const struct timeval *timeout) {
   PyObject *tempval;
+  ev->ev_arg = PyStackless_GetCurrent();  /* implicit Py_INCREF */
   event_add(ev, timeout);
   /* This also sets stackless.current.tempval = None */
   tempval = PyStackless_Schedule(waiting_token, /*do_remove:*/1);
+  Py_DECREF(((PyObject *)ev->ev_arg));  /* stackless.current above */
   if (!tempval ||  /* exception occured (maybe stackless.bomb) */
       tempval == waiting_token /* reinserted while waiting */
      ) {
