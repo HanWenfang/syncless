@@ -31,9 +31,37 @@ class MyBuild(build):
   def has_sources(self):
     return self.has_pure_modules or self.has_ext_modules
 
-  sub_commands = build.sub_commands + [
+  sub_commands = [
+      ('build_ext_dirs', build.has_ext_modules),
+      ] + build.sub_commands + [
       ('build_ext_symlinks', build.has_ext_modules),
       ('build_src_symlinks', has_sources)]
+
+#print MyBuild.sub_commands
+
+class MyBuildExtDirs(build):
+  """Create symlinks to .so files.
+  
+  Create symlinks so scripts in the source dir can be run with PYTHONPATH=.
+  without install.
+  """
+
+  def run(self):
+    for ext in self.distribution.ext_modules:
+      #assert ext.include_dirs == []
+      if callable(ext.library_dirs):
+        update_dict = ext.library_dirs()
+        assert isinstance(update_dict, dict)
+        ext.library_dirs = []
+        ext.include_dirs = []
+        for key in sorted(update_dict):
+          value = update_dict[key]
+          assert isinstance(value, list) or isinstance(value, tuple)
+          assert hasattr(ext, key), key
+          assert isinstance(getattr(ext, key), list)
+          # ext.library_dirs.extend(update_dict['library_dirs'])
+          getattr(ext, key).extend(value)
+    
 
 class MyBuildExtSymlinks(build):
   """Create symlinks to .so files.
@@ -43,7 +71,6 @@ class MyBuildExtSymlinks(build):
   """
 
   def run(self):
-    log.info('build_ext_symlinks')
     # '.so'
     build_ext_cmd = self.get_finalized_command('build_ext')
     so_ext = build_ext_cmd.compiler.shared_lib_extension
@@ -66,7 +93,6 @@ class MyBuildSrcSymlinks(build):
   """
 
   def run(self):
-    log.info('build_src_symlinks')
     src_dirs = self.distribution.symlink_script_src_dirs
     if src_dirs:
       for package in self.distribution.packages:  # package = 'syncless'
@@ -90,31 +116,30 @@ def symlink(link_to, link_from):
     pass
   os.symlink(link_to, link_from)
 
-# TODO(pts): Run this autodetection only for build_ext (just like in
-# pysqlite).
-# TODO(pts): Parse command-line flags (like include etc.)
-# We could add more directories (e.g. those in /etc/ld.so.conf), but that's
-# system-specific, see http://stackoverflow.com/questions/2230467 .
-include_dirs = []
-library_dirs = []
-event = None
-for prefix in os.getenv('LD_LIBRARY_PATH', '').split(':') + [
-              sys.prefix, '/usr']:
-  if (prefix and
-      os.path.isfile(prefix + '/include/event.h') and
-      os.path.isfile(prefix + '/include/evdns.h') and
-      glob.glob(prefix + '/lib/libevent.*')):
-    print 'found libevent in', prefix
-    include_dirs =['%s/include' % prefix]
-    library_dirs =['%s/lib' % prefix]    
-    break
-if not include_dirs:
-  print 'libevent not found, may be present anyway, going on'
+def FindLibEvent():
+  # We could add more directories (e.g. those in /etc/ld.so.conf), but that's
+  # system-specific, see http://stackoverflow.com/questions/2230467 .
+  retval = {'include_dirs': [], 'library_dirs': []}
+  for prefix in os.getenv('LD_LIBRARY_PATH', '').split(':') + [
+                sys.prefix, '/usr']:
+    if (prefix and
+        os.path.isfile(prefix + '/include/event.h') and
+        os.path.isfile(prefix + '/include/evdns.h') and
+        glob.glob(prefix + '/lib/libevent.*')):
+      print 'found libevent in', prefix
+      retval['include_dirs'].append('%s/include' % prefix)
+      retval['library_dirs'].append('%s/lib' % prefix)
+      return retval
+  if not include_dirs:
+    log.info('libevent not found, may be present anyway, going on')
+  return retval
+
 event = Extension(name='syncless.coio',
                   sources=['coio_src/coio.c'],
                   depends=['coio_src/coio_c_helper.h'],
-                  include_dirs=include_dirs,
-                  library_dirs=library_dirs,
+                  # Using a function for library_dirs here is a nonstandard
+                  # distutils extension, see also MyBuildExtDirs.
+                  library_dirs=FindLibEvent,
                   libraries=['event'])
 
 # chdir to to the directory containing setup.py. Building extensions wouldn't
@@ -174,6 +199,7 @@ setup(name='syncless',
       requires=['stackless'],
       ext_modules = [ event ],
       cmdclass = {'build': MyBuild,
+                  'build_ext_dirs': MyBuildExtDirs,
                   'build_ext_symlinks': MyBuildExtSymlinks,
                   'build_src_symlinks': MyBuildSrcSymlinks,
                  },
