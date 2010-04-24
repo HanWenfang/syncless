@@ -28,11 +28,9 @@ Features
   socket.socket, socket.gethostbyname (etc.), ssl.SSLSocket, time.sleep
   and select.select
 * non-blocking support added by monkey-patching to built-in urllib, urllib2,
-  smtplib, ftplib, imaplib, poplib etc. modules
+  smtplib, ftplib, imaplib, poplib, asyncore, popen2, subprocess etc. modules
 * special monkey-patching for pure Python MySQL client libraries
   mysql.connector and pymysql
-* special monkey-patching for the Tornado web server (fast)
-* special monkey-patching for asyncore
 * compatible timeout handling on individual socket operations
 * I/O event detection using libev, which can use Linux epoll(7) or BSD
   kqueue (if available)
@@ -45,8 +43,8 @@ Features
   BaseHTTPRequestHandler + BaseHTTPServer applications, CherryPy
   applications, web.py applications, and Google webapp applications (not
   supporting most other Google AppEngine technologies) as well
-* combination of Syncless and (Twisted, Tornado or asyncore) in the same
-  process
+* combination of Syncless and (Twisted, Tornado (fast) or asyncore) in the
+  same process
 
 Requirements
 ~~~~~~~~~~~~
@@ -540,6 +538,48 @@ A16. Yes and yes, this is fully supported by libev-3.9, see the
      doesn't support this. If you attempted it with libevent, only the last
      tasklet would get notified and the others would be discarded (never
      woken up).
+
+Q17. Can I start subprocesses and communicate with them in a non-blocking
+     way with Syncless?
+
+A17. Yes, by monkey-patching any of these methds: subprocess, popen2,
+     os.popen. There is no support yet for more sophisticated mechanisms
+     (such as the multiprocessing module).
+
+     Code examples:
+
+       # See longer example in examples/demo_subprocess.py.
+       import subprocess
+       from syncless import patch
+       patch.patch_subprocess()  # or, worse, patch.patch_os()
+       ...
+       subprocess.popen3(...)  # or any other method
+
+       # See longer example in examples/demo_popen2.py .
+       import popen2
+       from syncless import patch
+       patch.patch_popen2()  # or patch.patch_os()
+       ...
+       popen2.popen2(...)  # or any other method
+
+       # See longer example in examples/demo_popen.py .
+       import os
+       from syncless import patch
+       patch.patch_os()  # or os.popen = coio.popen
+       ...
+       os.popen(...)  # or any other method
+
+Q7. Can I use my existing DNS, TCP, HTTP, HTTPS, FTP, urllib, urllib2, MySQL,
+    memcached, Redis, Tokyo Tyrant etc. client with Syncless?
+
+A7. If your client software is written in pure Python, and it uses the
+    standard Python `socket' module to connect to the server, then you only
+    have to call
+
+      from syncless import patch
+      patch.patch_socket()
+      patch.patch_ssl()  # Only if SSL (e.g. HTTPS) support is needed.
+
 
 Links
 ~~~~~

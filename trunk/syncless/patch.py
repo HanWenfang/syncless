@@ -227,6 +227,96 @@ def patch_stdin_and_stdout():
     sys.stdin = sys.stdout = new_stdinout
 
 
+def get_close_fds():
+  import os
+  def close_fds(self, but):
+    """Close everything larger than 2, but different from `but'."""
+    try:
+      fd_list = os.listdir('/proc/self/fd')
+    except OSError:
+      os.closerange(3, but)
+      os.closerange(but + 1, subprocess.MAXFD)
+      return
+    # This is much faster than closing millions of unopened Linux filehandles.
+    for fd_str in fd_list:
+      fd = int(fd_str)
+      if fd > 2 and fd != but:
+        try:
+          os.close(fd)
+        except OSError:  # Skip the os.listdir filehandle.
+          pass
+  return close_fds
+
+
+def get_closerange():
+  """Return a faster, unlimited replacement of os.closerange."""
+  import os
+  def closerange(a, b):
+    try:
+      fd_list = os.listdir('/proc/self/fd')
+    except OSError:
+      return os.closerange(a, b)
+    # This is much faster than closing millions of unopened Linux filehandles.
+    for fd_str in fd_list:
+      fd = int(fd_str)
+      if a <= fd < b:
+        try:
+          os.close(fd)
+        except OSError:  # Skip the os.listdir filehandle.
+          pass
+  return closerange
+
+
+def patch_os():
+  import os
+  from syncless import coio
+  os.fdopen = coio.fdopen
+  os.popen = coio.popen
+
+
+def patch_subprocess():
+  import os
+  import subprocess
+  from syncless import coio
+  # This is not strictly necessary, but speeds up close() operations.
+  fix_subprocess_close()
+  os_module = type(os)('fake_os')
+  for key in dir(os):
+    setattr(os_module, key, getattr(os, key))
+  os_module.__name__ = 'fake_os'
+  os_module.closerange = None  # Fail on call attempt.
+  os_module.fdopen = coio.fdopen
+  subprocess.os = os_module
+
+
+def patch_popen2():
+  import popen2
+  from syncless import coio
+  # This is not strictly necessary, but speeds up close() operations.
+  fix_popen2_close()
+  assert popen2.os.__name__ == 'fake_os'
+  popen2.os.fdopen = coio.fdopen
+
+
+def fix_subprocess_close():
+  """Fix closing millions of many unopened file in the subprocess module."""
+  import subprocess
+  subprocess.Popen._close_fds = get_close_fds()
+
+
+def fix_popen2_close():
+  """Fix closing millions of many unopened file in the popen2 module."""
+  import os
+  import popen2
+  if popen2.os.__name__ == 'os':
+    os_module = type(os)('fake_os')
+    for key in dir(os):
+      setattr(os_module, key, getattr(os, key))
+    os_module.__name__ = 'fake_os'
+    popen2.os = os_module
+  popen2.os.closerange = get_closerange()
+
+
 def fix_ssl_makefile():
   """Fix the reference counting in ssl.SSLSocket.makefile().
   
@@ -323,17 +413,22 @@ def validate_new_sslsock(**kwargs):
 def fix_all_std():
   fix_ssl_makefile()
   fix_ssl_init_memory_leak()
+  fix_subprocess_close()
 
 
 def patch_all_std():
   fix_all_std()
+  patch_asyncore()
+  patch_os()
+  patch_popen2()
   patch_socket()
+  patch_subprocess()
   patch_ssl()
-  patch_mysql_connector()
-  patch_pymysql()
+  #patch_mysql_connector()  # Non-standard module, don't patch.
+  #patch_pymysql()  # Non-standard module, don't patch.
   patch_time()
   patch_select()
   #patch_tornado()  # Non-standard module, don't patch.
   patch_stdin_and_stdout()
   patch_stderr()
-
+  patch_subprocess()
