@@ -270,7 +270,7 @@ def fix_ssl_init_memory_leak():
   import socket
   import types
   sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-  if ssl.SSLSocket(sock).recv is sock._sock.recv:
+  if getattr(ssl.SSLSocket(sock).recv, 'func_name', None) == '<lambda>':
     del sock
     # TODO(pts): Don't create a socket.socket just for the detection above.
     old_init = ssl.SSLSocket.__init__.im_func
