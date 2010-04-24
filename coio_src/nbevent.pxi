@@ -434,9 +434,9 @@ cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
     PyTasklet_Insert(<tasklet>arg)
 
 
-cdef object write_all_to_fd(int fd, event_t *wakeup_ev, char_constp p,
+cdef object write_all_to_fd(int fd, event_t *write_wakeup_ev, char_constp p,
                             Py_ssize_t n):
-    """Write all n bytes at p to fd, waking up based on wakeup_ev.
+    """Write all n bytes at p to fd, waking up based on write_wakeup_ev.
 
     Returns:
       None
@@ -451,9 +451,9 @@ cdef object write_all_to_fd(int fd, event_t *wakeup_ev, char_constp p,
                 # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
                 raise IOError(errno, strerror(errno))
             wakeup_tasklet = PyStackless_GetCurrent()
-            event_set(wakeup_ev, fd, c_EV_WRITE, HandleCWakeup,
-                      <void*>wakeup_tasklet)
-            coio_c_wait(wakeup_ev, NULL)
+            # Assuming caller has called event_set(...).
+            write_wakeup_ev.ev_arg = <void*>wakeup_tasklet
+            coio_c_wait(write_wakeup_ev, NULL)
             got = os_write(fd, p, n)
         p += got
         n -= got
@@ -514,8 +514,7 @@ cdef object nbfile_readline_with_limit(nbfile self, int limit):
                 # Twisted does exactly this.
                 raise IOError(errno, strerror(errno))
             wakeup_tasklet = PyStackless_GetCurrent()
-            event_set(&self.read_wakeup_ev, fd, c_EV_READ, HandleCWakeup,
-                      <void*>wakeup_tasklet)
+            self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
             coio_c_wait(&self.read_wakeup_ev, NULL)
             got = nbevent_read(read_eb, fd, n)
 
@@ -627,6 +626,12 @@ cdef class nbfile:
         # evbuffer_new() clears the memory area of the object with zeroes,
         # but Pyrex (and __cinit__) ensure that happens, so we don't have to
         # do that.
+        if read_fd >= 0:
+            event_set(&self.read_wakeup_ev, read_fd, c_EV_READ,
+                      HandleCWakeup, NULL)
+        if write_fd >= 0:
+            event_set(&self.write_wakeup_ev, write_fd, c_EV_WRITE,
+                      HandleCWakeup, NULL)
 
     def fileno(nbfile self):
         if self.read_fd >= 0:
@@ -932,8 +937,7 @@ cdef class nbfile:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
-                          HandleCWakeup, <void*>wakeup_tasklet)
+                self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
                 coio_c_wait(&self.read_wakeup_ev, NULL)
             elif got == 0:  # EOF
                 return n
@@ -960,32 +964,38 @@ cdef class nbfile:
             assert self.c_read_limit == 0
 
     def wait_for_readable(nbfile self, object timeout=None):
+        cdef event_t *wakeup_ev_ptr
         cdef tasklet wakeup_tasklet
         cdef timeval tv
         cdef float timeout_float
         wakeup_tasklet = PyStackless_GetCurrent()
         # !! TODO(pts): Speed: return early if already readable.
         if timeout is None:
-            event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
-                      HandleCWakeup, <void*>wakeup_tasklet)
+            self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
             coio_c_wait(&self.read_wakeup_ev, NULL)
             return True
         else:
             timeout_float = timeout
             if timeout_float < 0.0:
                 raise ValueError('Timeout value out of range')
-            # TODO(pts): Precompute tv.
             tv.tv_sec = <long>timeout_float
             tv.tv_usec = <unsigned int>(
                 (timeout_float - <float>tv.tv_sec) * 1000000.0)
-            event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
+
+            # See the comment in `def sleep' why we must keep the event_t
+            # structure on the heap (not on the C stack).
+            wakeup_ev_ptr = <event_t*>PyMem_Malloc(sizeof(wakeup_ev_ptr[0]))
+            if wakeup_ev_ptr == NULL:
+                raise MemoryError
+            event_set(wakeup_ev_ptr, self.read_fd, c_EV_READ,
                       HandleCTimeoutWakeup, <void*>wakeup_tasklet)
-            # TODO(pts): Does libevent need a permanent (non-stack) reference
-            # to tv? If so, this might segfault.
-            if coio_c_wait(&self.read_wakeup_ev, &tv) is timeout_token:
+            if coio_c_wait(wakeup_ev_ptr, &tv) is timeout_token:
+                PyMem_Free(wakeup_ev_ptr)
                 return False  # timed out
             else:
+                PyMem_Free(wakeup_ev_ptr)
                 return True
+
 
     def read(nbfile self, int n):
         """Read exactly n bytes (or less on EOF), and return string
@@ -1034,8 +1044,7 @@ cdef class nbfile:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
-                          HandleCWakeup, <void*>wakeup_tasklet)
+                self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
                 coio_c_wait(&self.read_wakeup_ev, NULL)
             elif got == 0:  # EOF
                 n = self.read_eb.off
@@ -1077,8 +1086,7 @@ cdef class nbfile:
                 if errno != EAGAIN:
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.read_wakeup_ev, self.read_fd, c_EV_READ,
-                          HandleCWakeup, <void*>wakeup_tasklet)
+                self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
                 coio_c_wait(&self.read_wakeup_ev, NULL)
             elif got == 0:
                 return ''
@@ -1142,8 +1150,7 @@ cdef class nbfile:
                     # Twisted does exactly this.
                     raise IOError(errno, strerror(errno))
                 wakeup_tasklet = PyStackless_GetCurrent()
-                event_set(&self.read_wakeup_ev, fd, c_EV_READ, HandleCWakeup,
-                          <void*>wakeup_tasklet)
+                self.read_wakeup_ev.ev_arg = <void*>wakeup_tasklet
                 coio_c_wait(&self.read_wakeup_ev, NULL)
                 got = nbevent_read(read_eb, fd, n)
 
