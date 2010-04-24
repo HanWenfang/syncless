@@ -1,6 +1,9 @@
 #! /usr/local/bin/stackless2.6
 
-"""Test for the Syncless scheduler."""
+"""Test for the Syncless scheduler.
+
+!! make this test work with coio instead of nbio.
+"""
 
 import os
 import stackless

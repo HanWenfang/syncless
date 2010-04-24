@@ -534,6 +534,11 @@ Planned features
   priority on Ctrl-<C>, so it would be the next to be scheduled).
 # TODO(pts): Evaluate how fast stack copying is.
 * !! TODO(pts): Allocate the pool of event_t objects on the heap, so a
-  socket can be waited for both reading and writing at the same time.
+  socket can be waited for both reading and writing at the same time; and
+  also multiple tasklets can wait on the readability of an nbfile (do we
+  need that or is the current scheme good enough? -- the same event added
+  twice, last wins; no, because the first will never get woken up; is a
+  multi-wait in libevent entirely possible?)
+* !! SUXX: dns_compat_test segfaults
 
 __EOF__
