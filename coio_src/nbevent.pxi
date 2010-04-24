@@ -44,7 +44,9 @@
 
 # TODO(pts): Productionize TimeoutReceive
 # TODO(pts): Port to greenlet.
-# TODO(pts): port to pure Python + select() or epoll().
+# TODO(pts): Port to pure libev (instead of the libevent emulation layer).
+# TODO(pts): Port to pure Python + select() or epoll().
+import os
 import stackless
 import socket
 #import __builtin__
@@ -662,7 +664,7 @@ cdef class nbfile:
                         close_ref = self.close_ref
                         self.close_ref = False
                         if close_ref is not False:
-                            close_ref.close()
+                            return close_ref.close()
 
     property closed:
         def __get__(nbfile self):
@@ -1202,19 +1204,35 @@ cdef class nbfile:
 # !! implement readinto()
 # !! implement seek() and tell()
 
+# Copy early to avoid infinite recursion.
+os_popen = os.popen
+
+def popen(command, mode='r', int bufsize=-1):
+    """Non-blocking drop-in replacement for os.popen."""
+    mode = mode.replace('b', '')
+    f = os_popen(command, mode, 0)
+    fd = f.fileno()
+    return nbfile(fd, fd, mode=mode, write_buffer_limit=bufsize, do_close=True,
+                  close_ref=f)
+
 def fdopen(int fd, mode='r', int bufsize=-1,
            write_buffer_limit=-1, char do_close=1, object name=None):
-    """Non-blocking, almost drop-in replacement for os.fdopen."""
+    """Non-blocking drop-in replacement for os.fdopen."""
     cdef int read_fd
     cdef int write_fd
     assert fd >= 0
     read_fd = fd
     write_fd = fd
+    mode = mode.replace('b', '')  # Handle mode='rb' etc.
     # TODO(pts): Handle mode='rb' etc.
     if mode == 'r':
         write_fd = -1
     elif mode == 'w':
         read_fd = -1
+    elif mode == 'r+':
+         pass
+    else:
+         assert 0, 'bad mode: %r' % mode
     if write_buffer_limit < 0:  # Set default from bufsize.
         write_buffer_limit = bufsize
     if write_fd >= 0 and write_buffer_limit == -1 and isatty(write_fd) > 0:
