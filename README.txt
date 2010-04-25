@@ -619,5 +619,7 @@ Planned features
 * !! SUXX: libevent doesn't let us register multiple event handlers for the
   same event (at least not with epoll -- would it work with select?)
   libev is incomplete: no evbuffer or evdns
+* !! SUXX: why can't we connect() with O_NONBLOCK at a very high rate (just
+  as with normal sockets?)
 
 __EOF__
