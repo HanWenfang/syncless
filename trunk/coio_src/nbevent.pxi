@@ -392,14 +392,6 @@ cdef int nbevent_read(evbuffer_s *read_eb, int fd, int n):
         #    read_eb.cb(read_eb, read_eb.off - got, read_eb.off, read_eb.cbarg)
     return got
 
-# TODO(pts): doc:
-# It is assumed that the user never sets a waiting_tasklet.tempval to
-# timeout_token.
-cdef object timeout_token "timeout_token"
-timeout_token = object()
-def get_timeout_token():
-    return timeout_token
-
 # The token in waiting_tasklet.tempval to signify that the event-waiting is
 # pending. This token is intentionally not exported to Python code, so they
 # can't easily mess with it. (But they can still get it from a
@@ -407,9 +399,20 @@ def get_timeout_token():
 #
 # TODO(pts): doc:
 # It is assumed that the user never sets a waiting_tasklet.tempval to
-# timeout_token.
+# waiting_token.
 cdef object waiting_token "waiting_token"
 waiting_token = object()
+
+# event_happened_token is the token in waiting_tasklet.tempval to signify
+# that the event handler callback has been called. This token is
+# intentionally not exported to Python code, so they can't easily mess with
+# it. (But they can still get it from a waiting_tasklet.tempval.)
+#
+# TODO(pts): doc:
+# It is assumed that the user never sets a waiting_tasklet.tempval to
+# event_happened_token.
+cdef object event_happened_token "event_happened_token"
+event_happened_token = object()
 
 # Since this function returns void, exceptions raised (e.g. if <tasklet>arg)
 # will be ignored (by Pyrex?) and printed to stderr as something like:
@@ -417,7 +420,7 @@ waiting_token = object()
 cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
     #os_write(2, <char_constp>'W', 1)
     if (<tasklet>arg).tempval is waiting_token:
-        (<tasklet>arg).tempval = None
+        (<tasklet>arg).tempval = event_happened_token
     PyTasklet_Insert(<tasklet>arg)
 
 cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
@@ -426,9 +429,9 @@ cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
     # type-check in Pyrex. This is what we want here.
     if (<tasklet>arg).tempval is waiting_token:
         if evtype == c_EV_TIMEOUT:
-            (<tasklet>arg).tempval = timeout_token
-        else:
             (<tasklet>arg).tempval = None
+        else:
+            (<tasklet>arg).tempval = event_happened_token
     PyTasklet_Insert(<tasklet>arg)
 
 
@@ -966,21 +969,9 @@ cdef class nbfile:
             tv.tv_sec = <long>timeout_float
             tv.tv_usec = <unsigned int>(
                 (timeout_float - <float>tv.tv_sec) * 1000000.0)
-
-            # See the comment in `def sleep' why we must keep the event_t
-            # structure on the heap (not on the C stack).
-            wakeup_ev_ptr = <event_t*>PyMem_Malloc(sizeof(wakeup_ev_ptr[0]))
-            if wakeup_ev_ptr == NULL:
-                raise MemoryError
-            event_set(wakeup_ev_ptr, self.read_fd, c_EV_READ,
-                      HandleCTimeoutWakeup, NULL)
-            if coio_c_wait(wakeup_ev_ptr, &tv) is timeout_token:
-                PyMem_Free(wakeup_ev_ptr)
-                return False  # timed out
-            else:
-                PyMem_Free(wakeup_ev_ptr)
-                return True
-
+            return coio_c_wait_for(
+                self.read_fd, c_EV_READ, HandleCTimeoutWakeup, &tv
+                ) is event_happened_token
 
     def read(nbfile self, int n):
         """Read exactly n bytes (or less on EOF), and return string
@@ -1243,8 +1234,9 @@ def fdopen(int fd, mode='r', int bufsize=-1,
                   min_read_buffer_size=bufsize, do_close=do_close, mode=mode)
 
 # TODO(pts): Add new_file and nbfile(...)
-# TODO(pts): If the buffering argument is given, 0 means unbuffered, 1 means
-# line buffered, and larger numbers specify the buffer size.
+# TODO(pts): If the buffering argument (write_buffer_limit) is given, then
+# 0 means unbuffered (autoflush on), 1 means line buffered, 2 means infinite
+# buffer size, and larger numbers specify the buffer size in bytes.
 
 # --- Sockets (non-SSL).
 
@@ -1263,7 +1255,7 @@ cdef object handle_eagain(nbsocket self, int evtype):
                   HandleCWakeup, NULL)
         coio_c_wait(&self.wakeup_ev, NULL)
     else:
-        if coio_c_wait(&self.wakeup_ev, &self.tv) is timeout_token:
+        if coio_c_wait(&self.wakeup_ev, &self.tv) is not event_happened_token:
             # Same error message as in socket.socket.
             raise socket.error('timed out')
 
@@ -1277,7 +1269,7 @@ cdef object handle_ssl_eagain(nbsslsocket self, int evtype):
     else:
         event_set(&self.wakeup_ev, self.fd, evtype,
                   HandleCTimeoutWakeup, NULL)
-        if coio_c_wait(&self.wakeup_ev, &self.tv) is timeout_token:
+        if coio_c_wait(&self.wakeup_ev, &self.tv) is not event_happened_token:
             # Same error message as in socket.socket.
             raise socket.error('timed out')
 
@@ -2200,7 +2192,7 @@ else:
 cdef void HandleCSleepWakeup(int fd, short evtype, void *arg) with gil:
     # Set tempval so coio_c_wait doesn't have to call event_del(...).
     if (<tasklet>arg).tempval is waiting_token:
-        (<tasklet>arg).tempval = timeout_token
+        (<tasklet>arg).tempval = event_happened_token
     PyTasklet_Insert(<tasklet>arg)
 
 
@@ -2221,9 +2213,8 @@ def sleep(float duration):
       sleeping_tasklet.insert() was called, and then sleeping_tasklet got
       scheduled, then cancel the sleep and return waiting_token (a true value).
       (Please don't explicitly check for that.)
-    * Otherwise sleep for the whole sleep duration, and return
-      coio.get_timeout_token() (a true value).
-      TODO(pts): Maybe change this to a false value.
+    * Otherwise sleep for the whole sleep duration, and return an object
+      (event_happened_token, a true value).
     """
     cdef timeval tv
     if duration <= 0:
