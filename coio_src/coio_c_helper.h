@@ -71,6 +71,7 @@ static struct event* coio_event_pool_malloc_event(void) {
 /* --- Waiting */
 
 static PyObject *waiting_token;
+static PyObject *event_happened_token;
 
 /**
  * Make the current tasklet wait on event ev with the specified timeout,
@@ -92,8 +93,9 @@ static PyObject *waiting_token;
 static inline PyObject *coio_c_wait(struct event *ev,
                                     const struct timeval *timeout) {
   PyObject *tempval;
+  struct event *ev2 = NULL;
   if (ev->ev_arg != NULL) {  /* Event in use */
-    struct event *ev2 = coio_event_pool_malloc_event();
+    ev2 = coio_event_pool_malloc_event();
     if (ev2 == NULL) {
       PyErr_NoMemory();
       return NULL;
@@ -102,23 +104,21 @@ static inline PyObject *coio_c_wait(struct event *ev,
     event_set(ev2, ev->ev_fd, ev->ev_events, ev->ev_callback,
               PyStackless_GetCurrent());
     ev = ev2;
-    event_add(ev, timeout);
-    /* This also sets stackless.current.tempval = None */
-    tempval = PyStackless_Schedule(waiting_token, /*do_remove:*/1);
-    Py_DECREF(((PyObject*)ev->ev_arg));  /* stackless.current above */
-    coio_event_pool_free_event(ev);
   } else {
     ev->ev_arg = PyStackless_GetCurrent();  /* implicit Py_INCREF */
-    event_add(ev, timeout);
-    /* This also sets stackless.current.tempval = None */
-    tempval = PyStackless_Schedule(waiting_token, /*do_remove:*/1);
-    Py_DECREF(((PyObject*)ev->ev_arg));  /* stackless.current above */
-    ev->ev_arg = NULL;
   }
-  if (!tempval ||  /* exception occured (maybe stackless.bomb) */
-      tempval == waiting_token /* reinserted while waiting */
-     ) {
+  event_add(ev, timeout);
+  /* This also sets stackless.current.tempval = waiting_token */
+  tempval = PyStackless_Schedule(waiting_token, /*do_remove:*/1);
+  Py_DECREF(((PyObject*)ev->ev_arg));  /* stackless.current above */
+  if (tempval != event_happened_token) {
+    /* We also run this on an exception (tempval == 0). */
     event_del(ev);  /* harmless if event_del(ev) has already been called */
+  }
+  if (ev2 == NULL) {
+    ev->ev_arg = NULL;  /* Mark ev as unused. */
+  } else {
+    coio_event_pool_free_event(ev2);
   }
   return tempval;
 }
@@ -149,9 +149,8 @@ static inline PyObject *coio_c_wait_for(
   /* This also sets stackless.current.tempval = None */
   tempval = PyStackless_Schedule(waiting_token, /*do_remove:*/1);
   Py_DECREF(((PyObject*)ev->ev_arg));  /* stackless.current above */
-  if (!tempval ||  /* exception occured (maybe stackless.bomb) */
-      tempval == waiting_token /* reinserted while waiting */
-     ) {
+  if (tempval != event_happened_token) {
+    /* We also run this on an exception (tempval == 0). */
     event_del(ev);  /* harmless if event_del(ev) has already been called */
   }
   coio_event_pool_free_event(ev);
