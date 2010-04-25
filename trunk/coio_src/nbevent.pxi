@@ -114,6 +114,7 @@ cdef extern from "errno.h":
     cdef enum errno_dummy:
         EAGAIN
         EINPROGRESS
+        EALREADY
 cdef extern from "fcntl.h":
     cdef int fcntl2 "fcntl"(int fd, int cmd)
     cdef int fcntl3 "fcntl"(int fd, int cmd, long arg)
@@ -1465,7 +1466,8 @@ cdef class nbsocket:
         while 1:
             err = self.realsock.connect_ex(address)
             if err:
-                if err != EAGAIN and err != EINPROGRESS:
+                # We might get EALREADY occasionally for some slow connects.
+                if err != EAGAIN and err != EINPROGRESS and err != EALREADY:
                     raise socket.error(err, strerror(err))
                 handle_eagain(self, c_EV_WRITE)
             else:
@@ -1477,7 +1479,8 @@ cdef class nbsocket:
 
         while 1:
             err = self.realsock.connect_ex(address)
-            if err != EAGAIN and err != EINPROGRESS:
+            # We might get EALREADY occasionally for some slow connects.
+            if err != EAGAIN and err != EINPROGRESS and err != EALREADY:
                 return err  # Inclusing `0' for success.
             handle_eagain(self, c_EV_WRITE)
 

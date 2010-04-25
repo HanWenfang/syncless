@@ -14,11 +14,13 @@
 # #www.ipv6.org is an alias for shake.stacken.kth.se.
 # #shake.stacken.kth.se has IPv6 address 2001:6b0:1:ea:202:a5ff:fecd:13a6
 # #: <dnsresult code=0, t=3, ttl=2936 values=['2001:6b0:1:ea:202:a5ff:fecd:13a6'] at 0xb7d76d24>
+#
+# We don't include evdns.h, because it's not part of libevhdns.
 
 # These are some Pyrex magic declarations which will enforce type safety in
 # our *.pxi files by turning GCC warnings about const and signedness to Pyrex
 # errors.
-cdef extern from "evdns.h":
+cdef extern from *:  # formerly evdns.h
     ctypedef struct inaddr_const:
         pass
     ctypedef struct in6addr_const:
@@ -26,41 +28,39 @@ cdef extern from "evdns.h":
     ctypedef inaddr_const* inaddr_constp "struct in_addr const*"
     ctypedef in6addr_const* in6addr_constp "struct in6_addr const*"
 
-    ctypedef void (*evdns_callback_type)(
-        int result, char t, int count, int ttl,
-        void *addrs, void *arg)
+ctypedef void (*evdns_callback_type)(
+    int result, char t, int count, int ttl,
+    void *addrs, void *arg)
+
+# Add th `extern' declarations. to the generated .c file.
+cdef extern int evdns_init()
+cdef extern char *evdns_err_to_string(int err)
+cdef extern int evdns_resolve_ipv4(char_constp name, int flags,
+                                   evdns_callback_type callback, void *arg)
+cdef extern int evdns_resolve_ipv6(char_constp name, int flags,
+                                   evdns_callback_type callback, void *arg)
+cdef extern int evdns_resolve_reverse(inaddr_constp ip, int flags,
+                                      evdns_callback_type callback, void *arg)
+cdef extern int evdns_resolve_reverse_ipv6(in6addr_constp ip, int flags,
+                                           evdns_callback_type callback,
+                                           void *arg)
+cdef extern void evdns_shutdown(int fail_requests)
+
+cdef enum dns_dummy:
+    c_DNS_ERR_NONE = 0
+    c_DNS_ERR_NOTEXIST = 3
+
+    c_DNS_QUERY_NO_SEARCH = 1
+
+    c_DNS_IPv4_A = 1
+    c_DNS_PTR = 2
+    c_DNS_IPv6_AAAA = 3
+
+DNS_QUERY_NO_SEARCH = c_DNS_QUERY_NO_SEARCH
 
 ctypedef int (*_evdns_call_t)(char_constp name, int flags,
                               evdns_callback_type callback,
                               void *arg)
-
-cdef extern from "evdns.h":
-    int evdns_init()
-    char *evdns_err_to_string(int err)
-    int evdns_resolve_ipv4(char_constp name, int flags,
-                           evdns_callback_type callback, void *arg)
-    int evdns_resolve_ipv6(char_constp name, int flags,
-                           evdns_callback_type callback, void *arg)
-    int evdns_resolve_reverse(inaddr_constp ip, int flags,
-                              evdns_callback_type callback, void *arg)
-    int evdns_resolve_reverse_ipv6(in6addr_constp ip, int flags,
-                                   evdns_callback_type callback, void *arg)
-    void evdns_shutdown(int fail_requests)
-
-    int c_DNS_ERR_NONE "DNS_ERR_NONE"
-    int c_DNS_ERR_FORMAT "DNS_ERR_FORMAT"
-    int c_DNS_ERR_SERVERFAILED "DNS_ERR_SERVERFAILED"
-    int c_DNS_ERR_NOTEXIST "DNS_ERR_NOTEXIST"
-    int c_DNS_ERR_NOTIMPL "DNS_ERR_NOTIMPL"
-    int c_DNS_ERR_REFUSED "DNS_ERR_REFUSED"
-    int c_DNS_ERR_TRUNCATED "DNS_ERR_TRUNCATED"
-    int c_DNS_ERR_UNKNOWN "DNS_ERR_UNKNOWN"
-    int c_DNS_ERR_TIMEOUT "DNS_ERR_TIMEOUT"
-    int c_DNS_ERR_SHUTDOWN "DNS_ERR_SHUTDOWN"
-    int c_DNS_IPv4_A "DNS_IPv4_A"
-    int c_DNS_PTR "DNS_PTR"
-    int c_DNS_IPv6_AAAA "DNS_IPv6_AAAA"
-    int c_DNS_QUERY_NO_SEARCH "DNS_QUERY_NO_SEARCH"
 
 cdef extern from "netdb.h":
     # NETDB_INTERNAL == -1 (see errno)
@@ -76,26 +76,6 @@ HERROR_TRY_AGAIN = c_HERROR_TRY_AGAIN
 HERROR_NO_RECOVERY = c_HERROR_NO_RECOVERY
 HERROR_NO_DATA = c_HERROR_NO_DATA
 HERROR_NO_ADDRESS = c_HERROR_NO_ADDRESS
-
-# Result codes
-DNS_ERR_NONE = c_DNS_ERR_NONE
-DNS_ERR_FORMAT = c_DNS_ERR_FORMAT
-DNS_ERR_SERVERFAILED = c_DNS_ERR_SERVERFAILED
-DNS_ERR_NOTEXIST = c_DNS_ERR_NOTEXIST
-DNS_ERR_NOTIMPL = c_DNS_ERR_NOTIMPL
-DNS_ERR_REFUSED = c_DNS_ERR_REFUSED
-DNS_ERR_TRUNCATED = c_DNS_ERR_TRUNCATED
-DNS_ERR_UNKNOWN = c_DNS_ERR_UNKNOWN
-DNS_ERR_TIMEOUT = c_DNS_ERR_TIMEOUT
-DNS_ERR_SHUTDOWN = c_DNS_ERR_SHUTDOWN
-
-# Types
-DNS_IPv4_A = c_DNS_IPv4_A
-DNS_PTR = c_DNS_PTR
-DNS_IPv6_AAAA = c_DNS_IPv6_AAAA
-
-# Flags
-DNS_QUERY_NO_SEARCH = c_DNS_QUERY_NO_SEARCH
 
 cdef char dns_initialized
 dns_initialized = 0
@@ -305,7 +285,7 @@ def dns_resolve_ipv4(char *name, int flags=0):
 
     Args:
       name     -- DNS hostname
-      flags    -- either 0 (default) or DNS_QUERY_NO_SEARCH
+      flags    -- either 0 (default) or c_DNS_QUERY_NO_SEARCH
     Returns:
       A dnsresult() object.
     """
@@ -316,7 +296,7 @@ def dns_resolve_ipv6(char *name, int flags=0):
 
     Args:
       name     -- DNS hostname
-      flags    -- either 0 (default) or DNS_QUERY_NO_SEARCH
+      flags    -- either 0 (default) or c_DNS_QUERY_NO_SEARCH
     Returns:
       A dnsresult() object.
     """
@@ -328,7 +308,7 @@ def dns_resolve_reverse(object ip, int flags=0):
     Arguments:
 
     ip       -- IPv4 or IPv6 address in ASCII
-    flags    -- either 0 (default) or DNS_QUERY_NO_SEARCH
+    flags    -- either 0 (default) or c_DNS_QUERY_NO_SEARCH
     """
     cdef list items
     cdef object tmp
