@@ -126,6 +126,12 @@ cdef extern from "signal.h":
 cdef extern from "sys/socket.h":
     int AF_INET6
     int AF_INET
+cdef extern from "sys/select.h":
+    struct fd_set_s:
+        pass
+    ctypedef fd_set_s fd_set
+    int os_select "select"(int nfds, fd_set *rset, fd_set *wset, fd_set *xset,
+                           timeval *timeout)
 
 cdef extern from "coio_c_evbuffer.h":
     struct evbuffer_s "evbuffer":
@@ -197,6 +203,9 @@ cdef extern from "./coio_c_helper.h":
                            timeval *timeout)
 
 # --- Utility functions
+
+cdef int connect_tv_magic_usec
+connect_magic_usec = 120
 
 def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
     """Send exception to tasklet, even if it's blocked on a channel.
@@ -1301,6 +1310,7 @@ cdef class nbsocket:
 
     cdef event_t wakeup_ev
     cdef int fd
+    cdef int c_family
     # -1.0 if None (infinite timeout).
     cdef float timeout_value
     # Corresponds to timeout (if not None).
@@ -1319,6 +1329,7 @@ cdef class nbsocket:
             assert len(args) == 1
         else:
             self.realsock = my_socket_impl(*args, **kwargs)
+        self.c_family = self.realsock.family
         self.fd = self.realsock.fileno()
         # TODO(pts): self.realsock.setblocking(False) on non-Unix operating
         # systems.
@@ -1459,6 +1470,7 @@ cdef class nbsocket:
                 handle_eagain(self, c_EV_READ)
 
     def connect(nbsocket self, object address):
+        cdef timeval tv
         # Do a non-blocking DNS lookup if needed.
         # There is no need to predeclare c_gethostbyname in Pyrex.
         address = c_gethostbyname(address, self.realsock.family)
@@ -1469,11 +1481,21 @@ cdef class nbsocket:
                 # We might get EALREADY occasionally for some slow connects.
                 if err != EAGAIN and err != EINPROGRESS and err != EALREADY:
                     raise socket.error(err, strerror(err))
+
+                # Workaround for Linux 2.6.31-20 for the delayed non-blocking
+                # select() problem.
+                # http://stackoverflow.com/questions/2708738/why-is-a-non-blocking-tcp-connect-occasionally-so-slow-on-linux
+                if self.c_family == AF_INET:
+                    tv.tv_sec = 0
+                    tv.tv_usec = connect_magic_usec
+                    os_select(0, NULL, NULL, NULL, &tv)
+
                 handle_eagain(self, c_EV_WRITE)
             else:
                 return
 
     def connect_ex(nbsocket self, object address):
+        cdef timeval tv
         # Do a non-blocking DNS lookup if needed.
         address = c_gethostbyname(address, self.realsock.family)
 
@@ -1482,6 +1504,15 @@ cdef class nbsocket:
             # We might get EALREADY occasionally for some slow connects.
             if err != EAGAIN and err != EINPROGRESS and err != EALREADY:
                 return err  # Inclusing `0' for success.
+
+            # Workaround for Linux 2.6.31-20 for the delayed non-blocking
+            # select() problem.
+            # http://stackoverflow.com/questions/2708738/why-is-a-non-blocking-tcp-connect-occasionally-so-slow-on-linux
+            if self.c_family == AF_INET:
+                tv.tv_sec = 0
+                tv.tv_usec = connect_magic_usec
+                os_select(0, NULL, NULL, NULL, &tv)
+
             handle_eagain(self, c_EV_WRITE)
 
     def shutdown(nbsocket self, object how):
@@ -1935,6 +1966,7 @@ cdef class nbsslsocket:
         return (asslsock, addr)
 
     def connect(nbsslsocket self, object address):
+        cdef timeval tv
         if self._sslobj:
             raise ValueError('attempt to connect already-connected SSLSocket!')
                     
@@ -1947,6 +1979,15 @@ cdef class nbsslsocket:
             if err:
                 if err != EAGAIN and err != EINPROGRESS:
                     raise socket.error(err, strerror(err))
+
+                # Workaround for Linux 2.6.31-20 for the delayed non-blocking
+                # select() problem.
+                # http://stackoverflow.com/questions/2708738/why-is-a-non-blocking-tcp-connect-occasionally-so-slow-on-linux
+                if self.c_family == AF_INET:
+                    tv.tv_sec = 0
+                    tv.tv_usec = connect_magic_usec
+                    os_select(0, NULL, NULL, NULL, &tv)
+
                 handle_ssl_eagain(self, c_EV_WRITE)
             else:
                 break
