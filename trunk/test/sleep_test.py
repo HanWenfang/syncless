@@ -8,8 +8,7 @@ from syncless import coio
 
 SMALL_SLEEP_SEC = 0.02
 
-# TODO(pts): Make it LOOPRET=1 in libev, just like in libevent.
-LOOPRET = 0
+LOOPRET = int(bool(coio.may_loop_return_1()))
 
 class SleepTest(unittest.TestCase):
   def testMainSleep(self):

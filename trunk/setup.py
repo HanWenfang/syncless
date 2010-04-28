@@ -22,10 +22,16 @@ import os.path
 import sys
 import stat
 from distutils import log
+from distutils.ccompiler import CCompiler
+from distutils.ccompiler import new_compiler
+from distutils.command.build import build
+from distutils.core import Command
 from distutils.core import Extension
 from distutils.core import setup
+from distutils.dir_util import mkpath
 from distutils.dist import Distribution
-from distutils.command.build import build
+from distutils.errors import CompileError
+from distutils.errors import LinkError
 
 class MyBuild(build):
   def has_sources(self):
@@ -39,7 +45,7 @@ class MyBuild(build):
 
 #print MyBuild.sub_commands
 
-class MyBuildExtDirs(build):
+class MyBuildExtDirs(Command):
   """Create symlinks to .so files.
   
   Create symlinks so scripts in the source dir can be run with PYTHONPATH=.
@@ -50,7 +56,7 @@ class MyBuildExtDirs(build):
     for ext in self.distribution.ext_modules:
       #assert ext.include_dirs == []
       if callable(ext.library_dirs):
-        update_dict = ext.library_dirs()
+        update_dict = ext.library_dirs(self)
         assert isinstance(update_dict, dict)
         ext.library_dirs = []
         ext.include_dirs = []
@@ -61,9 +67,15 @@ class MyBuildExtDirs(build):
           assert isinstance(getattr(ext, key), list)
           # ext.library_dirs.extend(update_dict['library_dirs'])
           getattr(ext, key).extend(value)
-    
 
-class MyBuildExtSymlinks(build):
+  def initialize_options(self):
+    pass
+
+  def finalize_options(self):
+    pass
+
+
+class MyBuildExtSymlinks(Command):
   """Create symlinks to .so files.
   
   Create symlinks so scripts in the source dir can be run with PYTHONPATH=.
@@ -85,7 +97,14 @@ class MyBuildExtSymlinks(build):
         link_to = os.path.join('..', so_file)
         symlink(link_to, link_from)
 
-class MyBuildSrcSymlinks(build):
+  def initialize_options(self):
+    pass
+
+  def finalize_options(self):
+    pass
+
+
+class MyBuildSrcSymlinks(Command):
   """Create symlinks to package source directories.
   
   Create symlinks so, if combined with MyBuildExtSymlinks, scripts in the
@@ -103,6 +122,12 @@ class MyBuildSrcSymlinks(build):
             link_to = os.path.join('..', package)
             symlink(link_to, link_from)
 
+  def initialize_options(self):
+    pass
+
+  def finalize_options(self):
+    pass
+
 # Make self.distribution.symlink_script_src_dirs visible.
 Distribution.symlink_script_src_dirs = None
 
@@ -116,35 +141,182 @@ def symlink(link_to, link_from):
     pass
   os.symlink(link_to, link_from)
 
-def FindLibEv():
+
+def GetCompiler(command_obj):
+  build_ext_cmd = command_obj.get_finalized_command('build_ext')
+  if build_ext_cmd.dry_run:
+    return retval  # TODO(pts): Do better.
+  if isinstance(build_ext_cmd.compiler, CCompiler):
+    return build_ext_cmd.compier
+  else:
+    return new_compiler(compiler=build_ext_cmd.compiler,
+                        verbose=build_ext_cmd.verbose,
+                        dry_run=build_ext_cmd.dry_run,
+                        force=build_ext_cmd.force)
+
+
+def HasSymbols(compiler, symbols=(),
+               includes=None,
+               include_dirs=None,
+               libraries=None,
+               library_dirs=None):
+  """Return a boolean indicating whether all symbols are defined on
+  the current platform.  The optional arguments can be used to
+  augment the compilation environment.
+  
+  Different from CCompiler.has_function:
+
+  * ignores function arguments, just tries to convert to (void*).
+  * multiple symbols (conjunction)
+  * symbols should not be macros (so library linking can be tested)
+  * runs the linked executable with /bin/sh
+  """
+  if not symbols:
+    return True
+
+  import tempfile
+  if includes is None:
+    includes = []
+  if include_dirs is None:
+    include_dirs = []
+  if libraries is None:
+    libraries = []
+  if library_dirs is None:
+    library_dirs = []
+  mkpath('tmp')
+  fname = 'tmp/check_c_sym_' + symbols[0] + '.c'
+  f = open(fname, "w")
+  if () in includes:
+    assert len(includes) == 1
+    for symbol in symbols:
+      f.write("extern void %s(void);\n" % symbol)
+  else:
+    for incl in includes:
+      f.write("""#include "%s"\n""" % incl)
+  f.write("int main(int argc, char **argv) {\n")
+  f.write("  int c = %d;\n" % len(symbols))
+  for symbol in symbols:
+    f.write("  if ((void*)(%s) != (void*)main) --c;\n" % symbol)
+  f.write("  return c;\n");
+  f.write("}\n")
+  f.close()
+  try:
+    # Strips leading '/' from fname.
+    objects = compiler.compile([fname], include_dirs=include_dirs)
+  except CompileError:
+    return False
+
+  execfn = os.path.splitext(fname)[0] + '.out'
+  try:
+    compiler.link_executable(objects, execfn,
+                             libraries=libraries,
+                             library_dirs=library_dirs)
+  except (LinkError, TypeError):
+    return False
+  assert '/' in execfn
+  assert '\0' not in execfn
+  if 0 != os.system("exec '%s'" % execfn.replace("'", "'\\''")):
+    log.error('running %s failed' % execfn)
+    return False
+  return True
+
+
+def FindLib(retval, compiler, prefixes, includes, library, symbols,
+            link_with_prev_libraries=None):
+  for prefix in prefixes:
+    if (prefix and
+        (() in includes or includes ==
+         [idir for idir in includes if
+          os.path.isfile(prefix + '/include/' + idir)]) and
+        glob.glob(prefix + '/lib/lib' + library + '.*')):
+      include_dir = '%s/include' % prefix
+      library_dir = '%s/lib' % prefix
+      libraries = [library]
+      if link_with_prev_libraries:
+        # library_dirs same order as in final retval.
+        library_dirs = list(retval['library_dirs'])
+        library_dirs.append(library_dir)
+        libraries.extend(link_with_prev_libraries)
+      else:
+        library_dirs = [library_dir]
+        
+      if HasSymbols(compiler=compiler, symbols=symbols,
+                    includes=includes, include_dirs=[include_dir],
+                    libraries=libraries, library_dirs=[library_dir]):
+        log.info('found lib%s in %s' % (library, prefix))
+        if include_dir not in retval['include_dirs']:
+          retval['include_dirs'].append(include_dir)
+        if library_dir not in retval['library_dirs']:
+          retval['library_dirs'].append(library_dir)
+        return retval
+  raise LinkError('lib%s not found or not working' % library)
+
+
+def FindLibEv(command_obj):
   # We could add more directories (e.g. those in /etc/ld.so.conf), but that's
   # system-specific, see http://stackoverflow.com/questions/2230467 .
   # TODO(pts): Issue a fatal error if libev or libevhdns was not found.
   # TODO(pts): Find libevhdns separately.
-  retval = {'include_dirs': [], 'library_dirs': []}
-  for prefix in os.getenv('LD_LIBRARY_PATH', '').split(':') + [
-                sys.prefix, '/usr']:
-    if (prefix and
-        os.path.isfile(prefix + '/include/ev.h') and
-        glob.glob(prefix + '/lib/libev.*')):
-      print 'found libev in', prefix
-      retval['include_dirs'].append('%s/include' % prefix)
-      retval['library_dirs'].append('%s/lib' % prefix)
-      return retval
-  if not include_dirs:
-    log.info('libevent not found, may be present anyway, going on')
+  retval = {'include_dirs': [], 'library_dirs': [], 'libraries': [],
+            'define_macros': []}
+  compiler = GetCompiler(command_obj)
+  prefixes = os.getenv('LD_LIBRARY_PATH', '').split(':') + [
+                sys.prefix, '/usr']
+  if os.getenv('SYNCLESS_USE_LIBEVENT2', ''):
+    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+            includes=['event2/event_compat.h'], library='event',
+            symbols=['event_init', 'event_loop'])
+    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+            includes=['event2/dns.h', 'event2/dns_compat.h'],
+            library='event',
+            symbols=['evdns_resolve_ipv4', 'evdns_resolve_reverse_ipv6'])
+    # TODO(pts): Try to link something libevent1 doesn't have.
+    # TODO(pts): Better check for libevent1 vs libevent2 incompatibility
+    #            (like wron event.h).
+    retval['libraries'].extend(['event'])
+    retval['define_macros'].append(('COIO_USE_LIBEVENT2', None))
+  elif False:  # Disabled because doesn't work on whip.
+    # SUXX: Can't link to libevent with `-levent-1.4'.
+    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+            includes=['event.h'], library='event',
+            symbols=['event_init', 'event_loop'])
+    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+            includes=['evdns.h'], library='event',
+            symbols=['evdns_resolve_ipv4', 'evdns_resolve_reverse_ipv6'])
+    retval['libraries'].extend(['event'])
+    retval['define_macros'].append(('COIO_USE_LIBEVENT1', None))
+    # TODO(pts): Find out why demo.py fails etc.
+    raise LinkError('libevent1 does not work yet (it used to work)')
+  elif True:
+    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+            includes=['ev.h'], library='ev', symbols=['ev_once'])
+    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+            includes=[()], library='evhdns', symbols=['evdns_resolve_ipv4'],
+            link_with_prev_libraries=['ev'])
+    retval['libraries'].extend(['evhdns', 'ev'])
+    retval['define_macros'].append(('COIO_USE_LIBEV', None))
+  repr_retval = repr(retval)
+  log.info('using C env %s' % repr_retval)
+  try:
+    old_repr_retval = open('setup.cenv').read()
+  except FileError:
+    old_repr_retval = None
+  if repr_retval != old_repr_retval:
+    open('setup.cenv', 'w').write(repr_retval)
   return retval
+
 
 event = Extension(name='syncless.coio',
                   sources=['coio_src/coio.c'],
                   depends=['coio_src/coio_c_helper.h',
                            'coio_src/coio_c_evbuffer.h',
                            'coio_src/ev-event.h',
+                           'setup.cenv',
                           ],
                   # Using a function for library_dirs here is a nonstandard
                   # distutils extension, see also MyBuildExtDirs.
                   library_dirs=FindLibEv,
-                  libraries=['ev', 'evhdns'])
+                  libraries=[])
 
 # chdir to to the directory containing setup.py. Building extensions wouldn't
 # work otherwise.
