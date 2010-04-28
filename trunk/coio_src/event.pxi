@@ -34,7 +34,7 @@ cdef extern from "Python.h":
 
 ctypedef void (*event_handler)(int fd, short evtype, void *arg)
     
-cdef extern from "ev-event.h":
+cdef extern from "./ev-event.h":
     struct timeval:
         unsigned int tv_sec
         unsigned int tv_usec
