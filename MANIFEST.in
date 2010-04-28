@@ -4,3 +4,4 @@ recursive-include test *.py
 recursive-include coio_src *.c *.h *.py *.pyx *.pxi
 #prune examples/sample?/build
 #prune ptsevent
+prune */syncless
