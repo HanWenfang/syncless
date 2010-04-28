@@ -133,7 +133,7 @@ cdef extern from "sys/select.h":
     int os_select "select"(int nfds, fd_set *rset, fd_set *wset, fd_set *xset,
                            timeval *timeout)
 
-cdef extern from "coio_c_evbuffer.h":
+cdef extern from "./coio_c_evbuffer.h":
     struct evbuffer_s "evbuffer":
         uchar_p buf "buffer"
         uchar_p orig_buffer
