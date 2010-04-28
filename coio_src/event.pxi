@@ -34,7 +34,9 @@ cdef extern from "Python.h":
 
 ctypedef void (*event_handler)(int fd, short evtype, void *arg)
     
-cdef extern from "./ev-event.h":
+cdef extern from "./coio_c_include_libevent.h":
+    int c_MAY_EVENT_LOOP_RETURN_1 "MAY_EVENT_LOOP_RETURN_1"
+
     struct timeval:
         unsigned int tv_sec
         unsigned int tv_usec
@@ -225,3 +227,7 @@ def loop(nonblock=False):
 def abort():
     """Abort event dispatch loop."""
     __event_abort()
+
+def may_loop_return_1():
+    """Return true iff loop() may return 1."""
+    return c_MAY_EVENT_LOOP_RETURN_1

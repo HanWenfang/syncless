@@ -96,6 +96,12 @@ Author
 with accents in UTF-8: Péter Szabó <pts@fazekas.hu>
 without accents: Peter Szabo <pts@fazekas.hu>
 
+License
+~~~~~~~
+Syncless is licensed under the GNU GPL v2.
+
+If you need other licensing options, please contact the author.
+
 Using Syncless with web frameworks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 The WSGI-capable HTTP server in Syncless can run any framework with WSGI
@@ -580,6 +586,23 @@ A7. If your client software is written in pure Python, and it uses the
       patch.patch_socket()
       patch.patch_ssl()  # Only if SSL (e.g. HTTPS) support is needed.
 
+Q8. Can I link Syncless aganst libevent instead of libev?
+
+A8. Please try Syncless with libevent2 (libevent-2.0.4 or later) by
+    compiling it with
+
+      $ SYNCLESS_USE_LIBEVENT2=true stackless2.6 ./setup.py build
+      $ sudo stackless2.6 ./setup.py install
+
+    Also the primary focus is to make Syncless work with libev, it should
+    also work with libevent2. Please report any libevent2 issues to the
+    author of Syncless.
+
+    Currently Syncless doesn't work with libevent1 (i.e. libevent-1.4 and
+    earlier). This may change in the future: partial support will be
+    restored, but libevent1 has the inherent limitation that it silently
+    starts behaving unpredictably and unreliably if multiple events are
+    registered on the same filehandle.
 
 Links
 ~~~~~

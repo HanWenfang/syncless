@@ -26,7 +26,7 @@ class NbfileTest(unittest.TestCase):
     self.f.close()
 
   def testReadLine(self):
-    # TODO(pts): Add tests for the tasklet waiting in I/O.
+    # This doesn't test blocking reads.
     self.assertEqual('', self.f.readline(0))
     self.f.write('foobarbaz')
     self.assertEqual('', self.f.readline(0))
@@ -79,6 +79,10 @@ class NbfileTest(unittest.TestCase):
     self.AssertReadLineWait('foo', '', 3)
 
   def testReadLineLongLine(self):
+    # SUXX: TODO(pts): Why does this fall to an infinite loop with
+    # libevent-1.4.13? It works with libev-3.9.
+    # Other tests also fail on Hardy.
+
     # Almost 1 MB. Since Linux usually sends at most 64 kB over a pipe at a
     # time, sending and receiving 1 MB needs multiple EAGAIN for write(2),
     # thus doing a complex tasklet and libevent interaction.
