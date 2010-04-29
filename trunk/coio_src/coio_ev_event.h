@@ -109,4 +109,7 @@ int event_add (struct event *ev, const struct timeval *tv);
 int event_del (struct event *ev);
 int event_pending (struct event *ev, short, struct timeval *tv);
 
+const char *event_get_version(void);
+const char *event_get_method(void);
+
 #endif

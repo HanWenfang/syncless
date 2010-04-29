@@ -50,13 +50,15 @@ cdef extern from "./coio_c_include_libevent.h":
     void event_init()
     void event_set(event_t *ev, int fd, short event,
                    event_handler handler, void *arg)
-    int  event_add(event_t *ev, timeval *tv)
-    #int  event_loopbreak()
-    int  event_del(event_t *ev)
-    int  event_dispatch() nogil
-    int  event_loop(int loop) nogil
-    int  event_pending(event_t *ev, short, timeval *tv)
-    
+    int event_add(event_t *ev, timeval *tv)
+    int event_del(event_t *ev)
+    int event_dispatch() nogil
+    int event_loop(int loop) nogil
+    int event_pending(event_t *ev, short, timeval *tv)
+
+    char *event_get_version()
+    char *event_get_method()
+
     int EVLOOP_ONCE
     int EVLOOP_NONBLOCK
     int EVLIST_INTERNAL
@@ -235,3 +237,9 @@ def has_feature_may_loop_return_1():
 def has_feature_multiple_events_on_same_fd():
     """Return true iff multiple events can be reliably registered on an fd."""
     return c_FEATURE_MULTIPLE_EVENTS_ON_SAME_FD
+
+def version():
+    return event_get_version()
+
+def method():
+    return event_get_method()
