@@ -49,7 +49,6 @@ cdef extern from "./coio_c_include_libevent.h":
     void event_init()
     void event_set(event_t *ev, int fd, short event,
                    event_handler handler, void *arg)
-    void evtimer_set(event_t *ev, event_handler handler, void *arg)
     int  event_add(event_t *ev, timeval *tv)
     #int  event_loopbreak()
     int  event_del(event_t *ev)
@@ -123,7 +122,7 @@ cdef class event:
         else:
             handler = __event_handler
         if evtype == 0 and not handle:
-            evtimer_set(&self.ev, handler, <void *>self)
+            event_set(&self.ev, -1, 0, handler, <void *>self)
         else:
             if not isinstance(handle, int):
                 handle = handle.fileno()

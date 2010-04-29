@@ -1,4 +1,4 @@
-/* Header copied from libev-3.9/event.h
+/* Header extracted from libev-3.9/event.h
  * by pts@fazekas.hu at Sat Apr 24 22:27:08 CEST 2010
  */
 
@@ -44,22 +44,9 @@
 #ifndef EVENT_H_
 #define EVENT_H_
 
-#ifdef EV_H
-# include EV_H
-#else
-# include "ev.h"
-#endif
+#include "ev.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* we need sys/time.h for struct timeval only */
-#if !defined (WIN32) || defined (__MINGW32__)
-# include <time.h> /* mingw seems to need this, for whatever reason */
-# include <sys/time.h>
-#endif
-
+struct timeval;
 struct event_base;
 
 #define EVLIST_TIMEOUT  0x01
@@ -68,6 +55,8 @@ struct event_base;
 #define EVLIST_ACTIVE   0x08
 #define EVLIST_INTERNAL 0x10
 #define EVLIST_INIT     0x80
+#define EV_PERSIST                 0x10
+#define EVLOOP_ONCE      EVLOOP_ONESHOT
 
 struct event
 {
@@ -89,71 +78,35 @@ struct event
   short ev_events;
 };
 
-#define EV_PERSIST                 0x10
-
-#define EVENT_SIGNAL(ev)           ((int) (ev)->ev_fd)
-#define EVENT_FD(ev)               ((int) (ev)->ev_fd)
-
-#define event_initialized(ev)      ((ev)->ev_flags & EVLIST_INIT)
-
-#define evtimer_add(ev,tv)         event_add (ev, tv)
-#define evtimer_set(ev,cb,data)    event_set (ev, -1, 0, cb, data)
-#define evtimer_del(ev)            event_del (ev)
-#define evtimer_pending(ev,tv)     event_pending (ev, EV_TIMEOUT, tv)
-#define evtimer_initialized(ev)    event_initialized (ev)
-
-#define timeout_add(ev,tv)         evtimer_add (ev, tv)
-#define timeout_set(ev,cb,data)    evtimer_set (ev, cb, data)
-#define timeout_del(ev)            evtimer_del (ev)
-#define timeout_pending(ev,tv)     evtimer_pending (ev, tv)
-#define timeout_initialized(ev)    evtimer_initialized (ev)
-
-#define signal_add(ev,tv)          event_add (ev, tv)
-#define signal_set(ev,sig,cb,data) event_set (ev, sig, EV_SIGNAL | EV_PERSIST, cb, data)
-#define signal_del(ev)             event_del (ev)
-#define signal_pending(ev,tv)      event_pending (ev, EV_SIGNAL, tv)
-#define signal_initialized(ev)     event_initialized (ev)
-
-const char *event_get_version (void);
-const char *event_get_method (void);
+/*#define event_initialized(ev)      ((ev)->ev_flags & EVLIST_INIT)*/
+/*#define evtimer_set(ev,cb,data)    event_set (ev, -1, 0, cb, data)*/
+/*const char *event_get_version (void);*/
+/*const char *event_get_method (void);*/
+/*#define _EVENT_LOG_DEBUG 0*/
+/*#define _EVENT_LOG_MSG   1*/
+/*#define _EVENT_LOG_WARN  2*/
+/*#define _EVENT_LOG_ERR   3*/
+/*void event_base_free (struct event_base *base);*/
+/*int event_base_set (struct event_base *base, struct event *ev);*/
+/*int event_base_loop (struct event_base *base, int);*/
+/*int event_base_loopexit (struct event_base *base, struct timeval *tv);*/
+/*int event_base_dispatch (struct event_base *base);*/
+/*int event_base_once (struct event_base *base, int fd, short events, void (*cb)(int, short, void *), void *arg, struct timeval *tv);*/
+/*int event_base_priority_init (struct event_base *base, int fd);*/
+/*int event_loopexit (struct timeval *tv);*/
+/*int event_priority_init (int npri);*/
+/*int event_priority_set (struct event *ev, int pri);*/
+/*typedef void (*event_log_cb)(int severity, const char *msg);*/
+/*void event_set_log_callback(event_log_cb cb);*/
+/*void event_active (struct event *ev, int res, short ncalls);*/ /* ncalls is being ignored */
+/*int event_once (int fd, short events, void (*cb)(int, short, void *), void *arg, struct timeval *tv);*/
 
 void *event_init (void);
-void event_base_free (struct event_base *base);
-
-#define EVLOOP_ONCE      EVLOOP_ONESHOT
 int event_loop (int);
-int event_loopexit (struct timeval *tv);
-int event_dispatch (void);
-
-#define _EVENT_LOG_DEBUG 0
-#define _EVENT_LOG_MSG   1
-#define _EVENT_LOG_WARN  2
-#define _EVENT_LOG_ERR   3
-typedef void (*event_log_cb)(int severity, const char *msg);
-void event_set_log_callback(event_log_cb cb);
-
+int event_dispatch (void);  /* not crucial for Syncless */
 void event_set (struct event *ev, int fd, short events, void (*cb)(int, short, void *), void *arg);
-int event_once (int fd, short events, void (*cb)(int, short, void *), void *arg, struct timeval *tv);
-
 int event_add (struct event *ev, const struct timeval *tv);
 int event_del (struct event *ev);
-void event_active (struct event *ev, int res, short ncalls); /* ncalls is being ignored */
-
 int event_pending (struct event *ev, short, struct timeval *tv);
 
-int event_priority_init (int npri);
-int event_priority_set (struct event *ev, int pri);
-
-int event_base_set (struct event_base *base, struct event *ev);
-int event_base_loop (struct event_base *base, int);
-int event_base_loopexit (struct event_base *base, struct timeval *tv);
-int event_base_dispatch (struct event_base *base);
-int event_base_once (struct event_base *base, int fd, short events, void (*cb)(int, short, void *), void *arg, struct timeval *tv);
-int event_base_priority_init (struct event_base *base, int fd);
-
-#ifdef __cplusplus
-}
 #endif
-
-#endif
-

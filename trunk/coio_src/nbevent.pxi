@@ -2399,8 +2399,8 @@ cdef class selecter:
             event_add(self.wakeup_evs + i, NULL)
             i += 1
         if i < c:
-            evtimer_set(self.wakeup_evs + i, HandleCWakeup,
-                        <void*>self.wakeup_tasklet)
+            event_set(self.wakeup_evs + i, -1, 0, HandleCWakeup,
+                      <void*>self.wakeup_tasklet)
             event_add(self.wakeup_evs + i, &tv)
             i += 1
         assert i == c

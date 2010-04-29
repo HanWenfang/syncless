@@ -32,6 +32,17 @@ from distutils.dir_util import mkpath
 from distutils.dist import Distribution
 from distutils.errors import CompileError
 from distutils.errors import LinkError
+from distutils.unixccompiler import UnixCCompiler
+
+UnixCCompiler.nosyncless_find_library_file = UnixCCompiler.find_library_file
+
+def FindLibraryFile(self, dirs, lib, *args, **kwargs):
+  if len(dirs) == 1 and os.path.isfile(os.path.join(dirs[0], lib)):
+    # e.g. '/usr/local/lib/libfoo.so.5'
+    return os.path.join(dirs[0], lib)
+  return self.nosyncless_find_library_file(dirs, lib, *args, **kwargs)
+
+UnixCCompiler.find_library_file = classmethod(FindLibraryFile)
 
 class MyBuild(build):
   def has_sources(self):
@@ -228,29 +239,35 @@ def FindLib(retval, compiler, prefixes, includes, library, symbols,
         (() in includes or includes ==
          [idir for idir in includes if
           os.path.isfile(prefix + '/include/' + idir)]) and
-        glob.glob(prefix + '/lib/lib' + library + '.*')):
+        ('/' in library or 
+         glob.glob(prefix + '/lib/lib' + library + '.*'))):
       include_dir = '%s/include' % prefix
       library_dir = '%s/lib' % prefix
       libraries = [library]
       if link_with_prev_libraries:
         # library_dirs same order as in final retval.
         library_dirs = list(retval['library_dirs'])
-        library_dirs.append(library_dir)
         libraries.extend(link_with_prev_libraries)
       else:
-        library_dirs = [library_dir]
-        
+        library_dirs = []
+      if library_dir != os.path.dirname(library):
+        library_dirs.append(library_dir)
       if HasSymbols(compiler=compiler, symbols=symbols,
                     includes=includes, include_dirs=[include_dir],
                     libraries=libraries, library_dirs=[library_dir]):
-        log.info('found lib%s in %s' % (library, prefix))
+        if '/' in library:
+          log.info('found %s as %s' % (os.path.basename(library), library))
+        else:
+          log.info('found lib%s in %s' % (library, prefix))
         if include_dir not in retval['include_dirs']:
           retval['include_dirs'].append(include_dir)
-        if library_dir not in retval['library_dirs']:
+        if (library_dir != os.path.dirname(library) and
+            library_dir not in retval['library_dirs']):
           retval['library_dirs'].append(library_dir)
-        return retval
-  raise LinkError('lib%s not found or not working' % library)
-
+        retval['is_found'] = True
+        return True
+  log.error('library %s not found or not working' % library)
+  return False
 
 def FindLibEv(command_obj):
   # We could add more directories (e.g. those in /etc/ld.so.conf), but that's
@@ -258,43 +275,73 @@ def FindLibEv(command_obj):
   # TODO(pts): Issue a fatal error if libev or libevhdns was not found.
   # TODO(pts): Find libevhdns separately.
   retval = {'include_dirs': [], 'library_dirs': [], 'libraries': [],
-            'define_macros': []}
+            'define_macros': [], 'is_found': False}
   compiler = GetCompiler(command_obj)
   prefixes = os.getenv('LD_LIBRARY_PATH', '').split(':') + [
                 sys.prefix, '/usr']
+  is_found = False
+
+  is_asked = False
+  event_driver = None
+  if os.getenv('SYNCLESS_USE_LIBEV', ''):
+    assert event_driver is None
+    event_driver = 'libev'
+  if os.getenv('SYNCLESS_USE_LIBEVENT1', ''):
+    assert event_driver is None
+    event_driver = 'libevent1'
   if os.getenv('SYNCLESS_USE_LIBEVENT2', ''):
-    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+    assert event_driver is None
+    event_driver = 'libevent2'
+
+  if event_driver in (None, 'libev'):
+    if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+            includes=['ev.h'], library='ev', symbols=['ev_once']) and
+        FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+            includes=[()], library='evhdns', symbols=['evdns_resolve_ipv4'],
+            link_with_prev_libraries=['ev'])):
+      event_driver = 'libev'
+      retval['is_found'] = True
+      retval['libraries'].extend(['evhdns', 'ev'])
+      retval['define_macros'].append(('COIO_USE_LIBEV', None))
+
+  if event_driver in (None, 'libevent2'):
+    if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
             includes=['event2/event_compat.h'], library='event',
-            symbols=['event_init', 'event_loop'])
-    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+            symbols=['event_init', 'event_loop']) and
+        FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
             includes=['event2/dns.h', 'event2/dns_compat.h'],
             library='event',
-            symbols=['evdns_resolve_ipv4', 'evdns_resolve_reverse_ipv6'])
-    # TODO(pts): Try to link something libevent1 doesn't have.
-    # TODO(pts): Better check for libevent1 vs libevent2 incompatibility
-    #            (like wron event.h).
-    retval['libraries'].extend(['event'])
-    retval['define_macros'].append(('COIO_USE_LIBEVENT2', None))
-  elif False:  # Disabled because doesn't work on whip.
-    # SUXX: Can't link to libevent with `-levent-1.4'.
-    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
-            includes=['event.h'], library='event',
-            symbols=['event_init', 'event_loop'])
-    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
-            includes=['evdns.h'], library='event',
-            symbols=['evdns_resolve_ipv4', 'evdns_resolve_reverse_ipv6'])
-    retval['libraries'].extend(['event'])
-    retval['define_macros'].append(('COIO_USE_LIBEVENT1', None))
-    # TODO(pts): Find out why demo.py fails etc.
-    raise LinkError('libevent1 does not work yet (it used to work)')
-  elif True:
-    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
-            includes=['ev.h'], library='ev', symbols=['ev_once'])
-    FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
-            includes=[()], library='evhdns', symbols=['evdns_resolve_ipv4'],
-            link_with_prev_libraries=['ev'])
-    retval['libraries'].extend(['evhdns', 'ev'])
-    retval['define_macros'].append(('COIO_USE_LIBEV', None))
+            symbols=['evdns_resolve_ipv4', 'evdns_resolve_reverse_ipv6'])):
+      event_driver = 'libevent2'
+      retval['is_found'] = True
+      # TODO(pts): Try to link something libevent1 doesn't have.
+      retval['libraries'].extend(['event'])
+      retval['define_macros'].append(('COIO_USE_LIBEVENT2', None))
+
+  if event_driver in (None, 'libevent1'):
+    lib_event = 'event'
+    prefixes2 = list(prefixes)
+    for prefix in prefixes:
+      # Prefer libevent-1.4.so* because libevent.so might be libevent2 (sigh).
+      lib_file = os.path.join(prefix, 'lib', 'libevent-1.4.so.2')
+      if os.path.isfile(lib_file):
+        lib_event = lib_file
+        prefixes = [prefix]
+        break
+    if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes2,
+            includes=['event.h'], library=lib_event,
+            symbols=['event_init', 'event_loop']) and
+        FindLib(retval=retval, compiler=compiler, prefixes=prefixes2,
+            includes=['evdns.h'], library=lib_event,
+            symbols=['evdns_resolve_ipv4', 'evdns_resolve_reverse_ipv6'])):
+      event_driver = 'libevent1'
+      retval['is_found'] = True
+      retval['libraries'].append(lib_event)
+      retval['define_macros'].append(('COIO_USE_LIBEVENT1', None))
+
+  if not retval.pop('is_found'):
+    raise LinkError('libevent/libev not found')
+
   repr_retval = repr(retval)
   log.info('using C env %s' % repr_retval)
   try:
@@ -310,7 +357,7 @@ event = Extension(name='syncless.coio',
                   sources=['coio_src/coio.c'],
                   depends=['coio_src/coio_c_helper.h',
                            'coio_src/coio_c_evbuffer.h',
-                           'coio_src/ev-event.h',
+                           'coio_src/coio_ev_event.h',
                            'setup.cenv',
                           ],
                   # Using a function for library_dirs here is a nonstandard

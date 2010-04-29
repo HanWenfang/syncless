@@ -13,11 +13,13 @@
 #endif
 
 #ifdef COIO_USE_LIBEVENT1
-#include <event.h>
+/* We use a local copy because stock event.h might be from libev */
+#include "./coio_event1_event.h"
 #define MAY_EVENT_LOOP_RETURN_1 1
 #endif
 
 #ifdef COIO_USE_LIBEV
-#include "./ev-event.h"
+/* We use a local copy because stock event.h might be from libevent1 */
+#include "./coio_ev_event.h"
 #define MAY_EVENT_LOOP_RETURN_1 0
 #endif

@@ -598,11 +598,14 @@ A8. Please try Syncless with libevent2 (libevent-2.0.4 or later) by
     also work with libevent2. Please report any libevent2 issues to the
     author of Syncless.
 
-    Currently Syncless doesn't work with libevent1 (i.e. libevent-1.4 and
-    earlier). This may change in the future: partial support will be
-    restored, but libevent1 has the inherent limitation that it silently
-    starts behaving unpredictably and unreliably if multiple events are
-    registered on the same filehandle.
+    Currently Syncless works only partially with libevent1 (i.e.
+    libevent-1.4 and earlier), because libevent1 has the inherent limitation
+    that it silently starts behaving unpredictably and unreliably if
+    multiple events are registered on the same filehandle. You can try
+    nevertheless:
+
+      $ SYNCLESS_USE_LIBEVENT1=true stackless2.6 ./setup.py build
+      $ sudo stackless2.6 ./setup.py install
 
 Links
 ~~~~~
