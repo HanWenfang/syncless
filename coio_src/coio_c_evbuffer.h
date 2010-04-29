@@ -4,7 +4,7 @@
  * libevent-1.4.13.
  */
 
-struct evbuffer {
+struct coio_evbuffer {
 	u_char *buffer;
 	u_char *orig_buffer;
 
@@ -12,27 +12,15 @@ struct evbuffer {
 	size_t totallen;
 	size_t off;
 
-	void (*cb)(struct evbuffer *, size_t, size_t, void *);
+	void (*cb)(struct coio_evbuffer *, size_t, size_t, void *);
 	void *cbarg;
 };
 
-#define EVBUFFER_LENGTH(x)	(x)->off
-#define EVBUFFER_DATA(x)	(x)->buffer
-#define EVBUFFER_INPUT(x)	(x)->input
-#define EVBUFFER_OUTPUT(x)	(x)->output
-
-/* Just for error reporting - use other constants otherwise */
-#define EVBUFFER_READ		0x01
-#define EVBUFFER_WRITE		0x02
-#define EVBUFFER_EOF		0x10
-#define EVBUFFER_ERROR		0x20
-#define EVBUFFER_TIMEOUT	0x40
-
-struct evbuffer *evbuffer_new(void);
-void evbuffer_free(struct evbuffer *);
-int evbuffer_expand(struct evbuffer *, size_t);
-int evbuffer_add(struct evbuffer *, const void *, size_t);
-void evbuffer_drain(struct evbuffer *, size_t);
+struct coio_evbuffer *coio_evbuffer_new(void);
+void coio_evbuffer_free(struct coio_evbuffer *);
+int coio_evbuffer_expand(struct coio_evbuffer *, size_t);
+int coio_evbuffer_add(struct coio_evbuffer *, const void *, size_t);
+void coio_evbuffer_drain(struct coio_evbuffer *, size_t);
 
 /* Original evbuffer code
  * Copyright (c) 2002, 2003 Niels Provos <provos@citi.umich.edu>
@@ -61,18 +49,18 @@ void evbuffer_drain(struct evbuffer *, size_t);
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-struct evbuffer *
-evbuffer_new(void)
+struct coio_evbuffer *
+coio_evbuffer_new(void)
 {
-	struct evbuffer *buffer;
+	struct coio_evbuffer *buffer;
 	
-	buffer = calloc(1, sizeof(struct evbuffer));
+	buffer = calloc(1, sizeof(struct coio_evbuffer));
 
 	return (buffer);
 }
 
 void
-evbuffer_free(struct evbuffer *buffer)
+coio_evbuffer_free(struct coio_evbuffer *buffer)
 {
 	if (buffer->orig_buffer != NULL)
 		free(buffer->orig_buffer);
@@ -82,7 +70,7 @@ evbuffer_free(struct evbuffer *buffer)
 /* Adds data to an event buffer */
 
 static void
-evbuffer_align(struct evbuffer *buf)
+coio_evbuffer_align(struct coio_evbuffer *buf)
 {
 	memmove(buf->orig_buffer, buf->buffer, buf->off);
 	buf->buffer = buf->orig_buffer;
@@ -92,7 +80,7 @@ evbuffer_align(struct evbuffer *buf)
 /* Expands the available space in the event buffer to at least datlen */
 
 int
-evbuffer_expand(struct evbuffer *buf, size_t datlen)
+coio_evbuffer_expand(struct coio_evbuffer *buf, size_t datlen)
 {
 	size_t need = buf->misalign + buf->off + datlen;
 
@@ -105,7 +93,7 @@ evbuffer_expand(struct evbuffer *buf, size_t datlen)
 	 * alignment to happen.  Afterwards, we have enough space.
 	 */
 	if (buf->misalign >= datlen) {
-		evbuffer_align(buf);
+		coio_evbuffer_align(buf);
 	} else {
 		void *newbuf;
 		size_t length = buf->totallen;
@@ -116,7 +104,7 @@ evbuffer_expand(struct evbuffer *buf, size_t datlen)
 			length <<= 1;
 
 		if (buf->orig_buffer != buf->buffer)
-			evbuffer_align(buf);
+			coio_evbuffer_align(buf);
 		if ((newbuf = realloc(buf->buffer, length)) == NULL)
 			return (-1);
 
@@ -128,13 +116,13 @@ evbuffer_expand(struct evbuffer *buf, size_t datlen)
 }
 
 int
-evbuffer_add(struct evbuffer *buf, const void *data, size_t datlen)
+coio_evbuffer_add(struct coio_evbuffer *buf, const void *data, size_t datlen)
 {
 	size_t need = buf->misalign + buf->off + datlen;
 	size_t oldoff = buf->off;
 
 	if (buf->totallen < need) {
-		if (evbuffer_expand(buf, datlen) == -1)
+		if (coio_evbuffer_expand(buf, datlen) == -1)
 			return (-1);
 	}
 
@@ -148,7 +136,7 @@ evbuffer_add(struct evbuffer *buf, const void *data, size_t datlen)
 }
 
 void
-evbuffer_drain(struct evbuffer *buf, size_t len)
+coio_evbuffer_drain(struct coio_evbuffer *buf, size_t len)
 {
 	size_t oldoff = buf->off;
 

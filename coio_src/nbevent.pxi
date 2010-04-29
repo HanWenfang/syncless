@@ -134,7 +134,7 @@ cdef extern from "sys/select.h":
                            timeval *timeout)
 
 cdef extern from "./coio_c_evbuffer.h":
-    struct evbuffer_s "evbuffer":
+    struct evbuffer_s "coio_evbuffer":
         uchar_p buf "buffer"
         uchar_p orig_buffer
         int misalign
@@ -144,18 +144,11 @@ cdef extern from "./coio_c_evbuffer.h":
         void (*cb)(evbuffer_s*, int, int, void*)
 
     # These must match other declarations of the same name.
-    evbuffer_s *evbuffer_new()
-    void evbuffer_free(evbuffer_s *)
-    int evbuffer_expand(evbuffer_s *, int)
-    int evbuffer_add(evbuffer_s *, void_constp, int)
-    #UNUSED int evbuffer_remove(evbuffer_s *, void *, int)
-    #UNUSED char *evbuffer_readline(evbuffer_s *)
-    #UNUSED int evbuffer_add_buffer(evbuffer_s *, evbuffer_s *)
-    int evbuffer_drain(evbuffer_s *b, int size)
-    #UNUSED int evbuffer_write(evbuffer_s *, int)
-    #UNUSED int evbuffer_read(evbuffer_s *, int, int)
-    #UNUSED uchar_p evbuffer_find(evbuffer_s *, uchar_constp, int)
-    #UNUSED void evbuffer_setcb(evbuffer_s *, void (*)(struct evbuffer_s *, int, int, void *), void *)
+    evbuffer_s *evbuffer_new "coio_evbuffer_new"()
+    void evbuffer_free "coio_evbuffer_free"(evbuffer_s *)
+    int evbuffer_expand "coio_evbuffer_expand"(evbuffer_s *, int)
+    int evbuffer_add "coio_evbuffer_add"(evbuffer_s *, void_constp, int)
+    int evbuffer_drain "coio_evbuffer_drain"(evbuffer_s *b, int size)
 
 cdef extern from "Python.h":
     object PyString_FromFormat(char_constp fmt, ...)
