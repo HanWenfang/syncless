@@ -19,6 +19,7 @@ __author__ = 'pts@fazekas.hu (Peter Szabo)'
 import glob
 import os
 import os.path
+import re
 import sys
 import stat
 from distutils import log
@@ -31,6 +32,7 @@ from distutils.core import setup
 from distutils.dir_util import mkpath
 from distutils.dist import Distribution
 from distutils.errors import CompileError
+from distutils.errors import DistutilsError
 from distutils.errors import LinkError
 from distutils.unixccompiler import UnixCCompiler
 
@@ -55,6 +57,141 @@ class MyBuild(build):
       ('build_src_symlinks', has_sources)]
 
 #print MyBuild.sub_commands
+
+def GetUrlAndUserFromSvn(svn_client_dir):
+  """Return (svn_url, svn_user)."""
+  # This has been tested with svn 1.4.6.
+  f = open(os.path.join(svn_client_dir, '.svn', 'entries'))
+  lines = f.read().replace('\r\n', '\n').split('\n')
+  assert '://' in lines[5]
+  return lines[5], lines[11]
+
+def GetSvnPassword(svn_url, svn_user):
+  """Return password string stored in ~/.subversion."""
+  # This has been tested with svn 1.4.6.
+  dir_name = os.path.join(
+      os.getenv('HOME', '/dev/null'), '.subversion', 'auth', 'svn.simple')
+  if not os.path.isdir(dir_name):
+    raise DistutilsError('svn config dir not found: %s' % dir_name)
+  svn_url_slash = svn_url.rstrip('/') + '/'
+  for entry in sorted(os.listdir(dir_name)):
+    file_name = os.path.join(dir_name, entry)
+    f = open(file_name)
+    # Example f.read():
+    # 'K 8\npassword\nV 6\nsecret\nK 8\nusername\nV 3\nmyuser\nEND'.
+    h = {}
+    try:
+      while True:
+        line = f.readline()
+        if line in ('', 'END', 'END\n'):
+          break
+        match = re.match(r'K\s+(\d+)\n\Z', line)
+        assert match, 'expected key as K'
+        size = int(match.group(1))
+        key = f.read(size)
+        assert len(key) == size
+        line = f.read(1)
+        assert line == '\n'
+
+        line = f.readline()
+        match = re.match(r'V\s+(\d+)\n\Z', line)
+        assert match, 'expected value as V'
+        size = int(match.group(1))
+        value = f.read(size)
+        assert len(value) == size
+        line = f.read(1)
+        assert line == '\n'
+        h[key] = value
+    finally:
+      f.close()
+    if h.get('username') != svn_user:
+      continue
+    if not h.get('password'):
+      continue
+    realm = h.get('svn:realmstring', '')
+    if not realm.startswith('<') or '>' not in realm:
+      continue
+    realm = realm[1 : realm.find('>')] + '/'
+    # Example realm: 'https://syncless.googlecode.com:443/'.
+    if '://' not in realm:
+      continue
+    if realm.startswith('https://'):
+      realm = realm.replace(':443/', '/')
+    if svn_url_slash.startswith(realm):
+      return h['password']
+  raise DistutilsError('password not found for SVN user %s and URL %s' %
+                       (svn_user, svn_url))
+
+class MyUpload(Command):
+  """Upload source .tar.gz distributions to Google Code.
+
+  This class is based on
+  http://support.googlecode.com/svn/trunk/scripts/googlecode_distutils_upload.py
+  """
+
+  labels = ['Featured', 'Type-Source', 'OpSys-Linux', 'OpSys-All']
+
+  description = 'upload source or Windows distribution to Google Code'
+  user_options = [
+                  ('dist-dir=', 'd',
+                   'directory to find distribution archive in'
+                   ' [default: dist]'),
+                  ('user=', 'u',
+                   'Google Code username'),
+                  ('password=', 'p',
+                   'Google Code password'),
+                  ]
+
+  def initialize_options(self):
+    self.dist_dir = None
+    self.user = None
+    self.password = None
+
+  def finalize_options(self):
+    # Get dist-dir default from sdist or bdist_wininst.
+    self.set_undefined_options('sdist', ('dist_dir', 'dist_dir'))
+
+    # Do nothing for config-dir and user; upload_find_auth does the
+    # right thing when they're None.
+
+  def run(self):
+    # TODO(pts): Make the old file not featured. (This is not possible yet
+    # since there is no Google Code Data API yet.)
+    import googlecode_upload
+    name = self.distribution.get_name()
+    version = self.distribution.get_version()
+
+    # TODO(epg): sdist is more flexible with formats...
+    fn = os.path.join(self.dist_dir, self.distribution.get_fullname())
+    fn += '.tar.gz'
+    if not os.path.isfile(fn):
+      raise DistutilsError('missing source distribution file %s, '
+                           'run setup.py sdist' % fn)
+    summary = ' '.join([name, version, 'source distribution'])
+    labels = self.labels
+
+    if self.user is None or self.password is None:
+      svn_url, user = GetUrlAndUserFromSvn('.')
+      if self.user is not None and user != self.user:
+        raise DistutilsError('found svn user %r, got cmdline user %r' %
+                             (user, self.user))
+      if self.password is None:
+        password = GetSvnPassword(svn_url, user)
+      else:
+        password = self.password
+    else:
+      user = self.user
+      password = self.password
+
+    (status, reason,
+     file_url) = googlecode_upload.upload_find_auth(
+         file_path=fn, project_name=name, summary=summary, labels=labels,
+         user_name=user, password=password)
+    if file_url is None:
+      raise DistutilsError('upload error: %s (%d)\n' % (reason, status))
+
+    sys.stdout.write('Uploaded %s\n' % (file_url,))
+
 
 class MyBuildExtDirs(Command):
   """Create symlinks to .so files.
@@ -424,6 +561,7 @@ setup(name='syncless',
                   'build_ext_dirs': MyBuildExtDirs,
                   'build_ext_symlinks': MyBuildExtSymlinks,
                   'build_src_symlinks': MyBuildSrcSymlinks,
+                  'upload': MyUpload,
                  },
       symlink_script_src_dirs=['test', 'benchmark', 'coio_src', 'examples'],
      )

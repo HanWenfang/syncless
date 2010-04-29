@@ -612,6 +612,27 @@ Links
 * doc: related: eventlet vs gevent:
   http://blog.gevent.org/2010/02/27/why-gevent/
 
+Release procedure
+~~~~~~~~~~~~~~~~~
+This section describes how to create a new source distribution release of
+Syncless. The intended audience is Syncless developers.
+
+1. Run
+
+     $ make -C coio_src coio.c
+
+2. Make sure it works in your SVN local directory (e.g. run the tests).
+
+3. Bump the version number in syncless/version.py .
+
+4. Commit your changes, e.g.
+
+     $ svn ci -m 'bumped version number, creating release X.YZ'
+
+5. Run
+
+     $ stackless2.6 setup.py sdist upload register
+
 Planned features
 ~~~~~~~~~~~~~~~~
 * TODO(pts): Wrap popen2 etc.
