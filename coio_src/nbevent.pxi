@@ -2562,3 +2562,99 @@ cdef class wakeup_info:
         list_obj = list(self.tick(timeout))
         del self.c_pending_events[:]
         return list_obj
+
+# --- Concurrence 0.3.1 support
+#
+# See also patch.patch_concurrence().
+
+cdef list concurrence_triggered
+concurrence_triggered = []
+
+def get_concurrence_triggered():
+    return concurrence_triggered
+
+def get_swap_concurrence_triggered():
+    global concurrence_triggered
+    retval = concurrence_triggered
+    concurrence_triggered = []
+    return retval
+
+cdef list concurrence_main_tasklets
+concurrence_main_tasklets = []
+
+def get_concurrence_main_tasklets():
+    return concurrence_main_tasklets
+
+cdef class concurrence_event
+
+cdef void HandleCConcurrence(int fd, short evtype, void *arg) with gil:
+    pair = ((<concurrence_event>arg).callback, evtype)
+    if not (<concurrence_event>arg).pending():
+        Py_DECREF(<object>arg)
+    concurrence_triggered.append(pair)
+    for tasklet_obj in concurrence_main_tasklets:
+        PyTasklet_Insert(<tasklet>tasklet_obj)
+
+class EventError(Exception):
+    def __init__(self, msg):
+        Exception.__init__(self, '%s: %s' % (msg, strerror(errno)))
+
+cdef class concurrence_event:
+    """event(callback, evtype=0, handle=None) -> event object
+    
+    Create a new event object with a user callback.
+
+    Arguments:
+
+    callback -- user callback with (ev, handle, evtype, arg) prototype
+    arg      -- optional callback arguments
+    evtype   -- bitmask of EV_READ or EV_WRITE, or EV_SIGNAL
+    handle   -- for EV_READ or EV_WRITE, a file handle, descriptor, or socket
+                for EV_SIGNAL, a signal number
+    """
+    cdef event_t ev
+    cdef object evtype, callback
+    cdef timeval tv
+
+    def __init__(self, callback, short evtype=0, handle=-1):
+        self.callback = callback
+        self.evtype = evtype
+        if evtype == 0 and not handle:  # Timeout.
+            event_set(&self.ev, -1, 0, HandleCConcurrence, <void *>self)
+        elif isinstance(handle, int):
+            event_set(&self.ev, handle, evtype, HandleCConcurrence, <void *>self)
+        else:
+            event_set(&self.ev, handle.fileno(), evtype, HandleCConcurrence, <void *>self)
+
+    # We don't have to def __dealloc__ just to call event_del(&self.ev),
+    # because the Py_INCREF(self) above ensures that if the event is
+    # pending, then this object is not deleted.
+
+    def add(self, float timeout=-1):
+        """Add event to be executed after an optional timeout."""
+        if not self.pending():
+            Py_INCREF(self)
+            
+        if timeout >= 0.0:
+            self.tv.tv_sec = <long>timeout
+            self.tv.tv_usec = <long>((timeout - <float>self.tv.tv_sec) * 1000000.0)
+            if event_add(&self.ev, &self.tv) == -1:
+                raise EventError('could not add event')
+        else:
+            self.tv.tv_sec = self.tv.tv_usec = 0
+            if event_add(&self.ev, NULL) == -1:
+                raise EventError('could not add event')
+
+    def pending(self):
+        """Return 1 if the event is scheduled to run, or else 0."""
+        return event_pending(&self.ev, c_EV_TIMEOUT | c_EV_SIGNAL | c_EV_READ | c_EV_WRITE, NULL)
+    
+    def delete(self):
+        """Remove event from the event queue."""
+        if self.pending():
+           if event_del(&self.ev) == -1:
+                raise EventError('could not delete event')
+           Py_DECREF(self)
+
+    def __repr__(self):
+        return '<event flags=0x%x, callback=%s' % (self.ev.ev_flags, self.callback)

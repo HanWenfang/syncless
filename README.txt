@@ -8,7 +8,7 @@ by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
 
 Syncless is an experimental, lightweight, non-blocking (asynchronous) client
 and server socket network communication library for Stackless Python 2.6.
-For high speed, Syncless uses libev (similar to libevent), and parts of
+For high speed, Syncless uses libev (and libevent), and parts of
 Syncless' code is implemented in C (Pyrex). Thus Syncless can be faster than
 many other non-blocking Python communication libraries. Syncless contains an
 asynchronous DNS resolver (using evdns) and a HTTP server capable of serving
@@ -43,8 +43,8 @@ Features
   BaseHTTPRequestHandler + BaseHTTPServer applications, CherryPy
   applications, web.py applications, and Google webapp applications (not
   supporting most other Google AppEngine technologies) as well
-* combination of Syncless and (Twisted, Tornado (fast) or asyncore) in the
-  same process
+* combination of Syncless and (Twisted, Tornado (fast), Concurrence and/or
+  asyncore) in the same process
 
 Requirements
 ~~~~~~~~~~~~
@@ -497,12 +497,18 @@ A12. Tornado (with its own main loop) is already supported with
 Q13. Is it possible to use gevent, Eventlet, Concurrence or another
      coroutine-based event communication framwork with Syncless?
 
-A13. No, but it might be fun to add support for one of them. gevent,
-     Eventlet and Concurrence use libevent, so techincally it wouldn't be
-     too much work to unify the event loops. For Eventlet and gevent, one
-     would have to emulate greenlet using Stackless Python. There is emulation
-     code in the Syncless codebase, but it's 20% or even more slower than
-     greenlet.
+A13. Concurrence works with patch.patch_concurrence(). See also
+     examples/demo_concurrence.py . The speed should be the same as with
+     regular Concurrence, there is no Syncless-specific overhead. Please
+     note that native Syncless is faster than native Concurrence, because
+     Syncless provides sockets and buffered files as a C (Pyrex) extension.
+
+     The others don't work yet, but it might be fun to add support for one
+     of them. gevent, Eventlet and Concurrence use libevent, so techincally
+     it wouldn't be too much work to unify the event loops. For Eventlet and
+     gevent, one would have to emulate greenlet using Stackless Python.
+     There is emulation code in the Syncless codebase, but it's 20% or even
+     more slower than greenlet.
 
 Q14. Is it possible to use select(2) (select.select) with Syncless?
 

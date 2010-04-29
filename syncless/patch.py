@@ -184,6 +184,89 @@ def patch_tornado():
   tornado.ioloop._poll = TornadoSynclessPoll
 
 
+def patch_concurrence():
+  """Patch Concurrence r117.
+
+  Concurrence r117 was checked out from
+  http://concurrence.googlecode.com/svn/trunk at Thu Apr 29 19:43:44 CEST 2010.
+  """
+  import logging
+  import sys
+  import stackless
+  from concurrence import core
+  from concurrence import _event
+  from syncless import coio
+
+  def Exit(code=0):
+    raise SystemExit(code)
+
+  def Quit(exitcode=core.EXIT_CODE_OK):
+    core._running = False
+    core._exitcode = exitcode
+    # TODO(pts): Test this.
+    coio.get_concurrence_triggered().append(lambda evtype: 0, 0)
+    for tasklet_obj in coio.get_concurrence_main_tasklets():
+      tasklet_obj.insert()
+
+  def Dispatch(f=None):
+    """Replacement for concurrence.core.dispatch().
+
+    This function can be run in any tasklet, even in multiple tasklets in
+    parallel (but that doesn't make sense).
+    """
+    # TODO(pts): Don't count this as a regular tasklet for Syncless exiting.
+    # TODO(pts): Make this configurable.
+    #event_interrupt = SignalEvent(
+    #    core.SIGINT, lambda core.quit(core.EXIT_CODE_SIGINT))
+    main_tasklets = coio.get_concurrence_main_tasklets()
+    assert stackless.current not in main_tasklets
+    main_tasklets.append(stackless.current)
+    # We set _running to True for compatibility with Concurrence.
+    core._running = True
+    try:
+      if callable(f):
+        core.Tasklet.new(f)()
+      while core._running:
+        try:
+          # coio.HandleCConcurrence will insert us back.
+          if coio.get_concurrence_triggered():
+            stackless.schedule()
+          else:
+            stackless.schedule_remove()
+        except TaskletExit:
+          pass
+        except KeyboardInterrupt:
+          raise
+        except:
+          logging.exception('unhandled exception in dispatch schedule')
+        for callback, evtype in coio.get_swap_concurrence_triggered():
+          try:
+            # The callback can extend coio.get_concurrence_triggered().
+            # TODO(pts): How come??
+            callback(evtype)
+          except TaskletExit:
+            raise
+          except:
+            logging.exception('unhandled exception in dispatch event callback')
+            # TODO(pts): Push back to coio.get_concurrence_triggered().
+    finally:
+      main_tasklets.remove(stackless.current)
+
+  for name in dir(_event):
+    delattr(_event, name)
+  _event.method = coio.method
+  _event.version = coio.version
+  _event.event = coio.concurrence_event
+  _event.EV_TIMEOUT = coio.EV_TIMEOUT
+  _event.EV_READ = coio.EV_READ
+  _event.EV_WRITE = coio.EV_WRITE
+  _event.EV_SIGNAL = coio.EV_SIGNAL
+  _event.EV_PERSIST = coio.EV_PERSIST
+  core.quit = Quit
+  core._dispatch = Dispatch
+  sys.exit = Exit
+
+
 def ExceptHook(orig_excepthook, *args):
   from syncless import coio
   try:
@@ -419,6 +502,7 @@ def fix_all_std():
 def patch_all_std():
   fix_all_std()
   patch_asyncore()
+  #patch_concurrence()  # Non-standard module, don't patch.
   patch_os()
   patch_popen2()
   patch_socket()
