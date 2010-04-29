@@ -6,7 +6,6 @@ import syncless.coio
 import socket
 import unittest
 
-# !! fix these tests for full faking.
 # TODO(pts): Test reverse lookup without canonical name.
 # TODO(pts): Test for IPv6 addresses:
 #    print syncless.coio.dns_resolve_ipv6('www.ipv6.org')

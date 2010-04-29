@@ -8,7 +8,7 @@ from syncless import coio
 
 SMALL_SLEEP_SEC = 0.02
 
-LOOPRET = int(bool(coio.may_loop_return_1()))
+LOOPRET = int(bool(coio.has_feature_may_loop_return_1()))
 
 class SleepTest(unittest.TestCase):
   def testMainSleep(self):
