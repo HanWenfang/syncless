@@ -108,8 +108,12 @@ class NbfileTest(unittest.TestCase):
     self.f.flush()
     self.assertEqual([], read_chars)
     stackless.schedule()
-    self.assertEqual(['a', 'b'], read_chars)
-    assert not reader1_tasklet.alive
+    if coio.has_feature_multiple_events_on_same_fd():
+      self.assertEqual(['a', 'b'], read_chars)
+      assert not reader1_tasklet.alive
+    else:
+      self.assertEqual(['a'], read_chars)
+      assert reader1_tasklet.alive
     assert not reader2_tasklet.alive
 
 

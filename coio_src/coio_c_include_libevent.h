@@ -9,17 +9,20 @@
 #include <event2/dns.h>
 #include <event2/dns_compat.h>
 */
-#define MAY_EVENT_LOOP_RETURN_1 1
+#define FEATURE_MAY_EVENT_LOOP_RETURN_1    1
+#define FEATURE_MULTIPLE_EVENTS_ON_SAME_FD 1
 #endif
 
 #ifdef COIO_USE_LIBEVENT1
 /* We use a local copy because stock event.h might be from libev */
 #include "./coio_event1_event.h"
-#define MAY_EVENT_LOOP_RETURN_1 1
+#define FEATURE_MAY_EVENT_LOOP_RETURN_1    1
+#define FEATURE_MULTIPLE_EVENTS_ON_SAME_FD 0
 #endif
 
 #ifdef COIO_USE_LIBEV
 /* We use a local copy because stock event.h might be from libevent1 */
 #include "./coio_ev_event.h"
-#define MAY_EVENT_LOOP_RETURN_1 0
+#define FEATURE_MAY_EVENT_LOOP_RETURN_1    0
+#define FEATURE_MULTIPLE_EVENTS_ON_SAME_FD 1
 #endif

@@ -35,7 +35,8 @@ cdef extern from "Python.h":
 ctypedef void (*event_handler)(int fd, short evtype, void *arg)
     
 cdef extern from "./coio_c_include_libevent.h":
-    int c_MAY_EVENT_LOOP_RETURN_1 "MAY_EVENT_LOOP_RETURN_1"
+    int c_FEATURE_MAY_EVENT_LOOP_RETURN_1 "FEATURE_MAY_EVENT_LOOP_RETURN_1"
+    int c_FEATURE_MULTIPLE_EVENTS_ON_SAME_FD "FEATURE_MULTIPLE_EVENTS_ON_SAME_FD"
 
     struct timeval:
         unsigned int tv_sec
@@ -227,6 +228,10 @@ def abort():
     """Abort event dispatch loop."""
     __event_abort()
 
-def may_loop_return_1():
+def has_feature_may_loop_return_1():
     """Return true iff loop() may return 1."""
-    return c_MAY_EVENT_LOOP_RETURN_1
+    return c_FEATURE_MAY_EVENT_LOOP_RETURN_1
+
+def has_feature_multiple_events_on_same_fd():
+    """Return true iff multiple events can be reliably registered on an fd."""
+    return c_FEATURE_MULTIPLE_EVENTS_ON_SAME_FD
