@@ -108,7 +108,6 @@ if __name__ == '__main__':
     logging.info('visit https://%s:%s/' % ssl_listener_nbs.getsockname())
     coio.stackless.tasklet(wsgi_listener)(
         ssl_listener_nbs, demo_wsgiapp.WsgiApp)
-    raise NotImplementedError
-  #coio.stackless.tasklet(wsgi_listener)(listener_nbs, demo_wsgiapp.WsgiApp)
+  coio.stackless.tasklet(wsgi_listener)(listener_nbs, demo_wsgiapp.WsgiApp)
   std_nbf = coio.nbfile(0, 1, write_buffer_limit=2)
   ChatWorker(std_nbf, nbf_to_close=listener_nbs)

@@ -1064,6 +1064,8 @@ cdef class nbfile:
 
         If there is no read limit set up, than no bytes will be discarded
         from read_fd.
+
+        EOFError is raised on an early EOF.
         """
         if self.read_eb.off > 0:
             evbuffer_drain(&self.read_eb, self.read_eb.off)
@@ -1071,7 +1073,8 @@ cdef class nbfile:
         if self.c_read_limit > 0:
             # TODO(pts): Speed this up by not doing a Python method call.
             self.discard(self.c_read_limit)
-            assert self.c_read_limit == 0
+            if self.c_read_limit:
+              raise EOFError
 
     def wait_for_readable(nbfile self, object timeout=None):
         cdef event_t *wakeup_ev_ptr
@@ -2037,7 +2040,7 @@ cdef class nbsslsocket:
                 elif e.errno == SSL_ERROR_WANT_WRITE:
                     handle_ssl_eagain(self, c_EV_WRITE)
                 elif (e.errno == SSL_ERROR_EOF and
-                      self.sslobj.suppress_ragged_eofs):
+                      self.sslsock.suppress_ragged_eofs):
                     return ''
                 else:
                     raise
@@ -2198,7 +2201,7 @@ cdef class nbsslsocket:
                     elif e.errno == SSL_ERROR_WANT_WRITE:
                         handle_ssl_eagain(self, c_EV_WRITE)
                     elif (e.errno == SSL_ERROR_EOF and
-                          self.sslobj.suppress_ragged_eofs):
+                          self.sslsock.suppress_ragged_eofs):
                         return ''
                     else:
                         raise

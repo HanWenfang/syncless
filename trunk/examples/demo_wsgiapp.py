@@ -57,7 +57,8 @@ def WsgiApp(env, start_response):
       dns_html = '<p>Missing DNS resolver.'
     # cherrypy.wsgiserver doesn't add REMOTE_HOST.
     remote_host = env.get('REMOTE_HOST', 'REMOTE_ADDR')
-    return ['<a href="/hello">hello</a>\n', dns_html,
+    return ['<a href="/hello">hello</a>, %s\n' % env['wsgi.url_scheme'],
+            dns_html,
             '<p>%s</p>' % cgi.escape(env.get('HTTP_IF_NONE_MATCH', '')),
             '<form method="post"><input name=foo><input name=bar>'
             '<input type=submit></form>\n', remote_host]
