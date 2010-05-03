@@ -126,6 +126,166 @@ class WsgiEmptyInputStream(object):
     pass
 
 
+class WsgiFile(object):
+  """A file-like object for sockfile and env['wsgi.input'] in WsgiWorker.
+
+  TODO(pts): Implement this in Pyrex.
+  """
+  __slots__ = ['_sock', '_write_buffer_limit', '_write_buffer_len',
+               '_read_buffer', '_write_buffer', '_read_limit']
+
+  def __init__(self, sock):
+    self._sock = sock
+    # 0: Unbuffered, 2: Infinite buffer.
+    self._write_buffer_limit = 0
+    self._write_buffer_len = 0
+    self._read_limit = -1  # Unlimited.
+    self._read_buffer = []
+    self._write_buffer = []
+
+  def _SetWriteBufferLimit(self, write_buffer_limit):
+    if write_buffer_limit == 0:  # Unbuffered.
+      self._write_buffer_limit = 0
+      if self._write_buffer_len:
+        self.flush()
+    elif write_buffer_limit == 2:  # Infinite buffer.
+      self._write_buffer_limit = 2
+    else:
+      raise ValueError, write_buffer_limit
+
+  write_buffer_limit = property(
+      lambda self: self._write_buffer_limit,
+      _SetWriteBufferLimit)
+
+  def _SetReadLimit(self, read_limit):
+    self._read_limit = read_limit
+
+  read_limit = property(
+      lambda self: self._read_limit,
+      _SetReadLimit)
+
+  @property
+  def read_buffer_len(self):
+    return sum(map(len, self._read_buffer))
+
+  @property
+  def write_buffer_len(self):
+    return sum(map(len, self._write_buffer))
+    
+  def write(self, data):
+    data = str(data)
+    if data:
+      if self._write_buffer_limit:
+        self._write_buffer.append(data)
+      else:
+        self._sock.sendall(data)
+
+  def writelines(self, msgs):
+    for msg in msgs:
+      self.write(msg)
+
+  def flush(self):
+    if self._write_buffer:
+      data = ''.join(self._write_buffer)
+      del self._write_buffer[:]
+      # Now data is non-empty (because we will self._write_buffer that way).
+      self._sock.sendall(data)
+        
+  def discard_write_buffer(self):
+    del self._write_buffer[:]
+
+  def unread(self, data):
+    if data:
+      self._read_buffer[:0] = data
+
+  def read(self, size=-1):
+    output = []
+    rb = self._read_buffer
+    if rb:
+      if size < 0:  # This is not limited by self._read_limit.
+        output.extend(rb)
+        del rb[:]
+      else:
+        i = 0
+        while size > 0 and i < len(rb):
+          if size < len(rb[i]):
+            output.append(rb[i][:size])
+            rb[i] = rb[i][size:]
+            size = 0
+          else:
+            output.append(rb[i])
+            size -= len(rb[i])
+            i += 1
+        del rb[:i]  # TODO(pts): speed: Make this faster than quadratic.
+    if self._read_limit >= 0 and (size < 0 or self._read_limit < size):
+      size = self._read_limit
+    if size < 0:
+      size = 8192
+      data = self._sock.recv(size)
+      while data:
+        output.append(data)
+        data = self._sock.recv(size)
+    elif size > 0:
+      output = []
+      to_read = min(8192, size)
+      data = to_read > 0 and self._sock.recv(to_read)
+      while data:
+        output.append(data)
+        if self._read_limit >= 0:
+          self._read_limit -= len(data)
+        size -= len(data)
+        to_read = min(8192, size)
+        if not to_read:
+          break
+    return ''.join(output)
+
+  def readline(self):
+    rb = self._read_buffer
+    i = 0
+    while True:
+      while i < len(rb):
+        j = rb[i].find('\n') + 1
+        if j:  # Newline found.
+          if j == len(rb[i]):
+            i += 1
+            data = ''.join(rb[:i])
+            del rb[:i]
+            return data
+          else:
+            data = ''.join(rb[:i])
+            data += rb[i][:j]
+            rb[i] = rb[i][j:]
+            del rb[:i]
+            return data
+        i += 1
+      size = 8192
+      if self._read_limit >= 0 and self._read_limit < size:
+        size = self._read_limit
+      data = size and self._sock.recv(size)
+      if not data:  # EOF
+        data = ''.join(rb)
+        del rb[:]
+        return data
+      if self._read_limit >= 0:
+        self._read_limit -= len(data)
+      rb.append(data)
+
+  def readlines(cls, hint=None):
+    return list(iter(self.readline, ''))
+
+  def __iter__(self):
+    return iter(self.readline, '')
+
+  def discard_to_read_limit(self):
+    del self._read_buffer[:]
+    while self._read_limit > 0:
+      data = self._sock.recv(min(self._read_limit, 32768))
+      if data:
+        self._read_limit -= len(data)
+      else:
+        raise EOFError  # !! TODO(pts): Catch this in wsgi.py
+
+
 HEADER_WORD_LOWER_LETTER_RE = re.compile(r'(?:\A|-)[a-z]')
 
 # TODO(pts): Get it form the HTTP RFC.
@@ -188,7 +348,13 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
   do_keep_alive_ary = [True]
   headers_sent_ary = [False]
   server_software = default_env['SERVER_SOFTWARE']
-  sockfile = sock.makefile_samefd()
+  if hasattr(sock, 'do_handshake'):
+    # Do the SSL handshake in a non-blocking way.
+    sock.do_handshake()
+  if hasattr(sock, 'makefile_samefd'):  # e.g. isinstance(sock, coio.nbsocket)
+    sockfile = sock.makefile_samefd()
+  else:
+    sockfile = WsgiFile(sock)
   reqhead_continuation_re = REQHEAD_CONTINUATION_RE
   try:
     while do_keep_alive_ary[0]:
@@ -250,6 +416,8 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         # TODO(pts): Ensure that refcount(req_buf) == 1 -- do the string
         # reference counters increase by slicing?
         req_buf += req_new  # Fast string append if refcount(req_buf) == 1.
+        if req_buf[0] not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
+          return  # Possibly https request (starts with '\x80')
         req_new = None
 
       # TODO(pts): Speed up this splitting?
@@ -524,8 +692,12 @@ def WsgiListener(server_socket, wsgi_application):
   env['wsgi.multithread']  = True
   env['wsgi.multiprocess'] = False
   env['wsgi.run_once']     = False
-  env['wsgi.url_scheme']   = 'http'  # could be 'https'
-  env['HTTPS']             = 'off'  # could be 'on'; Apache sets this
+  if hasattr(server_socket, 'do_handshake'):
+    env['wsgi.url_scheme']   = 'https'
+    env['HTTPS']             = 'on'     # Apache sets this
+  else:
+    env['wsgi.url_scheme']   = 'http'
+    env['HTTPS']             = 'off'
   server_ipaddr, server_port = server_socket.getsockname()
   env['SERVER_PORT'] = str(server_port)
   env['SERVER_SOFTWARE'] = 'pts-syncless-wsgi'
