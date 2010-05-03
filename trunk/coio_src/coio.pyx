@@ -4,6 +4,8 @@ include "evdns.pxi"
 
 # --- Initialization.
 
+assert not coio_loaded(), 'syncless.coio loaded multiple times'
+
 if coio_event_init() != 0:
     raise OSError(EIO, 'event_init failed')
 

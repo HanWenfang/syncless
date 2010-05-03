@@ -240,6 +240,7 @@ cdef extern from "./coio_c_helper.h":
     # stackless.current.
     object coio_c_wait_for(int fd, short evtype, event_handler handler,
                            timeval *timeout)
+    char coio_loaded()
 
 # --- Low-level event functions
 

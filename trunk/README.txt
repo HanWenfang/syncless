@@ -581,37 +581,39 @@ A17. Yes, by monkey-patching any of these methds: subprocess, popen2,
        ...
        os.popen(...)  # or any other method
 
-Q7. Can I use my existing DNS, TCP, HTTP, HTTPS, FTP, urllib, urllib2, MySQL,
-    memcached, Redis, Tokyo Tyrant etc. client with Syncless?
+Q18. Can I link Syncless aganst libevent instead of libev?
 
-A7. If your client software is written in pure Python, and it uses the
-    standard Python `socket' module to connect to the server, then you only
-    have to call
+A18. Please try Syncless with libevent2 (libevent-2.0.4 or later) by
+     compiling it with
 
-      from syncless import patch
-      patch.patch_socket()
-      patch.patch_ssl()  # Only if SSL (e.g. HTTPS) support is needed.
+       $ SYNCLESS_USE_LIBEVENT2=true stackless2.6 ./setup.py build
+       $ sudo stackless2.6 ./setup.py install
 
-Q8. Can I link Syncless aganst libevent instead of libev?
+     Also the primary focus is to make Syncless work with libev, it should
+     also work with libevent2. Please report any libevent2 issues to the
+     author of Syncless.
 
-A8. Please try Syncless with libevent2 (libevent-2.0.4 or later) by
-    compiling it with
+     Currently Syncless works only partially with libevent1 (i.e.
+     libevent-1.4 and earlier), because libevent1 has the inherent limitation
+     that it silently starts behaving unpredictably and unreliably if
+     multiple events are registered on the same filehandle. You can try
+     nevertheless:
 
-      $ SYNCLESS_USE_LIBEVENT2=true stackless2.6 ./setup.py build
-      $ sudo stackless2.6 ./setup.py install
+       $ SYNCLESS_USE_LIBEVENT1=true stackless2.6 ./setup.py build
+       $ sudo stackless2.6 ./setup.py install
 
-    Also the primary focus is to make Syncless work with libev, it should
-    also work with libevent2. Please report any libevent2 issues to the
-    author of Syncless.
+Q19. Is Syncless faster than Concurrence, gevent, Eventlet, asyncore,
+     pyevent and python-libevent?
 
-    Currently Syncless works only partially with libevent1 (i.e.
-    libevent-1.4 and earlier), because libevent1 has the inherent limitation
-    that it silently starts behaving unpredictably and unreliably if
-    multiple events are registered on the same filehandle. You can try
-    nevertheless:
+A19. It was designed to be faster, and it should be faster. But benchmarks
+     haven't been run recently, the files in the benchmark directory are
+     obsolete (i.e. they have been run in a faster but buggy old version of
+     Syncless).
 
-      $ SYNCLESS_USE_LIBEVENT1=true stackless2.6 ./setup.py build
-      $ sudo stackless2.6 ./setup.py install
+     The only exception from the rule that Syncless is the fastest may be
+     Concurrence, because Syncless uses hard switching (i.e. C stack
+     copying) of tasklets, which is a bit slower than the soft switching
+     used by Concurrence.
 
 Links
 ~~~~~

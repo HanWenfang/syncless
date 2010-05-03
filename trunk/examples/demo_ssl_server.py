@@ -63,8 +63,8 @@ def HandleRequest(csslsock, addr):
 if __name__ == '__main__':
   #gc.disable()
   use_ssl = True
-  if len(sys.argv) > 1:
-    sslsocket_impl = coio.nbsslsocket  # Non-blocking.
+  if len(sys.argv) == 1:
+    sslsocket_impl = coio.nbsslsocket  # Non-blocking (by default).
   else:
     sslsocket_impl = ssl.SSLSocket     # Blocking (1 connection at a time).
     patch.fix_ssl_makefile()
@@ -86,7 +86,6 @@ if __name__ == '__main__':
   sslsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   sslsock.bind(('127.0.0.1', 44433))
   sslsock.listen(128)
-  # !! Ctrl-<C> doesn't work (won't exit)
   print >>sys.stderr, 'info: visit http%s://%s:%s/' % (
       's' * bool(use_ssl),
       sslsock.getsockname()[0], sslsock.getsockname()[1])
@@ -97,11 +96,8 @@ if __name__ == '__main__':
     except socket.error, e:  # This includes ssl.SSLError.
       # We may get an ssl.SSLError or a socket.socketerror in a failed
       # handshake.
-      print 'PROBLEM: %s' % e  # !!
+      print >>sys.stderr, 'error: %s' % e  # !!
       continue
     stackless.tasklet(HandleRequest)(csslsock, addr)
-    # !! SUXX: segfault within the first 3 connections, both with wget(1) and
-    # links(1). Works perfectly with ssl.SSLSocket, segfaults with nbsslsocket.
-    # ssl_cert.pem doesn't help.
-    stackless.schedule()  # Give a chance for HandleRequest.
     csslsock = addr = None  # Free memory early.
+    stackless.schedule()  # Give a chance for HandleRequest.
