@@ -508,6 +508,8 @@ os.chdir(os.path.join('.', os.path.dirname(__file__)))
 if __file__[0] != '/':
     __file__ = os.path.basename(__file__)
 
+os.umask(0022)
+
 version = {}
 f = open(os.path.join('syncless', 'version.py'))
 exec f in version
@@ -563,5 +565,6 @@ setup(name='syncless',
                   'build_src_symlinks': MyBuildSrcSymlinks,
                   'upload': MyUpload,
                  },
-      symlink_script_src_dirs=['test', 'benchmark', 'coio_src', 'examples'],
+      symlink_script_src_dirs=['test', 'benchmark', 'coio_src', 'examples',
+                               'syncless'],
      )

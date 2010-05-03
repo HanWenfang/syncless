@@ -106,8 +106,6 @@ cdef extern from "string.h":
     cdef void *memchr(void_constp s, int c, size_t n)
     cdef void *memcpy(void *dest, void_constp src, size_t n)
     cdef void *memmove(void *dest, void_constp src, size_t n)
-cdef extern from "stdlib.h":
-    cdef void free(void *p)
 cdef extern from "errno.h":
     cdef extern int errno
     cdef extern char *strerror(int)
@@ -115,6 +113,7 @@ cdef extern from "errno.h":
         EAGAIN
         EINPROGRESS
         EALREADY
+        EIO
 cdef extern from "fcntl.h":
     cdef int fcntl2 "fcntl"(int fd, int cmd)
     cdef int fcntl3 "fcntl"(int fd, int cmd, long arg)
@@ -127,11 +126,56 @@ cdef extern from "sys/socket.h":
     int AF_INET6
     int AF_INET
 cdef extern from "sys/select.h":
+    struct timeval:
+        unsigned int tv_sec
+        unsigned int tv_usec
     struct fd_set_s:
         pass
     ctypedef fd_set_s fd_set
     int os_select "select"(int nfds, fd_set *rset, fd_set *wset, fd_set *xset,
                            timeval *timeout)
+
+ctypedef void (*event_handler)(int fd, short evtype, void *arg)
+
+cdef extern from "./coio_c_include_libevent.h":
+    int c_FEATURE_MAY_EVENT_LOOP_RETURN_1 "FEATURE_MAY_EVENT_LOOP_RETURN_1"
+    int c_FEATURE_MULTIPLE_EVENTS_ON_SAME_FD "FEATURE_MULTIPLE_EVENTS_ON_SAME_FD"
+
+
+    struct event_t "event":
+        int   ev_fd
+        int   ev_flags
+        void *ev_arg
+
+    int coio_event_init()
+    int coio_event_reinit(int do_recreate)
+    void event_set(event_t *ev, int fd, short event,
+                   event_handler handler, void *arg)
+    int event_add(event_t *ev, timeval *tv)
+    int event_del(event_t *ev)
+    int event_loop(int loop) nogil
+    int event_pending(event_t *ev, short, timeval *tv)
+
+    char *event_get_version()
+    char *event_get_method()
+
+    int EVLOOP_ONCE
+    int EVLOOP_NONBLOCK
+    int EVLIST_INTERNAL
+
+    int c_EV_TIMEOUT "EV_TIMEOUT"
+    int c_EV_READ "EV_READ"
+    int c_EV_WRITE "EV_WRITE"
+    int c_EV_SIGNAL "EV_SIGNAL"
+    int c_EV_PERSIST "EV_PERSIST"
+
+# TODO(pts): Do this (exporting to Python + reusing the constant in C)
+# with less typing.
+EV_TIMEOUT = c_EV_TIMEOUT
+EV_READ = c_EV_READ
+EV_WRITE = c_EV_WRITE
+EV_SIGNAL = c_EV_SIGNAL
+EV_PERSIST = c_EV_PERSIST
 
 cdef extern from "./coio_c_evbuffer.h":
     struct evbuffer_s "coio_evbuffer":
@@ -151,6 +195,8 @@ cdef extern from "./coio_c_evbuffer.h":
     int evbuffer_drain "coio_evbuffer_drain"(evbuffer_s *b, int size)
 
 cdef extern from "Python.h":
+    void   Py_INCREF(object o)
+    void   Py_DECREF(object o)
     object PyString_FromFormat(char_constp fmt, ...)
     object PyString_FromStringAndSize(char_constp v, Py_ssize_t len)
     object PyString_FromString(char_constp v)
@@ -195,6 +241,45 @@ cdef extern from "./coio_c_helper.h":
     object coio_c_wait_for(int fd, short evtype, event_handler handler,
                            timeval *timeout)
 
+# --- Low-level event functions
+
+def has_feature_may_loop_return_1():
+    """Return true iff loop() may return 1."""
+    return c_FEATURE_MAY_EVENT_LOOP_RETURN_1
+
+def has_feature_multiple_events_on_same_fd():
+    """Return true iff multiple events can be reliably registered on an fd."""
+    return c_FEATURE_MULTIPLE_EVENTS_ON_SAME_FD
+
+def version():
+    return event_get_version()
+
+def method():
+    return event_get_method()
+
+def reinit(int do_recreate=0):
+    cdef int got
+    if do_recreate:
+        event_del(&sigint_ev)
+        got = coio_event_reinit(1)
+        if got >= 0:
+            _setup_sigint()
+    else:
+        got = coio_event_reinit(0)
+    if got < 0:
+        raise OSError(EIO, 'event_reinit failed')
+
+def nonblocking_loop_for_tests():
+    """Run event_loop(EVLOOP_ONCE | EVLOOP_NONBLOCK).
+
+    This method is intended to be used in tests to check that no events are
+    registered.
+    """
+    cdef int got
+    with nogil:
+        got = event_loop(EVLOOP_ONCE | EVLOOP_NONBLOCK)
+    return got
+
 # --- Utility functions
 
 cdef int connect_tv_magic_usec
@@ -209,12 +294,17 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
     tasklet.insert() is called automatically to ensure that it eventually gets
     scheduled.
     """
-    if not isinstance(exc_info, list) and not isinstance(exc_info, tuple):
+    if not (isinstance(exc_info, list) or isinstance(exc_info, tuple)):
         raise TypeError
+    if not exc_info:
+        raise ValueError
     if tasklet_obj is PyStackless_GetCurrent():
-        if len(exc_info) < 3:
-            exc_info = list(exc_info) + [None, None]
-        raise exc_info[0], exc_info[1], exc_info[2]
+        if len(exc_info) == 3:
+            raise exc_info[0], exc_info[1], exc_info[2]
+        elif len(exc_info) == 2:
+            raise exc_info[0], exc_info[1], None
+        else:
+            raise exc_info[0], None, None
     bomb_obj = bomb(*exc_info)
     if tasklet_obj.blocked:
         c = tasklet_obj._channel
@@ -249,6 +339,7 @@ def MainLoop(tasklet link_helper_tasklet):
     # !! fix Segmentation fault with tbug.py; needs link_helper_tasklet
     #cdef PyTaskletObject *pprev
     #cdef PyTaskletObject *pnext
+    cdef int loop_retval
     cdef PyTaskletObject *ptemp
     cdef PyTaskletObject *p
     cdef PyTaskletObject *c
@@ -265,7 +356,7 @@ def MainLoop(tasklet link_helper_tasklet):
         # stackless.current.prev is stackless.current.
 
         # We add link_helper_tasklet to the end of the queue. All other
-        # tasklets added by loop(...) below will be added between
+        # tasklets added by event_loop(...) below will be added between
         # link_helper_tasklet
         if p.next != NULL:
             PyTasklet_Remove(link_helper_tasklet)
@@ -274,13 +365,10 @@ def MainLoop(tasklet link_helper_tasklet):
         # This runs 1 iteration of the libevent main loop: waiting for
         # I/O events and calling callbacks.
         #
-        # Exceptions (if any) in event handlers would propagate to here.
-        # !! would they? or only 1 exception? we don't care
-        # Argument of loop(): is_nonblocking: don't block if nothing
-	# available.
-        #
-        # Please note that loop() is a wrapper around event_loop().
-        # TODO(pts): Don't wrap, call directly.
+        # Exceptions (if any) in event handlers would be printed to stderr
+        # by libevent, and then ignored. This is OK for us since our event
+        # handlers are very simple, don't contain user code, and normally don't
+        # raise exceptions.
         #
         # Each callback we (nbevent.pxi)
         # have registered is just a tasklet_obj.insert(), but others may have
@@ -289,14 +377,23 @@ def MainLoop(tasklet link_helper_tasklet):
         # We compare against 2 because of stackless.current
         # (main_loop_tasklet) and link_helper_tasklet.
         if PyStackless_GetRunCount() > 2:
-            loop(True)  # Don't block.
-        elif loop(False):  # Block, wait for events once, without timeout.
-            # No events registered, and no tasklets in the queue. This means
-            # that nothing more can happen in this program. By returning
-            # here the stackless tasklet queue becomes empty, so the process
-            # will exit (sys.exit(0)).
-            PyTasklet_Remove(link_helper_tasklet)
-            return
+            with nogil:
+                event_loop(EVLOOP_ONCE | EVLOOP_NONBLOCK)
+        else:
+            # Block, wait for events once, without timeout.
+            with nogil:
+                loop_retval = event_loop(EVLOOP_ONCE)
+            if loop_retval:
+                # No events registered, and no tasklets in the queue. This
+                # means that nothing more can happen in this program. By
+                # returning here the stackless tasklet queue becomes empty,
+                # so the process will exit (sys.exit(0)).
+                #
+                # SUXX: event_loop() of libev never returns true here.
+                #
+                # SUXX: there are registered events after an evdns lookup.
+                PyTasklet_Remove(link_helper_tasklet)
+                return
 
         # Swap link_helper_tasklet and stackless.current in the queue.  We
         # do this so that the tasklets inserted by the loop(...) call above
@@ -325,8 +422,26 @@ def MainLoop(tasklet link_helper_tasklet):
 # !! TODO(pts): Schedule the main thread upon the SIGINT, don't wait for
 # cooperative scheduling.
 # TODO(pts): Rename all capitalized methods, e.g. to _sigint_handler.
-def SigIntHandler(ev, sig, evtype, arg):
+def SigIntHandler():
     SendExceptionAndRun(stackless.main, (KeyboardInterrupt,))
+
+cdef void HandleCSigInt(int fd, short evtype, void *arg) with gil:
+    # Should an exception occur, Pyrex will print it to stderr, and ignore it.
+    try:
+       SigIntHandler()  # Print and ignore exceptions.
+    except TaskletExit, e:
+       pass
+
+cdef event_t sigint_ev
+cdef void _setup_sigint():
+    event_set(&sigint_ev, SIGINT, c_EV_SIGNAL | c_EV_PERSIST,
+              HandleCSigInt, NULL)
+    # Make loop() exit immediately of only EVLIST_INTERNAL events
+    # were added. Add EVLIST_INTERNAL after event_set.
+    sigint_ev.ev_flags |= EVLIST_INTERNAL
+    # This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
+    # gets control) a KeyboardInterrupt in the main tasklet.
+    event_add(&sigint_ev, NULL)
 
 cdef void set_fd_nonblocking(int fd):
     # This call works on Unix, but it's not portable (to e.g. Windows).
@@ -1639,7 +1754,13 @@ def socketpair(*args):
 
 
 def new_realsocket_fromfd(*args):
-    """Non-blocking drop-in replacement for socket.fromfd."""
+    """Non-blocking drop-in replacement for socket.fromfd.
+
+    Please note that socket.fromfd returns a socket._realsocket in Python 2.6.
+
+    Please note that the fileno() of the returned socket is different from
+    args[0], because it's dup()ed. 
+    """
     return nbsocket(socket_fromfd(*args)).setdoclose(1)
 
 
