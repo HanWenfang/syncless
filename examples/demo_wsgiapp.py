@@ -11,7 +11,6 @@ try:
   from syncless import coio
 except ImportError:  # Don't ignore inner ImportError{}s.
   coio = None
-
 def WsgiApp(env, start_response):
   """A simple demo WSGI application function."""
   error_stream = env['wsgi.errors']

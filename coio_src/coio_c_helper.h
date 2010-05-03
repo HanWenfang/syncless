@@ -156,3 +156,10 @@ static inline PyObject *coio_c_wait_for(
   coio_event_pool_free_event(ev);
   return tempval;
 }
+
+static inline int coio_loaded(void) {
+  static char loaded = 0;
+  if (loaded) return 1;
+  loaded = 1;
+  return 0;
+}

@@ -9,10 +9,13 @@ import logging
 import socket
 import sys
 import time
+import os
 
 import demo_wsgiapp
 from syncless import coio
+from syncless import patch
 from syncless import wsgi
+
 
 def ChatWorker(nbf, nbf_to_close):
   # TODO(pts): Let's select this from the command line.
@@ -41,13 +44,19 @@ def ChatWorker(nbf, nbf_to_close):
 
 
 if __name__ == '__main__':
+  logging.BASIC_FORMAT = '[%(created)f] %(levelname)s %(message)s'
   logging.root.setLevel(logging.INFO)
   wsgi_listener = wsgi.WsgiListener
   use_psyco = False
   do_verbose = False
+  use_https = False
+  use_cherrypy = False
   for arg in sys.argv[1:]:
     if arg in ('--cherrypy-wsgi', '-c'):
       wsgi_listener = wsgi.CherryPyWsgiListener
+      use_cherrypy = True
+    elif arg in ('--https', '-s'):
+      use_https  = True
     elif arg in ('--verbose', '-v'):
       do_verbose = True
     elif arg in ('--psyco', '-p'):
@@ -57,6 +66,8 @@ if __name__ == '__main__':
     else:
       assert 0, 'invalid arg: %s' % arg
     
+  assert not (use_https and use_cherrypy), (
+      'CherryPy HTTPS implementation is blocking')
   if use_psyco:
     try:
       import psyco
@@ -79,7 +90,25 @@ if __name__ == '__main__':
   # ab -n 100000 -c 50 http://127.0.0.1:6666/ >ab.stackless3.txt
   # It increases the maximum Connect time from 8 to 9200 milliseconds.
   listener_nbs.listen(100)
-  logging.info('listening on %r' % (listener_nbs.getsockname(),))
-  coio.stackless.tasklet(wsgi_listener)(listener_nbs, demo_wsgiapp.WsgiApp)
+  logging.info('visit http://%s:%s/' % listener_nbs.getsockname())
+  if use_https:
+    sslsock_kwargs = {
+        # Parallelize handshakes by moving them to a tasklet.
+        'do_handshake_on_connect': False,
+        'certfile': os.path.join(os.path.dirname(__file__), 'ssl_cert.pem'),
+        'keyfile':  os.path.join(os.path.dirname(__file__), 'ssl_key.pem'),
+    }
+    # Make sure that the keyfile and certfile exist and they are valid etc.
+    patch.validate_new_sslsock(**sslsock_kwargs)
+    ssl_listener_nbs = coio.nbsslsocket(
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM), **sslsock_kwargs)
+    ssl_listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    ssl_listener_nbs.bind(('127.0.0.1', 4443))
+    ssl_listener_nbs.listen(100)
+    logging.info('visit https://%s:%s/' % ssl_listener_nbs.getsockname())
+    coio.stackless.tasklet(wsgi_listener)(
+        ssl_listener_nbs, demo_wsgiapp.WsgiApp)
+    raise NotImplementedError
+  #coio.stackless.tasklet(wsgi_listener)(listener_nbs, demo_wsgiapp.WsgiApp)
   std_nbf = coio.nbfile(0, 1, write_buffer_limit=2)
   ChatWorker(std_nbf, nbf_to_close=listener_nbs)

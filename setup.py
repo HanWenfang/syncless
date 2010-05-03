@@ -565,6 +565,7 @@ setup(name='syncless',
                   'build_src_symlinks': MyBuildSrcSymlinks,
                   'upload': MyUpload,
                  },
-      symlink_script_src_dirs=['test', 'benchmark', 'coio_src', 'examples',
-                               'syncless'],
+      # Mentioning `syncless' here would cause double loading of syncless.coio from
+      # examples/demo.py.
+      symlink_script_src_dirs=['test', 'benchmark', 'coio_src', 'examples'],
      )

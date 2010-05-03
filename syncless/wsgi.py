@@ -823,13 +823,16 @@ def CanBeCherryPyApp(app):
   return False
 
 
-def RunHttpServer(app, server_address=None, listen_queue_size=100):
+def RunHttpServer(app, server_address=None, listen_queue_size=100,
+                  ssl_server_address=None):
   """Listen as a HTTP server, and run the specified application forever.
 
   Args:
     app: A WSGI application function, or a (web.py) web.application object.
     server_address: TCP address to bind to, e.g. ('', 8080), or None to use
       the default.
+    ssl_server_address: TCP address to bind to, e.g. ('', 4443), or None to
+      disable HTTPS.
   """
   try:
     import psyco
