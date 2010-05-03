@@ -661,17 +661,10 @@ Planned features
 * TODO(pts): Handle starving (when one worker is very busy, even Ctrl-<C>
   is delayed) This is hard to achieve (but the main tasklet can be given
   priority on Ctrl-<C>, so it would be the next to be scheduled).
-# TODO(pts): Evaluate how fast stack copying is.
+# TODO(pts): Evaluate how fast stack copying (Stackless hard switching) is.
 * TODO(pts): Make stackless.schedule_remove() work again.
-* !! TODO(pts): Allocate the pool of event_t objects on the heap, so a
-  socket can be waited for both reading and writing at the same time; and
-  also multiple tasklets can wait on the readability of an nbfile (do we
-  need that or is the current scheme good enough? -- the same event added
-  twice, last wins; no, because the first will never get woken up; is a
-  multi-wait in libevent entirely possible?)
-* !! SUXX: libevent doesn't let us register multiple event handlers for the
-  same event (at least not with epoll -- would it work with select?)
-  libev is incomplete: no evbuffer or evdns
+* TODO(pts): Monkey-patch os.fork() with event_reinit().
+* TODO(pts): Monkey-pathh signal.signal(...).
 * !! SUXX: why can't we connect() with O_NONBLOCK at a very high rate (just
   as with normal sockets?)
 

@@ -27,7 +27,7 @@ clean:
 
 # Compile with Cython instead of Pyrex because Pyrex has the bug
 # http://code.google.com/p/pts-mini-gpl/source/browse/trunk/excbug/README.txt
-coio.c: coio.pyx event.pxi nbevent.pxi evdns.pxi
+coio.c: coio.pyx nbevent.pxi evdns.pxi
 	$(PYREX_CHECKVERSION)
 	$(PYREXC) coio.pyx
 	#$(CYTHON) coio.pyx

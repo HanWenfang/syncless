@@ -108,9 +108,8 @@ struct event {
 /*void event_active (struct event *ev, int res, short ncalls);*/ /* ncalls is being ignored */
 /*int event_once (int fd, short events, void (*cb)(int, short, void *), void *arg, struct timeval *tv);*/
 
-void *event_init (void);
+struct event_base *event_init (void);
 int event_loop (int);
-int event_dispatch (void);  /* not crucial for Syncless */
 void event_set (struct event *ev, int fd, short events, void (*cb)(int, short, void *), void *arg);
 int event_add (struct event *ev, const struct timeval *tv);
 int event_del (struct event *ev);
@@ -118,5 +117,8 @@ int event_pending (struct event *ev, short, struct timeval *tv);
 
 const char *event_get_version(void);
 const char *event_get_method(void);
+
+int event_reinit(struct event_base *base);
+void event_base_free(struct event_base *base);
 
 #endif

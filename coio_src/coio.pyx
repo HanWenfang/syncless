@@ -1,20 +1,15 @@
-include "event.pxi"
 include "nbevent.pxi"
 include "evdns.pxi"
 #include "evhttp.pxi"
 
 # --- Initialization.
 
-event_init()
+if coio_event_init() != 0:
+    raise OSError(EIO, 'event_init failed')
 
-# This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
-# gets control) a KeyboardInterrupt in the main tasklet.
-sigint_event = event(
-    SigIntHandler, handle=SIGINT, evtype=EV_SIGNAL | EV_PERSIST,
-    is_internal=1)
-sigint_event.add()
+_setup_sigint()
 
-# Don't publish it. MainLoop depends on it not being changed.
+# Don't publish it to Python code. MainLoop depends on it not being changed.
 cdef tasklet link_helper_tasklet
 link_helper_tasklet = stackless.tasklet(LinkHelper)().remove()
 
