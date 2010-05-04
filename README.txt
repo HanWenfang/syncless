@@ -643,11 +643,9 @@ Syncless. The intended audience is Syncless developers.
 
 Planned features
 ~~~~~~~~~~~~~~~~
-* TODO(pts): Wrap popen2 etc.
 * TODO(pts): Wrap the multiprocessing module.
 * TODO(pts): Report libevent bug that evdns events are not EVLIST_INTERNAL.
 * TODO(pts): Document the side effect of import syncless.coio on Ctrl-<C>.
-* TODO(pts): TCP communication error handling in the WSGI server
 * TODO(pts): HTTP client library (making urllib non-blocking?)
 * TODO(pts): support webob as a web framework
 * TODO(pts): productionization
