@@ -18,8 +18,13 @@ def WsgiApp(env, start_response):
   status = '200 OK'
   assert env['PATH_INFO'] != '/badhead', 'bad head'
   response_headers = [('Content-type', 'text/html')]
+  if env['PATH_INFO'] == '/badsize':
+    response_headers.append(('Content-Length', 6))
+  if env['PATH_INFO'] == '/parsesize':
+    response_headers.append(('Content-Length', '--'))
   write = start_response(status, response_headers)
   assert env['PATH_INFO'] != '/badresp', 'bad resp'
+  #from syncless import wsgi; raise wsgi.WsgiReadError('zzz')
   if env['REQUEST_METHOD'] in ('POST', 'PUT'):
     #print env['wsgi.input']
     return ['Posted/put %r.' % env['wsgi.input'].read(10)]
@@ -42,6 +47,8 @@ def WsgiApp(env, start_response):
       yield 'before bad body'
       assert 0, 'bad body'
     return BadBodyYield()
+  elif env['PATH_INFO'] == '/badsize':
+    return 'blah'
   elif env['PATH_INFO'] == '/a':
     if '=' not in env['QUERY_STRING']:
       return 'Missing hostname!'

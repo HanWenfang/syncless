@@ -45,16 +45,8 @@ from syncless import coio
 
 # TODO(pts): Add tests.
 
-# !! TODO(pts): Use this.
-ERRLIST_REQHEAD_RAISE = [
-    errno.EBADF, errno.EINVAL, errno.EFAULT]
-"""Errnos to be raised when reading the HTTP request headers."""
-
-# !! TODO(pts): Use this.
-ERRLIST_REQBODY_RAISE = [
-    errno.EBADF, errno.EINVAL, errno.EFAULT]
-"""Errnos to be raised when reading the HTTP request headers."""
-
+# It would be nice to ignore errno.EBADF, errno.EINVAL and errno.EFAULT, but
+# that's a performance overhead.
 
 HTTP_REQUEST_METHODS_WITH_BODY = ['POST', 'PUT', 'OPTIONS', 'TRACE']
 """HTTP request methods which can have a body (Content-Length)."""
@@ -77,6 +69,10 @@ INFO = logging.INFO
 DEBUG = logging.DEBUG
 
 HEADER_WORD_LOWER_LETTER_RE = re.compile(r'(?:\A|-)[a-z]')
+
+HEADER_KEY_RE = re.compile(r'[A-Za-z][A-Za-z-]*\Z')
+
+HEADER_VALUE_RE = re.compile(r'[ -~]+\Z')
 
 SUB_URL_RE = re.compile(r'\A/[-A-Za-z0-9_./,~!@$*()\[\]\';:?&%+=]*\Z')
 """Matches a HTTP sub-URL, as appearing in line 1 of a HTTP request."""
@@ -155,11 +151,22 @@ class WsgiEmptyInputStream(object):
   def discard_to_read_limit(cls):
     pass
 
+class WsgiReadError(IOError):
+  """Raised when reading the HTTP request."""
+
+
+class WsgiResponseSyntaxError(IOError):
+  """Raised when parsing the HTTP request."""
+
+
+class WsgiWriteError(IOError):
+  """Raised when writing the HTTP response."""
+
 
 class WsgiFile(object):
   """A file-like object for sockfile and env['wsgi.input'] in WsgiWorker.
 
-  TODO(pts): Implement this in Pyrex.
+  TODO(pts): Speed up: Implement this in Pyrex.
   """
   __slots__ = ['_sock', '_write_buffer_limit', '_write_buffer_len',
                '_read_buffer', '_write_buffer', '_read_limit']
@@ -181,7 +188,7 @@ class WsgiFile(object):
     elif write_buffer_limit == 2:  # Infinite buffer.
       self._write_buffer_limit = 2
     else:
-      raise ValueError, write_buffer_limit
+      raise ValueError(write_buffer_limit)
 
   write_buffer_limit = property(
       lambda self: self._write_buffer_limit,
@@ -208,7 +215,10 @@ class WsgiFile(object):
       if self._write_buffer_limit:
         self._write_buffer.append(data)
       else:
-        self._sock.sendall(data)
+        try:
+          self._sock.sendall(data)
+        except IOError, e:
+          raise WsgiWriteError(*e.args)
 
   def writelines(self, msgs):
     for msg in msgs:
@@ -219,7 +229,10 @@ class WsgiFile(object):
       data = ''.join(self._write_buffer)
       del self._write_buffer[:]
       # Now data is non-empty (because we will self._write_buffer that way).
-      self._sock.sendall(data)
+      try:
+        self._sock.sendall(data)
+      except IOError, e:
+        raise WsgiWriteError(*e.args)
 
   def discard_write_buffer(self):
     del self._write_buffer[:]
@@ -250,23 +263,29 @@ class WsgiFile(object):
     if self._read_limit >= 0 and (size < 0 or self._read_limit < size):
       size = self._read_limit
     if size < 0:
-      size = 8192
-      data = self._sock.recv(size)
-      while data:
-        output.append(data)
+      try:
+        size = 8192
         data = self._sock.recv(size)
+        while data:
+          output.append(data)
+          data = self._sock.recv(size)
+      except IOError, e:
+        raise WsgiReadError(*e.args)
     elif size > 0:
-      output = []
-      to_read = min(8192, size)
-      data = to_read > 0 and self._sock.recv(to_read)
-      while data:
-        output.append(data)
-        if self._read_limit >= 0:
-          self._read_limit -= len(data)
-        size -= len(data)
+      try:
+        output = []
         to_read = min(8192, size)
-        if not to_read:
-          break
+        data = to_read > 0 and self._sock.recv(to_read)
+        while data:
+          output.append(data)
+          if self._read_limit >= 0:
+            self._read_limit -= len(data)
+          size -= len(data)
+          to_read = min(8192, size)
+          if not to_read:
+            break
+      except IOError, e:
+        raise WsgiReadError(*e.args)
     return ''.join(output)
 
   def readline(self):
@@ -291,8 +310,16 @@ class WsgiFile(object):
       size = 8192
       if self._read_limit >= 0 and self._read_limit < size:
         size = self._read_limit
-      data = size and self._sock.recv(size)
-      if not data:  # EOF
+      if size:
+        try:
+          data = self._sock.recv(size)
+        except IOError, e:
+          raise WsgiReadError(*e.args)
+        if not data:  # EOF
+          data = ''.join(rb)
+          del rb[:]
+          return data
+      else:  # EOF
         data = ''.join(rb)
         del rb[:]
         return data
@@ -308,12 +335,17 @@ class WsgiFile(object):
 
   def discard_to_read_limit(self):
     del self._read_buffer[:]
-    while self._read_limit > 0:
-      data = self._sock.recv(min(self._read_limit, 32768))
-      if data:
-        self._read_limit -= len(data)
-      else:
-        raise EOFError  # !! TODO(pts): Catch this in wsgi.py
+    if self._read_limit > 0:
+      try:
+        while self._read_limit > 0:
+          data = self._sock.recv(min(self._read_limit, 32768))
+          if data:
+            self._read_limit -= len(data)
+          else:
+            return self._read_limit
+      except IOError, e:
+        raise WsgiReadError(*e.args)
+    return 0
 
 
 def GetHttpDate(at):
@@ -360,12 +392,18 @@ def ConsumerWorker(items):
   try:
     for data in items:  # This calls the WSGI application.
       pass
+  except WsgiWriteError, e:
+    if is_debug:
+      logging.debug('error writing HTTP body response: %s' % e)
   except Exception, e:
     ReportAppException(sys.exc_info())
   finally:
     if hasattr(items, 'close'):  # According to the WSGI spec.
       try:
         items.close()
+      except WsgiWriteError, e:
+        if is_debug:
+          logging.debug('error writing HTTP body response close: %s' % e)
       except Exception, e:
         ReportAppException(sys.exc_info(), which='close')
 
@@ -375,15 +413,25 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
   # http://www.python.org/dev/peps/pep-0333/
   if not isinstance(date, str):
     raise TypeError
+  loglevel = logging.root.level
+  is_debug = loglevel <= DEBUG
   req_buf = ''
   do_keep_alive_ary = [True]
   headers_sent_ary = [False]
   server_software = default_env['SERVER_SOFTWARE']
   if hasattr(sock, 'do_handshake'):
     # Do the SSL handshake in a non-blocking way.
-    sock.do_handshake()
+    try:
+      sock.do_handshake()
+    except IOError, e:
+      if is_debug:
+        logging.debug('https SSL handshake failed: %s' % e)
+      return
+        
   if hasattr(sock, 'makefile_samefd'):  # e.g. isinstance(sock, coio.nbsocket)
     sockfile = sock.makefile_samefd()
+    sockfile.read_exc_class = WsgiReadError
+    sockfile.write_exc_class = WsgiWriteError
   else:
     sockfile = WsgiFile(sock)
   reqhead_continuation_re = REQHEAD_CONTINUATION_RE
@@ -416,41 +464,46 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
 
       # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
       # req_buf may contain some bytes after the previous request.
-      if logging.root.level <= DEBUG:
+      if is_debug:
         logging.debug('reading HTTP request on sock=%x' % id(sock))
-      while True:
-        if req_buf:
-          # TODO(pts): Support HTTP/0.9 requests without headers.
-          i = req_buf.find('\n\n')
-          j = req_buf.find('\n\r\n')
-          if i >= 0 and i < j:
-            req_head = req_buf[:i]
-            req_buf = req_buf[i + 2:]
-            break
-          elif j >= 0:
-            req_head = req_buf[:j]
-            req_buf = req_buf[j + 3:]
-            break
-          if len(req_buf) > 32767:
-            # Request too long. Just abort the connection since it's too late to
-            # notify receiver.
+      try:
+        while True:  # Read the HTTP request.
+          if req_buf:
+            # TODO(pts): Support HTTP/0.9 requests without headers.
+            i = req_buf.find('\n\n')
+            j = req_buf.find('\n\r\n')
+            if i >= 0 and i < j:
+              req_head = req_buf[:i]
+              req_buf = req_buf[i + 2:]
+              break
+            elif j >= 0:
+              req_head = req_buf[:j]
+              req_buf = req_buf[j + 3:]
+              break
+            if len(req_buf) > 32767:
+              # Request too long. Just abort the connection since it's too late to
+              # notify receiver.
+              return
+          # TODO(pts): Handle read errors (such as ECONNRESET etc.).
+          # TODO(pts): Better buffering than += (do we need that?)
+          req_new = sock.recv(8192)
+          
+          if not req_new:
+            # The HTTP client has closed the connection before sending the headers.
             return
-        # TODO(pts): Handle read errors (such as ECONNRESET etc.).
-        # TODO(pts): Better buffering than += (do we need that?)
-        # !! TODO(pts): Use sockfile (nbfile) instead.
-        req_new = sock.recv(4096)
-        if not req_new:
-          # The HTTP client has closed the connection before sending the headers.
-          return
-        if date is None:
-          date = GetHttpDate(time.time())
-        # TODO(pts): Ensure that refcount(req_buf) == 1 -- do the string
-        # reference counters increase by slicing?
-        req_buf += req_new  # Fast string append if refcount(req_buf) == 1.
-        if req_buf[0] not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-          return  # Possibly https request (starts with '\x80')
-        req_new = None
-
+          if date is None:
+            date = GetHttpDate(time.time())
+          # TODO(pts): Ensure that refcount(req_buf) == 1 -- do the string
+          # reference counters increase by slicing?
+          req_buf += req_new  # Fast string append if refcount(req_buf) == 1.
+          if req_buf[0] not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
+            if is_debug:
+              logging.debug('received non-HTTP request: %r' % req_buf[:64])
+            return  # Possibly https request (starts with '\x80')
+          req_new = None
+      except IOError, e:  # Raised in sock.recv above.
+        if is_debug:
+          logging.debug('error reading HTTP request: %s' % e)
       # TODO(pts): Speed up this splitting?
       req_head = reqhead_continuation_re.sub(
           ', ', req_head.rstrip('\r').replace('\r\n', '\n'))
@@ -559,7 +612,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
 
       req_buf = ''  # Save memory.
       is_not_head = method != 'HEAD'
-      res_content_length = None
+      res_content_length_ary = []
       headers_sent_ary[0] = False
 
       def WriteHead(data):
@@ -572,30 +625,33 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           do_keep_alive_ary[0] = do_req_keep_alive
           sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
           sockfile.write('\r\n')
-          input.discard_to_read_limit()
+          if input.discard_to_read_limit():
+            raise WsgiReadError(EISDIR, 'could not discard HTTP request body')
           sockfile.flush()
           if not do_keep_alive_ary[0]:
-            sock.close()
+            try:
+              sock.close()
+            except IOError, e:
+              raise WsgiWriteError(*e.args)
           headers_sent_ary[0] = True
-          # !! re-raise IOError and OSError as WsgiIoError here.
 
       def WriteNotHead(data):
         """Non-HEAD write() callback returned by StartResponse, to the app."""
         data = str(data)
         if not data:
           return
-        # !! re-raise IOError and OSError as WsgiIoError here.
         if headers_sent_ary[0]:
           # Autoflush because we've set up sockfile.write_buffer_limit = 0
           # previously.
           sockfile.write(data)
         else:
           do_keep_alive_ary[0] = (
-              do_req_keep_alive and res_content_length is not None)
+              do_req_keep_alive and res_content_length_ary)
           sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
           sockfile.write('\r\n')
           sockfile.write(data)
-          input.discard_to_read_limit()
+          if input.discard_to_read_limit():
+            raise WsgiReadError(EISDIR, 'could not discard HTTP request body')
           sockfile.flush()
           sockfile.write_buffer_limit = 0  # Unbuffered.
           headers_sent_ary[0] = True
@@ -607,14 +663,14 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         exc_info = None
         if sockfile.write_buffer_len:  # StartResponse called again by an error handler.
           sockfile.discard_write_buffer()
-          res_content_length = None
+          del res_content_length_ary[:]
 
         # TODO(pts): Send `Date:' header: Date: Sun, 20 Dec 2009 12:48:56 GMT
         sockfile.write('%s %s\r\n' % (http_version, status))  # HTTP/1.0
         sockfile.write('Server: %s\r\n' % server_software)
         sockfile.write('Date: %s\r\n' % date)
         for key, value in response_headers:
-          key_lower = key.lower()
+          key = key.lower()
           if (key not in ('status', 'server', 'date', 'connection') and
               not key.startswith('proxy-') and
               # Apache responds with content-type for HEAD requests.
@@ -622,11 +678,19 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
                                           'content-transfer-encoding'))):
             if key == 'content-length':
               # !! TODO(pts): Cut or pad the output below at content-length.
-              # TODO(pts): Handle parsing error here.
-              res_content_length = int(value)
-            key_capitalized = re.sub(
-                HEADER_WORD_LOWER_LETTER_RE,
-                lambda match: match.group(0).upper(), key_lower)
+              del res_content_length_ary[:]
+              try:
+                res_content_length_ary.append(int(str(value)))
+              except ValueError:
+                raise WsgiResponseSyntaxError('bad content-length: %r' % value)
+            elif not HEADER_KEY_RE.match(key):
+              raise WsgiResponseSyntaxError('invalid key: %r' % key)
+            key_capitalized = HEADER_WORD_LOWER_LETTER_RE.sub(
+                lambda match: match.group(0).upper(), key)
+            value = str(value).strip()
+            if not HEADER_VALUE_RE.match(value):
+              raise WsgiResponseSyntaxError('invalid value for key %r: %r' %
+                                            (key_capitalized, value))
             # TODO(pts): Eliminate duplicate keys (except for set-cookie).
             sockfile.write('%s: %s\r\n' % (key_capitalized, value))
         # Don't flush yet.
@@ -638,6 +702,14 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
       # TODO(pts): Handle application-level exceptions here.
       try:
         items = wsgi_application(env, StartResponse)
+      except WsgiReadError, e:
+        if is_debug:
+          logging.debug('error reading HTTP request at call: %s' % e)
+        return
+      except WsgiWriteError, e:
+        if is_debug:
+          logging.debug('error writing HTTP response at call: %s' % e)
+        return
       except Exception, e:
         ReportAppException(sys.exc_info())
         if not headers_sent_ary[0]:
@@ -662,30 +734,29 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             data = ''
           items = None
           if not headers_sent_ary[0]:
-            input.discard_to_read_limit()
-            if res_content_length is None:
+            if input.discard_to_read_limit():
+              raise WsgiReadError(EISDIR, 'could not discard HTTP request body')
+            if res_content_length_ary:
+              # !! TODO(pts): Pad or truncate.
+              assert len(data) == res_content_length_ary[0]
+            else:
               if is_not_head:
                 sockfile.write('Content-Length: %d\r\n' % len(data))
-            else:
-              # TODO(pts): Pad or truncate.
-              assert len(data) == res_content_length
             do_keep_alive_ary[0] = do_req_keep_alive
             sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
             sockfile.write('\r\n')
           sockfile.write(data)
-          try:
-            sockfile.flush()
-          except (IOError, OSError), e:
-            log.info('error writing response: %s' % e)
-            return
+          sockfile.flush()
         elif is_not_head:
           if not headers_sent_ary[0]:
             do_keep_alive_ary[0] = (
-                do_req_keep_alive and res_content_length is not None)
+                do_req_keep_alive and res_content_length_ary)
             sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
             sockfile.write('\r\n')
-            if res_content_length == 0:
-              input.discard_to_read_limit()
+            if res_content_length_ary[0] == 0:
+              if input.discard_to_read_limit():
+                raise WsgiReadError(
+                    EISDIR, 'could not discard HTTP request body')
               sockfile.flush()
           # TODO(pts): Speed: iterate over `items' below in another tasklet
           # as soon as Content-Length has been reached.
@@ -696,27 +767,25 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           for data in items:
             if data:  # Implement flush-after-first-body-byte.
               break
-          try:
-            if 0 < len(data) <= 65536:
-              sockfile.write(data)  # Still buffering it.
-              input.discard_to_read_limit()
-              sockfile.flush()  # !! handle error here and elsewhere
-              sockfile.write_buffer_limit = 0  # Unbuffered.
-            else:
-              input.discard_to_read_limit()
-              sockfile.flush()  # !! handle error here and elsewhere
-              sockfile.write_buffer_limit = 0  # Unbuffered.
-              sockfile.write(data)
-          except (IOError, OSError), e:
-            log.info('error writing response start: %s' % e)
-            return
+          if 0 < len(data) <= 65536:
+            sockfile.write(data)  # Still buffering it.
+            if input.discard_to_read_limit():
+              raise WsgiReadError(
+                  EISDIR, 'could not discard HTTP request body')
+            sockfile.flush()
+            sockfile.write_buffer_limit = 0  # Unbuffered.
+          else:
+            if input.discard_to_read_limit():
+              raise WsgiReadError(
+                  EISDIR, 'could not discard HTTP request body')
+            sockfile.flush()
+            sockfile.write_buffer_limit = 0  # Unbuffered.
+            sockfile.write(data)
           try:
             for data in items:  # This calls the WSGI application.
-              try:
-                sockfile.write(data)
-              except (IOError, OSError), e:
-                log.info('error writing response body: %s' % e)
-                return
+              sockfile.write(data)
+          except (WsgiReadError, WsgiWriteError):
+            raise
           except Exception, e:
             ReportAppException(sys.exc_info())
             return
@@ -725,14 +794,15 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             do_keep_alive_ary[0] = do_req_keep_alive
             sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
             sockfile.write('\r\n')
-            input.discard_to_read_limit()
-            try:
-              sockfile.flush()
-            except (IOError, OSError), e:
-              log.info('error writing HEAD response: %s' % e)
-              return
+            if input.discard_to_read_limit():
+              raise WsgiReadError(
+                  EISDIR, 'could not discard HTTP request body')
+            sockfile.flush()
             if not do_keep_alive_ary[0]:
-              sock.close()
+              try:
+                sock.close()
+              except IOError, e:
+                raise WsgiWriteError(*e.args)
 
           # Iterate over `items' below in another tasklet, so we can read
           # the next request asynchronously from the HTTP client while the
@@ -742,15 +812,33 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           coio.stackless.tasklet(ConsumerWorker)(items)  # Don't run it yet.
           items = None  # Prevent double items.close(), see below.
 
+      except WsgiReadError, e:
+        if is_debug:
+          logging.debug('error reading HTTP request: %s' % e)
+      except WsgiWriteError, e:
+        if is_debug:
+          logging.debug('error writing HTTP response: %s' % e)
       finally:
         if hasattr(items, 'close'):  # According to the WSGI spec.
           try:
             items.close()
+          except WsgiReadError, e:
+            if is_debug:
+              logging.debug('error reading HTTP request at close: %s' % e)
+          except WsgiWriteError, e:
+            if is_debug:
+              logging.debug('error writing HTTP response at close: %s' % e)
           except Exception, e:
             ReportAppException(sys.exc_info(), which='close')
   finally:
-    sock.close()
-    if logging.root.level <= DEBUG:
+    # Without this, when the function returns, sockfile.__del__ calls
+    # sockfile.close calls sockfile.flush, which raises EBADF.
+    sockfile.discard_write_buffer()
+    try:
+      sock.close()
+    except IOError:
+      pass
+    if is_debug:
       logging.debug('connection closed sock=%x' % id(sock))
 
 
