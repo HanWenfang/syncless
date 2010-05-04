@@ -483,7 +483,7 @@ def FindLibEv(command_obj):
   log.info('using C env %s' % repr_retval)
   try:
     old_repr_retval = open('setup.cenv').read()
-  except FileError:
+  except IOError:
     old_repr_retval = None
   if repr_retval != old_repr_retval:
     open('setup.cenv', 'w').write(repr_retval)
