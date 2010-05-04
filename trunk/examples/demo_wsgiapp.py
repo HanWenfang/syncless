@@ -16,8 +16,10 @@ def WsgiApp(env, start_response):
   error_stream = env['wsgi.errors']
   error_stream.write('Got env=%r\n' % env)
   status = '200 OK'
+  assert env['PATH_INFO'] != '/badhead', 'bad head'
   response_headers = [('Content-type', 'text/html')]
   write = start_response(status, response_headers)
+  assert env['PATH_INFO'] != '/badresp', 'bad resp'
   if env['REQUEST_METHOD'] in ('POST', 'PUT'):
     #print env['wsgi.input']
     return ['Posted/put %r.' % env['wsgi.input'].read(10)]
@@ -35,6 +37,11 @@ def WsgiApp(env, start_response):
       while True:
         yield s
     return InfiniteYield()
+  elif env['PATH_INFO'] == '/badbody':
+    def BadBodyYield():
+      yield 'before bad body'
+      assert 0, 'bad body'
+    return BadBodyYield()
   elif env['PATH_INFO'] == '/a':
     if '=' not in env['QUERY_STRING']:
       return 'Missing hostname!'

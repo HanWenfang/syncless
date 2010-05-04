@@ -1003,10 +1003,11 @@ cdef class nbfile:
         def __get__(nbfile self):
             return self.c_write_buffer_limit
         def __set__(nbfile self, int new_limit):
-             if new_limit < 0:
-                 self.c_write_buffer_limit = DEFAULT_WRITE_BUFFER_LIMIT
-             else:
-                 self.c_write_buffer_limit = new_limit
+            """Setting the write_buffer_limit doesn't call flush()."""
+            if new_limit < 0:
+                self.c_write_buffer_limit = DEFAULT_WRITE_BUFFER_LIMIT
+            else:
+                self.c_write_buffer_limit = new_limit
 
     def discard_write_buffer(nbfile self):
         evbuffer_drain(&self.write_eb, self.write_eb.off)

@@ -65,7 +65,10 @@ if __name__ == '__main__':
       use_psyco = False
     else:
       assert 0, 'invalid arg: %s' % arg
-    
+
+  if do_verbose:
+    logging.root.setLevel(logging.DEBUG)
+
   if use_psyco:
     try:
       import psyco
