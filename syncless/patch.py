@@ -32,6 +32,7 @@ def get_fake_create_connection():
         'socket': coio.nbsocket,
         'SOCK_STREAM': socket.SOCK_STREAM,
         '_GLOBAL_DEFAULT_TIMEOUT': socket._GLOBAL_DEFAULT_TIMEOUT,
+        'error': socket.error,
     }
     fake_create_connection = types.FunctionType(
       socket.create_connection.func_code, fake_create_connection_globals,
