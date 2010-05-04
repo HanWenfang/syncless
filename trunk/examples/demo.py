@@ -52,7 +52,7 @@ if __name__ == '__main__':
   use_https = False
   use_cherrypy = False
   for arg in sys.argv[1:]:
-    if arg in ('--cherrypy-wsgi', '-c'):
+    if arg in ('--cherrypy-wsgi', '--cherrypy', '-c'):
       wsgi_listener = wsgi.CherryPyWsgiListener
       use_cherrypy = True
     elif arg in ('--https', '-s'):
@@ -66,8 +66,6 @@ if __name__ == '__main__':
     else:
       assert 0, 'invalid arg: %s' % arg
     
-  assert not (use_https and use_cherrypy), (
-      'CherryPy HTTPS implementation is blocking')
   if use_psyco:
     try:
       import psyco
