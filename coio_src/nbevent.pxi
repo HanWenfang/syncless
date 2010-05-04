@@ -2019,7 +2019,7 @@ cdef class nbsslsocket:
     def settimeout(nbsslsocket self, timeout):
         cdef float timeout_float
         if timeout is None:
-            self.timeout_value = None
+            self.timeout_value = -1.0
         else:
             timeout_float = timeout
             if timeout_float < 0.0:

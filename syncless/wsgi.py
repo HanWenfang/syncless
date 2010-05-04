@@ -765,7 +765,8 @@ def CherryPyWsgiListener(server_sock, wsgi_application):
   """HTTP server serving WSGI, using CherryPy's implementation."""
   # !! TODO(pts): Speed: Why is CherryPy's /infinite twice as fast as ours?
   # Only sometimes.
-  if not isinstance(server_sock, coio.nbsocket):
+  if not (isinstance(server_sock, coio.nbsocket) or
+          isinstance(server_sock, coio.nbsslsocket)):
     raise TypeError
   if not callable(wsgi_application):
     raise TypeError
@@ -780,6 +781,11 @@ def CherryPyWsgiListener(server_sock, wsgi_application):
   wsgi_server.requests = FakeRequests()
   wsgi_server.timeout = None  # TODO(pts): Fix once implemented.
 
+  def HandshakeAndCommunicate(sock, http_connection):
+    sock.do_handshake()
+    sock = None
+    http_connection.communicate()
+
   try:
     while True:
       sock, peer_name = server_sock.accept()
@@ -791,8 +797,11 @@ def CherryPyWsgiListener(server_sock, wsgi_application):
       wsgi_server.tick()
       assert len(wsgi_server.requests.requests) == 1
       http_connection = wsgi_server.requests.requests.pop()
-      coio.stackless.tasklet(http_connection.communicate)()
-      # Help the garbage collector.
+      if hasattr(sock, 'do_handshake'):
+        coio.stackless.tasklet(HandshakeAndCommunicate)(sock, http_connection)
+      else:
+        coio.stackless.tasklet(http_connection.communicate)()
+      # Help the garbage collector free memory early.
       http_connection = sock = peer_name = None
   finally:
     sock.close()
