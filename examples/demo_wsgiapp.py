@@ -16,16 +16,23 @@ def WsgiApp(env, start_response):
   error_stream = env['wsgi.errors']
   error_stream.write('Got env=%r\n' % env)
   status = '200 OK'
+  if env['PATH_INFO'] == '/badstatus':
+    status = 'blah'
   assert env['PATH_INFO'] != '/badhead', 'bad head'
   response_headers = [('Content-type', 'text/html')]
-  if env['PATH_INFO'] == '/badsize':
+  if env['PATH_INFO'].startswith('/badsize'):
     response_headers.append(('Content-Length', 6))
   if env['PATH_INFO'] == '/parsesize':
     response_headers.append(('Content-Length', '--'))
   write = start_response(status, response_headers)
   assert env['PATH_INFO'] != '/badresp', 'bad resp'
-  #from syncless import wsgi; raise wsgi.WsgiReadError('zzz')
-  if env['REQUEST_METHOD'] in ('POST', 'PUT'):
+  if env['PATH_INFO'] == '/badread':
+    from syncless import wsgi
+    raise wsgi.WsgiReadError('badread')
+  elif env['PATH_INFO'] == '/badwrite':
+    from syncless import wsgi
+    raise wsgi.WsgiWriteError('badwrite')
+  elif env['REQUEST_METHOD'] in ('POST', 'PUT'):
     #print env['wsgi.input']
     return ['Posted/put %r.' % env['wsgi.input'].read(10)]
   elif env['PATH_INFO'] == '/hello':
@@ -47,8 +54,34 @@ def WsgiApp(env, start_response):
       yield 'before bad body'
       assert 0, 'bad body'
     return BadBodyYield()
-  elif env['PATH_INFO'] == '/badsize':
+  elif env['PATH_INFO'] == '/badsize1':
     return 'blah'
+  elif env['PATH_INFO'] == '/badsize2':
+    write('write-too-long')
+  elif env['PATH_INFO'] == '/badsize3':
+    write('mini')
+  elif env['PATH_INFO'] == '/badsize4':
+    write('write')
+    return '-too-long'
+  elif env['PATH_INFO'] == '/badsize5':
+    write('mi')
+    return ['ni']
+  elif env['PATH_INFO'] == '/badsize6':
+    def YieldBadSize6():
+      yield 'yield'
+      yield '-too-long'
+    return YieldBadSize6()
+  elif env['PATH_INFO'] == '/badsize7':
+    def YieldBadSize7():
+      yield 'mi'
+      yield 'ni'
+    return YieldBadSize7()
+  elif env['PATH_INFO'] == '/badsize8':
+    write('mini')
+    assert 0
+  elif env['PATH_INFO'] == '/badsize9':
+    write('hello!')
+    assert 0
   elif env['PATH_INFO'] == '/a':
     if '=' not in env['QUERY_STRING']:
       return 'Missing hostname!'
