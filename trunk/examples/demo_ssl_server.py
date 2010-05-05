@@ -100,4 +100,4 @@ if __name__ == '__main__':
       continue
     stackless.tasklet(HandleRequest)(csslsock, addr)
     csslsock = addr = None  # Free memory early.
-    stackless.schedule()  # Give a chance for HandleRequest.
+    stackless.schedule(None)  # Give a chance for HandleRequest.

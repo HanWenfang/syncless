@@ -284,36 +284,37 @@ class scheduler(object):
     def schedule(self, *args):
         """schedules the next tasks and puts the current task back at the queue of runnables"""
         runnable = self._runnable
-        runnable.rotate(-1)
-        tasklet_obj = runnable[0]
+        current_tasklet = runnable[0]
         if args:
           if len(args) != 1:
             raise TypeError('schedule() takes at most 1 argument (%d given)' %
                             len(args))
-          tasklet_obj.tempval = args[0]
+          current_tasklet.tempval = args[0]
         else:
-          # !! TODO(pts): Avoid the weak reference.
-          tasklet_obj.tempval = tasklet_obj
-        tasklet_obj.greenlet.switch()
-        return tasklet_obj.tempval
+          current_tasklet.tempval = current_tasklet
+        runnable.rotate(-1)
+        runnable[0].greenlet.switch()
+        retval = current_tasklet.tempval
+        current_tasklet.tempval = None
+        return retval
 
     def schedule_remove(self, *args):
         """makes stackless.getcurrent() not runnable, schedules next tasks"""
         runnable = self._runnable
-        if len(runnable) <= 1:
-            return
-        runnable.popleft()
-        tasklet_obj = runnable[0]
+        current_tasklet = runnable[0]
         if args:
           if len(args) != 1:
             raise TypeError('schedule() takes at most 1 argument (%d given)' %
                             len(args))
-          tasklet_obj.tempval = args[0]
+          current_tasklet.tempval = args[0]
         else:
-          # !! TODO(pts): Avoid the weak reference.
-          tasklet_obj.tempval = runnable[0]
-        tasklet_obj.greenlet.switch()
-        return tasklet_obj.tempval
+          current_tasklet.tempval = runnable[0]
+        if len(runnable) > 1:
+            runnable.popleft()
+            runnable[0].greenlet.switch()
+        retval = current_tasklet.tempval
+        current_tasklet.tempval = None
+        return retval
 
     def schedule_block(self):
         """blocks the current task and schedules next"""

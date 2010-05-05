@@ -514,7 +514,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
 
         # Let other tasklets make some progress before we serve our next
         # request.
-        coio.stackless.schedule()
+        stackless.schedule(None)
 
       # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
       # req_buf may contain some bytes after the previous request.
@@ -930,7 +930,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           # other tasklet is working.
           # TODO(pts): Is this optimization safe? Limit the number of tasklets
           # to 1 to prevent DoS attacks.
-          coio.stackless.tasklet(ConsumerWorker)(items)  # Don't run it yet.
+          stackless.tasklet(ConsumerWorker)(items)  # Don't run it yet.
           items = None  # Prevent double items.close(), see below.
 
       except WsgiReadError, e:
@@ -1016,7 +1016,7 @@ def WsgiListener(server_socket, wsgi_application):
       date = GetHttpDate(time.time())
       if logging.root.level <= DEBUG:
         logging.debug('connection accepted from=%r' % (peer_name,))
-      coio.stackless.tasklet(WsgiWorker)(
+      stackless.tasklet(WsgiWorker)(
           accepted_socket, peer_name, wsgi_application, env, date)
       accepted_socket = peer_name = None  # Help the garbage collector.
   finally:
@@ -1107,9 +1107,9 @@ def CherryPyWsgiListener(server_sock, wsgi_application):
       assert len(wsgi_server.requests.requests) == 1
       http_connection = wsgi_server.requests.requests.pop()
       if hasattr(sock, 'do_handshake'):
-        coio.stackless.tasklet(HandshakeAndCommunicate)(sock, http_connection)
+        stackless.tasklet(HandshakeAndCommunicate)(sock, http_connection)
       else:
-        coio.stackless.tasklet(http_connection.communicate)()
+        stackless.tasklet(http_connection.communicate)()
       # Help the garbage collector free memory early.
       http_connection = sock = peer_name = None
   finally:
@@ -1407,5 +1407,5 @@ def RunHttpServer(app, server_address=None, listen_queue_size=100):
   server_socket.listen(listen_queue_size)
   logging.info('listening on %r' % (server_socket.getsockname(),))
   # From http://webpy.org/install (using with mod_wsgi).
-  coio.stackless.tasklet(WsgiListener)(server_socket, wsgi_application)
-  stackless.schedule_remove()
+  stackless.tasklet(WsgiListener)(server_socket, wsgi_application)
+  stackless.schedule_remove(None)

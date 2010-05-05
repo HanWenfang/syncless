@@ -13,4 +13,4 @@ if __name__ == '__main__':
   print repr(sock.recv(256))  # '220 mx.google.com ESMTP 20si15803912bwz.24'
   print 'Exiting.'
   # Won't exit because we did DNS lookups with coio (evdns).
-  #stackless.schedule_remove()
+  #stackless.schedule_remove(None)

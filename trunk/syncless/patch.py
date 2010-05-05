@@ -231,9 +231,9 @@ def patch_concurrence():
         try:
           # coio.HandleCConcurrence will insert us back.
           if coio.get_concurrence_triggered():
-            stackless.schedule()
+            stackless.schedule(None)
           else:
-            stackless.schedule_remove()
+            stackless.schedule_remove(None)
         except TaskletExit:
           pass
         except KeyboardInterrupt:
