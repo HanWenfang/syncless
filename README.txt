@@ -615,6 +615,31 @@ A19. It was designed to be faster, and it should be faster. But benchmarks
      copying) of tasklets, which is a bit slower than the soft switching
      used by Concurrence.
 
+Q20. Should I use stackless.schedule() or stackless.schedule(None)?
+
+     If you are not interested in stackless.current.tempval, then use
+     stackless.schedule(None) (and stackless.schedule_remove(None)) rather
+     than without None, to save memory.
+
+     That's because stackless.schedule() is equivalent to
+     stackless.schedule(stackless.current), which sets
+     stackless.current.tempval = stackless.current, creating a circular
+     reference, which can lead to memory leaks if garbage collection is
+     disabled. Example (this raises MemoryError, reaching 200 MB):
+
+       import gc
+       import resource
+       import stackless
+       gc.disable()
+       resource.setrlimit(resource.RLIMIT_AS, (200 << 20, 200 << 20))  # 200 MB
+       while True:
+         t = stackless.tasklet(stackless.schedule)()
+         assert t.alive
+         stackless.schedule()
+         assert t.alive
+         assert t is t.tempval  # Circular reference: t --> t.tempval --> t
+         t.remove()
+
 Links
 ~~~~~
 * doc: related: eventlet vs gevent:

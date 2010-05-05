@@ -145,5 +145,5 @@ if __name__ == '__main__':
   stackless.tasklet(ChatListener)(('127.0.0.1', port))
   # sys.stdin here can be used for writing, as set up by patch_stdin_and_stdout
   stackless.tasklet(ChatWorker)(sys.stdin, 'console')
-  stackless.schedule_remove()
+  stackless.schedule_remove(None)
   # The program will run indefinitely because BroadcastWorker never exists.

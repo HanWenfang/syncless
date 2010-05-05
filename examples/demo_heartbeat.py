@@ -52,7 +52,6 @@ def Worker(sock, addr):
   sleeper_tasklet = stackless.tasklet(Sleeper)(timestamps, write_channel, 3)
   # TODO(pts): Flush earlier.
   write_channel.send('Hello, please type something.\r\n')
-  #stackless.schedule()
   try:
     while True:
       msg = sock.recv(256)
@@ -67,7 +66,7 @@ def Worker(sock, addr):
       write_channel.send(None)  # Will kill writer_tasklet eventually.
     timestamps[0] = None  # Will kill sleeper_tasklet eventually.
     while writer_tasklet.alive or sleeper_tasklet.alive:
-      stackless.schedule()
+      stackless.schedule(None)
     sock.close()
 
 if __name__ == '__main__':

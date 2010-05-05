@@ -54,4 +54,4 @@ if __name__ == '__main__':
     print 'You were too slow entering your age.'
   else:
     print 'Got age: %r.' % age
-  stackless.schedule_remove()  # Run until all tasklets exit.
+  stackless.schedule_remove(None)  # Run until all tasklets exit.
