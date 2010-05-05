@@ -17,6 +17,7 @@ __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import stackless
 import sys
+from collections import deque
 
 from syncless import coio
 
@@ -59,3 +60,50 @@ def run_in_tasklet_with_timeout(function, timeout, default_value=None,
       if len(results) > 1:  # Propagate exception.
         raise results[0], results[1], results[2]
       return results[0]
+
+
+class Queue(object):
+  """Like stackless.channel, but messages queue up if there is no receiver.
+
+  Typical use: to send data, use the append() method. To receive data in FIFO
+  (queue) order, use the popleft() method. To receive data in LIFO (stack,
+  reverse) order, use the pop() method.
+
+  There is no upper limit on the number of items in the queue.
+  """
+
+  def __init__(self, items=(), preference=1):
+    self.deque = deque(items)
+    self.channel = stackless.channel()
+    self.channel.preference = preference  # preference=1: prefer the sender.
+
+  def __len__(self):
+    """Number of items appended but not popped."""
+    return len(self.deque)
+
+  @property
+  def pending_receiver_count(self):
+    return -self.channel.balance
+
+  def append(self, item):
+    self.deque.append(item)
+    if self.channel.balance < 0:
+      self.channel.send(None)
+
+  def appendleft(self, item):
+    self.deque.appendleft(item)
+    if self.channel.balance < 0:
+      self.channel.send(item)
+
+  def popleft(self):
+    while not self.deque:
+      self.channel.receive()
+    return self.deque.popleft()
+
+  def pop(self):
+    while not self.deque:
+      self.channel.receive()
+    return self.deque.pop()
+
+  def __iter__(self):
+    return iter(self.deque)
