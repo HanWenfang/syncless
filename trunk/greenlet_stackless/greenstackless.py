@@ -25,10 +25,10 @@ http://aigamedev.com/programming-tips/round-robin-multi-tasking and
 also by the pypy implementation of the same thing (buggy, not being maintained?) at
 https://codespeak.net/viewvc/pypy/dist/pypy/lib/stackless.py?view=markup
 
-Limitations of this module over real Stackless:
+Limitations of this emulation module over real Stackless:
 
-* greenlet is slower than Stackless
-* greenlet has some memory leeks if greenlets reference each other
+* both greenlet and the emulation is slower than Stackless
+* greenlet has some memory leaks if greenlets reference each other
 * no stackless.current support (use stackless.getcurrent())
 * no multithreading support (don't use greenstackless in more than one
   thread (not even sequentially) in your application)
@@ -65,7 +65,10 @@ class bomb(object):
         raise self.type, self.value, self.traceback
 
 class channel(object):
-    """implementation of stackless's channel object"""
+    """Implementation of stackless's channel object."""
+
+    __slots__ = ['balance', 'preference', 'queue']
+
     def __init__(self):
         self.balance = 0
         self.preference = -1
@@ -85,9 +88,14 @@ class channel(object):
             self.send(item)
 
 
+is_slow_prev_next_ok = False
+"""Bool indicating if emulating tasklet.prev and teasklet.next slowly."""
+
 
 class tasklet(object):
-    """implementation of stackless's tasklet object"""
+    """Implementation of stackless's tasklet object."""
+
+    __slots__ = ['greenlet', 'func', 'alive', 'blocked', 'tempval', 'data']
 
     def __init__(self, f = None, greenlet = None, alive = False):
         self.greenlet = greenlet
@@ -95,6 +103,7 @@ class tasklet(object):
         self.alive = alive
         self.blocked = False
         self.data = None
+        self.tempval = None
 
     def bind(self, func):
         if not callable(func):
@@ -124,6 +133,7 @@ class tasklet(object):
                     #this make sure that flow will continue in the correct greenlet, e.g. the next in the schedule
                     self.greenlet.parent = _scheduler._runnable[0].greenlet
                 self.alive = False
+                self.tempval = None
                 del self.greenlet
                 del self.func
                 del self.data
@@ -157,7 +167,7 @@ class tasklet(object):
             _id = self.name
         else:
             _id = str(self.func)
-        return '<tasklet %s at %0x>' % (_id, id(self))
+        return '<tasklet %s at 0x%0x>' % (_id, id(self))
 
     def is_main(self):
         return self is main
@@ -206,6 +216,12 @@ class tasklet(object):
             return runnable[len(runnable) > 1]
         elif self is runnable[-1]:
             return runnable[0]
+        elif is_slow_prev_next_ok:
+            i = iter(runnable)
+            for tasklet_obj in i:
+                if self is tasklet_obj:
+                    # No StopIteration because the ifs above.
+                    return i.next()
         else:
             raise NotImplementedError('tasklet.next for not current or last')
 
@@ -222,6 +238,12 @@ class tasklet(object):
             return runnable[-1]
         elif self is runnable[-1]:
             return runnable[-2]
+        elif is_slow_prev_next_ok:
+            prev_tasklet_obj = None
+            for tasklet_obj in runnable:
+                if self is tasklet_obj:
+                    return prev_tasklet_obj
+                prev_tasklet_obj = tasklet_obj
         else:
             raise NotImplementedError('tasklet.prev for not current or last')
 
@@ -259,17 +281,39 @@ class scheduler(object):
         #the current task is the first item in the queue
         self._runnable = deque([main])
 
-    def schedule(self):
+    def schedule(self, *args):
         """schedules the next tasks and puts the current task back at the queue of runnables"""
-        self._runnable.rotate(-1)
-        self._runnable[0].greenlet.switch()
+        runnable = self._runnable
+        runnable.rotate(-1)
+        tasklet_obj = runnable[0]
+        if args:
+          if len(args) != 1:
+            raise TypeError('schedule() takes at most 1 argument (%d given)' %
+                            len(args))
+          tasklet_obj.tempval = args[0]
+        else:
+          # !! TODO(pts): Avoid the weak reference.
+          tasklet_obj.tempval = tasklet_obj
+        tasklet_obj.greenlet.switch()
+        return tasklet_obj.tempval
 
-    def schedule_remove(self):
+    def schedule_remove(self, *args):
         """makes stackless.getcurrent() not runnable, schedules next tasks"""
         runnable = self._runnable
-        if len(runnable) > 1:
-            runnable.popleft()
-            self._runnable[0].greenlet.switch()
+        if len(runnable) <= 1:
+            return
+        runnable.popleft()
+        tasklet_obj = runnable[0]
+        if args:
+          if len(args) != 1:
+            raise TypeError('schedule() takes at most 1 argument (%d given)' %
+                            len(args))
+          tasklet_obj.tempval = args[0]
+        else:
+          # !! TODO(pts): Avoid the weak reference.
+          tasklet_obj.tempval = runnable[0]
+        tasklet_obj.greenlet.switch()
+        return tasklet_obj.tempval
 
     def schedule_block(self):
         """blocks the current task and schedules next"""
@@ -422,8 +466,8 @@ def getcurrent():
 def getmain():
     return main
 
-def schedule():
-    return _scheduler.schedule()
+def schedule(*args):
+    return _scheduler.schedule(*args)
 
-def schedule_remove():
-    return _scheduler.schedule_remove()
+def schedule_remove(*args):
+    return _scheduler.schedule_remove(*args)
