@@ -242,8 +242,8 @@ syncless.coio.DnsLookupError: [Errno -65] reply truncated or ill-formed
    approximates the answer of socket.gethostbyname_ex, because evdns doesn't
    support CNAME lookups.
 
-5. Don't use non-blocking I/O on the same filehandle from multiple
-   coroutines (tasklets): there may be race conditions.
+5. Socket timeouts are not enforced on file objects created by
+   nbsocket.makefile().
 
 FAQ
 ~~~
@@ -652,8 +652,7 @@ Planned features
 * TODO(pts): setsockopt TCP_DEFER_ACCEPT
 * TODO(pts): setsockopt SO_LINGER non-immediate close() for writing
 * TODO(pts): use SO_RCVTIMEO and SO_SNDTIMEO for timeout
-* TODO(pts): is it faster in Cython? (it's not smaller though)
-* TODO(pts): measure if evhttp is faster for WSGI than in pure Python
+* TODO(pts): is it faster in Cython than in Pyrex? (it's not smaller though)
 * TODO(pts): Strip the coio.so files upon installation? It seems to be still
              importable. Some Python installations autostrip. Why not ours?
 * TODO(pts): Fix the AttributeError in socket.socket.close().
