@@ -1,6 +1,6 @@
 #! /usr/local/bin/stackless2.6
 
-"""WSGI server library for the Syncless server framework.
+"""WSGI server library for Syncless.
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -12,11 +12,53 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
-Doc: WSGI specification: http://www.python.org/dev/peps/pep-0333/
-Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
 
-TODO(pts): Validate this implementation with wsgiref.validate.
-TODO(pts): Write access.log like BaseHTTPServer and CherryPy
+This Python module implements a HTTP and HTTPS server which can server WSGI
+web applications. Example use:
+
+  from syncless import wsgi
+  def WsgiApp(env, start_response):
+    start_response('200 OK', [('Content-Type: text/html')])
+    return ['Hello, World!']
+  wsgi.RunHttpServer(WsgiApp)
+
+See the following examples uses:
+
+* examples/demo.py (WSGI web app for both HTTP and HTTPS)
+* examples/demo_syncless_basehttp.py (BaseHTTPRequestHandler web app)
+* examples/demo_syncless_cherrypy.py (CherryPy web app)
+* examples/demo_syncless_web_py.py (web.py web app)
+* examples/demo_syncless_webapp.py (Google AppEngine ``webapp'' web app)
+
+See http://www.python.org/dev/peps/pep-0333/ for more information about WSGI.
+
+The most important entry point in this module is the WsgiListener method,
+which accepts connections and serves HTTP requests on a socket (can be SSL).
+There is also CherryPyWsgiListener, which uses the CherryPy's WSGI server
+implementation in a Syncless-compatible, non-blocking way to achieve the
+same goal as WsgiListener.
+
+The convenience function RunHttpServer can be used in __main__ to run a HTTP
+server forever, serving WSGI, BaseHTTPRequestHandler, CherrPy, web.py or
+webapp applications.
+
+WsgiListener takes care of error detection and recovery. The details:
+
+* WsgiListener won't crash: it catches, reports and recovers from all I/O
+  errors, HTTP request parse errors and also the exceptions raised by the
+  WSGI application.
+* WsgiListener won't emit an obviously invalid HTTP response (e.g. with
+  binary junk in the response status code or in the response headers). It
+  will emit a 400 (Bad Request) or an 500 (Internal Server Error) error page
+  instead.
+* WsgiListener counts the number of bytes sent in a response with
+  Content-Length, and it won't ever send more than Content-Length. It also
+  closes the TCP connection if too few bytes were sent.
+* WsgiListener always calls the close() method of the response body iterable
+  returned by the WSGI application, so the application can detect in the
+  close method whether all data has been sent.
+* WsgiListener prints unbloated exception stack traces when
+  logging.root.setLevel(logging.DEBUG) is active.
 
 FYI flush-after-first-body-byte is defined in the WSGI specification. An
 excerpt: The start_response callable must not actually transmit the response
@@ -27,6 +69,12 @@ callable.  In other words, response headers must not be sent until there is
 actual body data available, or until the application's returned iterable is
 exhausted.  (The only possible exception to this rule is if the response
 headers explicitly include a Content-Length of zero.)
+
+Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
+Doc: WSGI specification: http://www.python.org/dev/peps/pep-0333/
+
+TODO(pts): Validate this implementation with wsgiref.validate.
+TODO(pts): Write access.log like BaseHTTPServer and CherryPy
 """
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
@@ -73,6 +121,8 @@ HEADER_WORD_LOWER_LETTER_RE = re.compile(r'(?:\A|-)[a-z]')
 HEADER_KEY_RE = re.compile(r'[A-Za-z][A-Za-z-]*\Z')
 
 HEADER_VALUE_RE = re.compile(r'[ -~]+\Z')
+
+HTTP_RESPONSE_STATUS_RE = re.compile(r'[2-5]\d\d [A-Z][ -~]*\Z')
 
 SUB_URL_RE = re.compile(r'\A/[-A-Za-z0-9_./,~!@$*()\[\]\';:?&%+=]*\Z')
 """Matches a HTTP sub-URL, as appearing in line 1 of a HTTP request."""
@@ -157,6 +207,10 @@ class WsgiReadError(IOError):
 
 class WsgiResponseSyntaxError(IOError):
   """Raised when parsing the HTTP request."""
+
+
+class WsgiResponseBodyTooLongError(IOError):
+  """Raised when the HTTP response body is logner than the Content-Length."""
 
 
 class WsgiWriteError(IOError):
@@ -357,13 +411,13 @@ def RespondWithBad(status, date, server_software, sockfile, reason):
   status_str = HTTP_STATUS_STRINGS[status]
   msg = '%s: %s' % (status_str, reason)
   # TODO(pts): Add Server: and Date:
-  sockfile.write('HTTP/1.0 400 %s\r\n'
+  sockfile.write('HTTP/1.0 %s %s\r\n'
                  'Server: %s\r\n'
                  'Date: %s\r\n'
-                 'Connection: close\r\n'
+                 'Connection: keep-alive\r\n'
                  'Content-Type: text/plain\r\n'
                  'Content-Length: %d\r\n\r\n%s\n' %
-                 (status_str, server_software, date, len(msg) + 1, msg))
+                 (status, status_str, server_software, date, len(msg) + 1, msg))
   sockfile.flush()
 
 
@@ -641,23 +695,43 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         if not data:
           return
         if headers_sent_ary[0]:
+          if res_content_length_ary:
+            res_content_length_ary[1] -= len(data)
+            if res_content_length_ary[1] < 0:
+              sockfile.write(data[:res_content_length_ary[1]])
+              raise WsgiResponseBodyTooLongError
           # Autoflush because we've set up sockfile.write_buffer_limit = 0
           # previously.
           sockfile.write(data)
         else:
-          do_keep_alive_ary[0] = (
+          do_keep_alive_ary[0] = bool(
               do_req_keep_alive and res_content_length_ary)
           sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
           sockfile.write('\r\n')
-          sockfile.write(data)
+          if res_content_length_ary:
+            res_content_length_ary[1] -= len(data)
+            if res_content_length_ary[1] < 0:
+              sockfile.flush()
+              sockfile.write_buffer_limit = 0
+              sockfile.write(data[:res_content_length_ary[1]])
+              raise WsgiResponseBodyTooLongError
+          if 0 < len(data) <= 65536:
+            sockfile.write(data)
+            sockfile.flush()
+            sockfile.write_buffer_limit = 0  # Unbuffered (autoflush).
+          else:
+            sockfile.flush()
+            sockfile.write_buffer_limit = 0  # Unbuffered (autoflush).
+            sockfile.write(data)
+          headers_sent_ary[0] = True
           if input.discard_to_read_limit():
             raise WsgiReadError(EISDIR, 'could not discard HTTP request body')
-          sockfile.flush()
-          sockfile.write_buffer_limit = 0  # Unbuffered.
-          headers_sent_ary[0] = True
 
       def StartResponse(status, response_headers, exc_info=None):
         """Callback called by wsgi_application."""
+        if not (HTTP_RESPONSE_STATUS_RE.match(status) and status[-1].strip()):
+          raise WsgiResponseSyntaxError('bad HTTP response status: %r' % status)
+
         # Just set it to None, because we don't have to re-raise it since we
         # haven't sent any headers yet.
         exc_info = None
@@ -665,7 +739,6 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           sockfile.discard_write_buffer()
           del res_content_length_ary[:]
 
-        # TODO(pts): Send `Date:' header: Date: Sun, 20 Dec 2009 12:48:56 GMT
         sockfile.write('%s %s\r\n' % (http_version, status))  # HTTP/1.0
         sockfile.write('Server: %s\r\n' % server_software)
         sockfile.write('Date: %s\r\n' % date)
@@ -677,10 +750,12 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
               (is_not_head or key not in ('content-length',
                                           'content-transfer-encoding'))):
             if key == 'content-length':
-              # !! TODO(pts): Cut or pad the output below at content-length.
               del res_content_length_ary[:]
               try:
                 res_content_length_ary.append(int(str(value)))
+                # Number of bytes remaining. Checked and updated only for
+                # non-HEAD respones.
+                res_content_length_ary.append(res_content_length_ary[-1])
               except ValueError:
                 raise WsgiResponseSyntaxError('bad content-length: %r' % value)
             elif not HEADER_KEY_RE.match(key):
@@ -701,7 +776,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
 
       # TODO(pts): Handle application-level exceptions here.
       try:
-        items = wsgi_application(env, StartResponse)
+        items = wsgi_application(env, StartResponse) or ''
       except WsgiReadError, e:
         if is_debug:
           logging.debug('error reading HTTP request at call: %s' % e)
@@ -715,8 +790,14 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         if not headers_sent_ary[0]:
           # TODO(pts): Report exc on HTTP in development mode.
           sockfile.discard_write_buffer()
-          RespondWithBad(500,
-              date, server_software, sockfile, 'application error')
+          RespondWithBad(500, date, server_software, sockfile, '')
+          do_keep_alive_ary[0] = do_req_keep_alive
+          continue
+        if (do_req_keep_alive and res_content_length_ary and
+            not (is_not_head and res_content_length_ary[1])):
+          # The whole HTTP response body has been sent.
+          do_keep_alive_ary[0] = True
+          continue
         return
 
       try:
@@ -733,63 +814,103 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           else:
             data = ''
           items = None
-          if not headers_sent_ary[0]:
+          if headers_sent_ary[0]:
+            if len(data) != res_content_length_ary[1]:
+              if len(data) > res_content_length_ary[1]:
+                # SUXX: wget(1) will keep retrying here.
+                logging.error(
+                    'truncated content: header=%d remaining=%d body=%d'
+                    % (res_content_length_ary[0], res_content_length_ary[1],
+                       len(data)))
+                data = data[:res_content_length_ary[1] - len(data)]
+              else:
+                logging.error(
+                    'content length too large: header=%d remaining=%d body=%d'
+                    % (res_content_length_ary[0], res_content_length_ary[1],
+                       len(data)))
+                do_keep_alive_ary[0] = False
+          else:
             if input.discard_to_read_limit():
               raise WsgiReadError(EISDIR, 'could not discard HTTP request body')
+            do_keep_alive_ary[0] = do_req_keep_alive
             if res_content_length_ary:
-              # !! TODO(pts): Pad or truncate.
-              assert len(data) == res_content_length_ary[0]
+              if len(data) != res_content_length_ary[1]:
+                logging.error(
+                    'invalid content length: header=%d remaining=%d body=%d' %
+                    (res_content_length_ary[0], res_content_length_ary[1],
+                     len(data)))
+                sockfile.discard_write_buffer()
+                RespondWithBad(500, date, server_software, sockfile, '')
+                continue
             else:
               if is_not_head:
                 sockfile.write('Content-Length: %d\r\n' % len(data))
-            do_keep_alive_ary[0] = do_req_keep_alive
             sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
             sockfile.write('\r\n')
           sockfile.write(data)
           sockfile.flush()
         elif is_not_head:
           if not headers_sent_ary[0]:
-            do_keep_alive_ary[0] = (
+            do_keep_alive_ary[0] = bool(
                 do_req_keep_alive and res_content_length_ary)
             sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
             sockfile.write('\r\n')
-            if res_content_length_ary[0] == 0:
-              if input.discard_to_read_limit():
-                raise WsgiReadError(
-                    EISDIR, 'could not discard HTTP request body')
-              sockfile.flush()
           # TODO(pts): Speed: iterate over `items' below in another tasklet
           # as soon as Content-Length has been reached.
           #
           # This loop just waits for the first nonempty data item in the
           # HTTP response body.
           data = ''
-          for data in items:
-            if data:  # Implement flush-after-first-body-byte.
-              break
+          if res_content_length_ary:
+            if res_content_length_ary[1]:
+              for data in items:
+                if data:
+                  break
+              res_content_length_ary[1] -= len(data)
+              if res_content_length_ary[1] < 0:
+                logging.error('truncated first yielded content')
+                sockfile.flush()
+                sockfile.write_buffer_limit = 0
+                sockfile.write(data[:res_content_length_ary[1]])
+                continue
+          else:
+            for data in items:
+              if data:  # Implement flush-after-first-body-byte.
+                break
           if 0 < len(data) <= 65536:
             sockfile.write(data)  # Still buffering it.
-            if input.discard_to_read_limit():
-              raise WsgiReadError(
-                  EISDIR, 'could not discard HTTP request body')
             sockfile.flush()
             sockfile.write_buffer_limit = 0  # Unbuffered.
           else:
-            if input.discard_to_read_limit():
-              raise WsgiReadError(
-                  EISDIR, 'could not discard HTTP request body')
             sockfile.flush()
             sockfile.write_buffer_limit = 0  # Unbuffered.
             sockfile.write(data)
-          try:
-            for data in items:  # This calls the WSGI application.
-              sockfile.write(data)
+          if input.discard_to_read_limit():
+            raise WsgiReadError(
+                EISDIR, 'could not discard HTTP request body')
+          try:  # Call the WSGI application by iterating over `items'.
+            if res_content_length_ary:
+              for data in items:
+                sockfile.write(data)
+                res_content_length_ary[1] -= len(data)
+                if res_content_length_ary[1] < 0:
+                  logging.error('truncated yielded content')
+                  sockfile.flush()
+                  sockfile.write_buffer_limit = 0
+                  sockfile.write(data[:res_content_length_ary[1]])
+                  break
+              if res_content_length_ary[1] > 0:
+                logging.error('content length too large for yeald')
+                do_keep_alive_ary[0] = False
+            else:
+              for data in items:
+                sockfile.write(data)
           except (WsgiReadError, WsgiWriteError):
             raise
           except Exception, e:
             ReportAppException(sys.exc_info())
             return
-        else:  # HTTP HEAD request.
+        else:  # HTTP HEAD response.
           if not headers_sent_ary[0]:
             do_keep_alive_ary[0] = do_req_keep_alive
             sockfile.write(KEEP_ALIVE_RESPONSES[do_keep_alive_ary[0]])
@@ -821,6 +942,11 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
       finally:
         if hasattr(items, 'close'):  # According to the WSGI spec.
           try:
+            # The close() method defined in the app will be able to detect if
+            # `for data in items' has iterated all the way through. For
+            # example, when StartResponse was called with a too small
+            # Content-Length, some of the items will not be reached, but
+            # we call close() here nevertheless.
             items.close()
           except WsgiReadError, e:
             if is_debug:
@@ -843,9 +969,21 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
 
 
 def WsgiListener(server_socket, wsgi_application):
-  """HTTP server serving WSGI, listing on server_socket.
+  """HTTP or HTTPS server serving WSGI, listing on server_socket.
 
-  This function canrun in a tasklet.
+  WsgiListener should be run in is own tasklet.
+
+  WsgiListener supports HTTP/1.0 and HTTP/1.1 requests (but not HTTP/0.9).
+
+  WsgiListener is robust: it detects, reports and reports errors (I/O
+  errors, request parse errors, invalid HTTP responses, and exceptions
+  raised in the WSGI application code).
+
+  WsgiListener supports HTTP Keep-Alive, and it will keep TCP connections
+  alive indefinitely. TODO(pts): Specify a timeout.
+
+  Args:
+    server_sock: An acceptable coio.nbsocket or coio.nbsslsocket.
   """
   if not hasattr(server_socket, 'getsockname'):
     raise TypeError
@@ -883,6 +1021,7 @@ def WsgiListener(server_socket, wsgi_application):
       accepted_socket = peer_name = None  # Help the garbage collector.
   finally:
     server_socket.close()
+
 
 class FakeServerSocket(object):
   """A fake TCP server socket, used as CherryPyWSGIServer.socket."""
@@ -926,11 +1065,17 @@ class FakeRequests(object):
 
 
 def CherryPyWsgiListener(server_sock, wsgi_application):
-  """HTTP server serving WSGI, using CherryPy's implementation."""
+  """HTTP or HTTPS server serving WSGI, using CherryPy's implementation.
+
+  This function should be run in is own tasklet.
+
+  Args:
+    server_sock: An acceptable coio.nbsocket or coio.nbsslsocket.
+  """
   # !! TODO(pts): Speed: Why is CherryPy's /infinite twice as fast as ours?
   # Only sometimes.
-  if not (isinstance(server_sock, coio.nbsocket) or
-          isinstance(server_sock, coio.nbsslsocket)):
+  if not (isinstance(server_socket, coio.nbsocket) or
+          isinstance(server_socket, coio.nbsslsocket)):
     raise TypeError
   if not callable(wsgi_application):
     raise TypeError
@@ -939,7 +1084,7 @@ def CherryPyWsgiListener(server_sock, wsgi_application):
   except ImportError:
     from web import wsgiserver  # Another implementation in (web.py).
   wsgi_server = wsgiserver.CherryPyWSGIServer(
-      server_sock.getsockname(), wsgi_application)
+      server_socket.getsockname(), wsgi_application)
   wsgi_server.ready = True
   wsgi_server.socket = FakeServerSocket()
   wsgi_server.requests = FakeRequests()
@@ -952,7 +1097,7 @@ def CherryPyWsgiListener(server_sock, wsgi_application):
 
   try:
     while True:
-      sock, peer_name = server_sock.accept()
+      sock, peer_name = server_socket.accept()
       if logging.root.level <= DEBUG:
         logging.debug('cpw connection accepted from=%r sock=%x' %
                       (peer_name, id(sock)))
@@ -1168,17 +1313,16 @@ def CanBeCherryPyApp(app):
   return False
 
 
-def RunHttpServer(app, server_address=None, listen_queue_size=100,
-                  ssl_server_address=None):
+def RunHttpServer(app, server_address=None, listen_queue_size=100):
   """Listen as a HTTP server, and run the specified application forever.
 
   Args:
     app: A WSGI application function, or a (web.py) web.application object.
     server_address: TCP address to bind to, e.g. ('', 8080), or None to use
       the default.
-    ssl_server_address: TCP address to bind to, e.g. ('', 4443), or None to
-      disable HTTPS.
   """
+  # TODO(pts): Support HTTPS in this function. See examples/demo.py for
+  # HTTPS support.
   try:
     import psyco
     psyco.full()  # TODO(pts): Measure the speed in Stackless Python.
@@ -1253,15 +1397,15 @@ def RunHttpServer(app, server_address=None, listen_queue_size=100,
     print type(app)
     assert 0, 'unsupported application type for %r' % (app,)
 
-  server_sock = coio.nbsocket(socket.AF_INET, socket.SOCK_STREAM)
-  server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-  server_sock.bind(server_address)
+  server_socket = coio.nbsocket(socket.AF_INET, socket.SOCK_STREAM)
+  server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  server_socket.bind(server_address)
   # Reducing this has a strong negative effect on ApacheBench worst-case
   # connection times, as measured with:
   # ab -n 100000 -c 50 http://127.0.0.1:6666/ >ab.stackless3.txt
   # It increases the maximum Connect time from 8 to 9200 milliseconds.
-  server_sock.listen(listen_queue_size)
-  logging.info('listening on %r' % (server_sock.getsockname(),))
+  server_socket.listen(listen_queue_size)
+  logging.info('listening on %r' % (server_socket.getsockname(),))
   # From http://webpy.org/install (using with mod_wsgi).
-  coio.stackless.tasklet(WsgiListener)(server_sock, wsgi_application)
+  coio.stackless.tasklet(WsgiListener)(server_socket, wsgi_application)
   stackless.schedule_remove()
