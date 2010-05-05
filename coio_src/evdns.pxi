@@ -136,7 +136,7 @@ cdef class dnsresult:
 
     def __repr__(dnsresult self):
         return '<dnsresult t=%d, ttl=%d values=%r at 0x%x>' % (
-            self._t, self._ttl, self._values, <unsigned><void*>self)
+            self._t, self._ttl, self._values, <size_t><void*>self)
 
 cdef object format_ipv6_word(unsigned hi, unsigned lo):
     lo += hi << 8
