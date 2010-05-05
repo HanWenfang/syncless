@@ -13,17 +13,26 @@ try:
   import stackless
   print >>sys.stderr, 'info: using stackless'
 except ImportError:
-  import syncless.greenstackless as stackless
+  #import syncless.greenstackless as stackless
+  import greenstackless as stackless
   assert 'greenlet' in sys.modules
   print >>sys.stderr, 'info: using greenlet'
 
 
 class StacklessTest(unittest.TestCase):
   def setUp(self):
+    # This is ignored by Stackless, but used by greenstackless.
+    stackless.is_slow_prev_next_ok = False
     self.assertEqual(1, stackless.getruncount())
 
   def tearDown(self):
-    self.assertEqual(1, stackless.getruncount())
+    self.assertEqual(stackless.main, stackless.getcurrent())
+    main_tasklet = stackless.main
+    try:
+      self.assertEqual(1, stackless.getruncount())
+    finally:
+      while main_tasklet is not main_tasklet.prev:
+        main_tasklet.prev.kill()
 
   def testStackless(self):
     events = []
@@ -351,11 +360,12 @@ class StacklessTest(unittest.TestCase):
 
   def testChannelReceiveLinkedList(self):
     """Test how the linked lists are formed when blocked on a channel."""
+    stackless.is_slow_prev_next_ok = True
     channel_obj = stackless.channel()
     tasklet1 = stackless.tasklet(channel_obj.receive)()
     #tasklet2 = stackless.tasklet(channel_obj.receive)()
     #tasklet3 = stackless.tasklet(channel_obj.receive)()
-    assert tasklet1.next is stackless.current
+    assert tasklet1.next is stackless.getcurrent()
 
     stackless.schedule()
     assert tasklet1.next is None
@@ -413,6 +423,35 @@ class StacklessTest(unittest.TestCase):
     tasklet1.kill()  # Don't run tasklet3.
     tasklet3.kill()
     tasklet2.kill()
+
+  def testTempval(self):
+    def Worker(items):
+        items.append(stackless.schedule())
+        items.append(stackless.schedule(None))
+        items.append(stackless.schedule('foo'))
+        items.append(stackless.schedule(42))
+  
+    items = []
+    tasklet_obj = stackless.tasklet(Worker)(items)
+    self.assertEqual(None, tasklet_obj.tempval)
+    self.assertEqual([], items)
+    stackless.schedule()
+    self.assertEqual(tasklet_obj, tasklet_obj.tempval)
+    self.assertEqual([], items)
+    stackless.schedule()
+    self.assertEqual(None, tasklet_obj.tempval)
+    self.assertEqual([tasklet_obj], items)
+    stackless.schedule()
+    self.assertEqual('foo', tasklet_obj.tempval)
+    self.assertEqual([tasklet_obj, None], items)
+    tasklet_obj.tempval = False
+    stackless.schedule()
+    self.assertEqual([tasklet_obj, None, False], items)
+    self.assertEqual(42, tasklet_obj.tempval)
+    stackless.schedule()
+    self.assertEqual([tasklet_obj, None, False, 42], items)
+    # Upon TaskletExit.
+    self.assertEqual(None, tasklet_obj.tempval)
 
 if __name__ == '__main__':
   unittest.main()
