@@ -80,19 +80,19 @@ class StacklessTest(unittest.TestCase):
 
     c = stackless.channel()
 
-    self.assertTrue(stackless.getcurrent() is stackless.getmain())
+    self.assertTrue(stackless.current is stackless.getmain())
     self.assertTrue(stackless.getcurrent() is stackless.main)
     self.assertEqual(1, stackless.getruncount())
-    self.assertTrue(stackless.getcurrent() is stackless.getcurrent().next)
-    self.assertTrue(stackless.getcurrent() is stackless.getcurrent().prev)
+    self.assertTrue(stackless.current is stackless.getcurrent().next)
+    self.assertTrue(stackless.current is stackless.getcurrent().prev)
     ta = stackless.tasklet(Worker)('A', c)
     tb = stackless.tasklet(Worker)('B', c)
     tc = stackless.tasklet(Worker)('C', c)
     td = stackless.tasklet().bind(Worker)('D', c)
     self.assertEqual(5, stackless.getruncount())
-    self.assertTrue(td is stackless.getcurrent().prev)
+    self.assertTrue(td is stackless.current.prev)
     self.assertTrue(ta is stackless.getcurrent().next)
-    self.assertTrue(td.next is stackless.getcurrent())
+    self.assertTrue(td.next is stackless.current)
     self.assertTrue(td.prev is tc)
 
     self.assertEqual(c.preference, -1)
@@ -100,7 +100,7 @@ class StacklessTest(unittest.TestCase):
     del events[:]
     events.append('send')
     self.assertEqual(5, stackless.getruncount())
-    c.send('msg')
+    self.assertEqual(None, c.send('msg'))
     self.assertEqual(1, stackless.getruncount())
     Run()
     self.assertEqual(' '.join(events), 'send A.wait A/msg A.wait B.wait C.wait D.wait schedule done')
@@ -111,7 +111,7 @@ class StacklessTest(unittest.TestCase):
     events.append('send')
     c.preference = 0  # same as c.preference = 1
     self.assertEqual(1, stackless.getruncount())
-    c.send('msg')
+    self.assertEqual(None, c.send('msg'))
     self.assertEqual(2, stackless.getruncount())
     Run()
     #print ' '.join(events)
@@ -123,7 +123,7 @@ class StacklessTest(unittest.TestCase):
     c.preference = 1
     events.append('send')
     self.assertEqual(1, stackless.getruncount())
-    c.send('msg')
+    self.assertEqual(None, c.send('msg'))
     self.assertEqual(2, stackless.getruncount())
     Run()
     self.assertEqual(' '.join(events), 'send schedule B/msg B.wait schedule done')
@@ -133,8 +133,8 @@ class StacklessTest(unittest.TestCase):
     c.preference = 2  # same as c.preference = 1
     events.append('send')
     self.assertEqual(1, stackless.getruncount())
-    c.send('msg')
-    c.send('msg')
+    self.assertEqual(None, c.send('msg'))
+    self.assertEqual(None, c.send('msg'))
     self.assertEqual(3, stackless.getruncount())
     Run()
     self.assertEqual(' '.join(events), 'send schedule C/msg C.wait D/msg D.wait schedule done')
@@ -154,48 +154,45 @@ class StacklessTest(unittest.TestCase):
     self.assertEqual(1, stackless.getruncount())
     t.insert()
     self.assertEqual(2, stackless.getruncount())
-    c.send('msg1')
+    self.assertEqual(None, c.send('msg1'))
     self.assertEqual(c.balance, -3)
-    c.send('msg2')
-    c.send('msg3')
-    c.send('msg4')
+    self.assertEqual(None, c.send('msg2'))
+    self.assertEqual(None, c.send('msg3'))
+    self.assertEqual(None, c.send('msg4'))
     self.assertEqual(6, stackless.getruncount())
     events.append('a4')
     self.assertEqual(c.balance, 0)
-    #t.run()
-    #stackless.schedule()
-    c.send('msg5')
+    self.assertEqual(None, c.send('msg5'))
     self.assertEqual(5, stackless.getruncount())
     events.append('a5')
-    c.send('msg6')
+    self.assertEqual(None, c.send('msg6'))
     self.assertEqual(5, stackless.getruncount())
     Run()
-    #print  ' '.join(events)
     self.assertEqual(' '.join(events), 'send a4 T.single A/msg1 A.wait a5 B/msg2 B.wait schedule C/msg3 C.wait D/msg4 D.wait A/msg5 A.wait B/msg6 B.wait schedule done')
 
-    self.assertTrue(stackless.getcurrent() is stackless.getcurrent().next)
-    self.assertTrue(stackless.getcurrent() is stackless.getcurrent().prev)
+    self.assertTrue(stackless.getcurrent() is stackless.current.next)
+    self.assertTrue(stackless.getcurrent() is stackless.current.prev)
 
     del events[:]
     self.assertEqual(c.balance, -4)
     c.preference = 42
-    c.send('msg1')
+    self.assertEqual(None, c.send('msg1'))
     self.assertEqual(c.balance, -3)
     self.assertTrue(tc is stackless.getcurrent().next)
-    self.assertTrue(tc is stackless.getcurrent().prev)
+    self.assertTrue(tc is stackless.current.prev)
     self.assertTrue(tc.prev is stackless.getcurrent())
-    self.assertTrue(tc.next is stackless.getcurrent())
-    c.send('msg2')
+    self.assertTrue(tc.next is stackless.current)
+    self.assertEqual(None, c.send('msg2'))
     self.assertEqual(c.balance, -2)
     self.assertTrue(tc is stackless.getcurrent().next)
-    self.assertTrue(td is stackless.getcurrent().prev)
+    self.assertTrue(td is stackless.current.prev)
     self.assertTrue(td.next is stackless.getcurrent())
     self.assertTrue(td.prev is tc)
-    c.send('msg3')
+    self.assertEqual(None, c.send('msg3'))
     self.assertEqual(c.balance, -1)
-    self.assertTrue(tc is stackless.getcurrent().next)
+    self.assertTrue(tc is stackless.current.next)
     self.assertTrue(ta is stackless.getcurrent().prev)
-    self.assertTrue(ta.next is stackless.getcurrent())
+    self.assertTrue(ta.next is stackless.current)
     self.assertTrue(ta.prev is td)
     self.assertEqual(' '.join(events), '')
     self.assertEqual(4, stackless.getruncount())
@@ -206,7 +203,7 @@ class StacklessTest(unittest.TestCase):
     self.assertEqual(5, stackless.getruncount())
     t.remove()
     #self.assertTrue(t.next is None  # NotImplementedError in greenstackless)
-    self.assertTrue(ta is stackless.getcurrent().prev)
+    self.assertTrue(ta is stackless.current.prev)
     self.assertTrue(t.alive)
     self.assertEqual(4, stackless.getruncount())
     t.run()
@@ -219,15 +216,15 @@ class StacklessTest(unittest.TestCase):
     del events[:]
     self.assertEqual(c.balance, -3)
     self.assertTrue(tc is stackless.getcurrent().next)
-    self.assertTrue(tc is stackless.getcurrent().prev)
+    self.assertTrue(tc is stackless.current.prev)
     self.assertTrue(tc.prev is stackless.getcurrent())
-    self.assertTrue(tc.next is stackless.getcurrent())
+    self.assertTrue(tc.next is stackless.current)
     tc.run()
     self.assertEqual(' '.join(events), 'C/msg1 C.wait')
     del events[:]
     self.assertEqual(c.balance, -4)
-    self.assertTrue(stackless.getcurrent() is stackless.getcurrent().next)
-    self.assertTrue(stackless.getcurrent() is stackless.getcurrent().prev)
+    self.assertTrue(stackless.getcurrent() is stackless.current.next)
+    self.assertTrue(stackless.getcurrent() is stackless.current.prev)
 
     t = stackless.tasklet(Cooperative)('T')
     r = stackless.tasklet(CooperativeRemove)('R')
@@ -262,10 +259,10 @@ class StacklessTest(unittest.TestCase):
     tb2 = None
     try:
       if hasattr(stackless.getcurrent(), 'throw'):  # greenstackless
-        stackless.getcurrent().throw(typ, val, tb1)
+        stackless.current.throw(typ, val, tb1)
       else:  # Stackless
         stackless.getcurrent().tempval = stackless.bomb(typ, val, tb1)
-        stackless.getcurrent().run()
+        stackless.current.run()
     except:
       self.assertTrue(sys.exc_info()[0] is typ)
       self.assertTrue(sys.exc_info()[1] is val)
@@ -290,7 +287,7 @@ class StacklessTest(unittest.TestCase):
     self.assertEqual(0, c.balance)
     c.preference = 1
     def SendBomb():
-      c.send(stackless.bomb(typ, val, tb1))
+      assert c.send(stackless.bomb(typ, val, tb1)) is None
     stackless.tasklet(SendBomb)()
     try:
       c.receive()
@@ -309,7 +306,7 @@ class StacklessTest(unittest.TestCase):
     self.assertEqual(0, c.balance)
     c.preference = 1
     def SendBomb():
-      c.send(stackless.bomb(typ, val, tb1))
+      assert c.send(stackless.bomb(typ, val, tb1)) is None
     stackless.tasklet(SendBomb)()
     try:
       c.receive()
@@ -341,8 +338,8 @@ class StacklessTest(unittest.TestCase):
     self.assertEqual(0, c.balance)
     c.preference = 1
     def SendException(task):
-      c.send_exception(ValueError, 43)
-    stackless.tasklet(SendException)(stackless.getcurrent())
+      assert c.send_exception(ValueError, 43) is None
+    stackless.tasklet(SendException)(stackless.current)
     try:
       c.receive()
     except:
@@ -361,10 +358,28 @@ class StacklessTest(unittest.TestCase):
     def Dead():
       items.append('dead')
 
+    self.assertEqual(stackless.main, stackless.current)
+    self.assertEqual(stackless.main, stackless.current.next)
+    self.assertEqual(stackless.main, stackless.current.prev)
     dead_tasklet = stackless.tasklet(Dead)()
+    self.assertEqual(stackless.main, stackless.current)
+    self.assertEqual(dead_tasklet, stackless.current.next)
+    self.assertEqual(stackless.main, stackless.current.next.next)
+    self.assertEqual(dead_tasklet, stackless.current.prev)
+    self.assertEqual(stackless.main, stackless.current.prev.prev)
     worker_tasklet = stackless.tasklet(Worker)()
+    self.assertEqual(stackless.main, stackless.current)
+    self.assertEqual(dead_tasklet, stackless.current.next)
+    self.assertEqual(worker_tasklet, stackless.current.next.next)
+    self.assertEqual(stackless.main, stackless.current.next.next.next)
+    self.assertEqual(worker_tasklet, stackless.current.prev)
+    self.assertEqual(dead_tasklet, stackless.current.prev.prev)
+    self.assertEqual(stackless.main, stackless.current.prev.prev.prev)
     items.append('before')
     dead_tasklet.kill()
+    self.assertEqual(stackless.main, stackless.current)
+    self.assertEqual(stackless.main, stackless.current.next)
+    self.assertEqual(stackless.main, stackless.current.prev)
     items.append('after')
     self.assertEqual('before,worker,after', ','.join(items))
 
@@ -383,8 +398,10 @@ class StacklessTest(unittest.TestCase):
 
     tasklet2 = stackless.tasklet(channel_obj.receive)()
     self.assertEqual(True, tasklet1.blocked)
+    self.assertEqual(True, tasklet1.scheduled)
     self.assertEqual(channel_obj, tasklet1._channel)
     self.assertEqual(False, tasklet2.blocked)
+    self.assertEqual(True, tasklet2.scheduled)
     self.assertEqual(None, tasklet2._channel)
     stackless.schedule()
     self.assertEqual(channel_obj, tasklet2._channel)
@@ -404,13 +421,15 @@ class StacklessTest(unittest.TestCase):
 
   def testRunBlockedTasklet(self):
     def Worker(channel_obj):
-      print repr(channel_obj.receive())
+      assert 0, repr(channel_obj.receive())
 
     channel_obj = stackless.channel()
     tasklet1 = stackless.tasklet(Worker)(channel_obj)
-    assert not tasklet1.blocked
+    self.assertEqual(False, tasklet1.blocked)
+    self.assertEqual(True, tasklet1.scheduled)
     stackless.schedule()
-    assert tasklet1.blocked
+    self.assertEqual(True, tasklet1.blocked)
+    self.assertEqual(True, tasklet1.scheduled)
     # RuntimeError('You cannot run a blocked tasklet')
     self.assertRaises(RuntimeError, tasklet1.insert)
 
@@ -452,9 +471,9 @@ class StacklessTest(unittest.TestCase):
     tasklet_obj = stackless.tasklet(Worker)(items)
     self.assertEqual(None, tasklet_obj.tempval)
     self.assertEqual([], items)
-    stackless.getcurrent().tempval = 5
+    stackless.current.tempval = 5
     self.assertEqual(stackless.getcurrent(), stackless.schedule())
-    self.assertEqual(None, stackless.getcurrent().tempval)
+    self.assertEqual(None, stackless.current.tempval)
     self.assertEqual(tasklet_obj, tasklet_obj.tempval)
     self.assertEqual([], items)
     stackless.schedule()
@@ -473,23 +492,23 @@ class StacklessTest(unittest.TestCase):
     self.assertEqual(None, tasklet_obj.tempval)
     self.assertEqual(1, stackless.getruncount())
     self.assertEqual(stackless.getcurrent(), stackless.schedule())
-    self.assertEqual(None, stackless.getcurrent().tempval)
+    self.assertEqual(None, stackless.current.tempval)
     self.assertEqual(43, stackless.schedule(43))
     # This seems to be a strange Stackless quirk, this should be 43.
     self.assertEqual(None, stackless.getcurrent().tempval)
     self.assertEqual(54, stackless.schedule_remove(54))
-    self.assertEqual(None, stackless.getcurrent().tempval)
+    self.assertEqual(None, stackless.current.tempval)
 
     def Worker2(items, main_tasklet):
       items.append(stackless.getcurrent().tempval)
       items.append(stackless.schedule(44))
-      items.append(stackless.getcurrent().tempval)
+      items.append(stackless.current.tempval)
       main_tasklet.insert()
 
     del items[:]
     stackless.tasklet(Worker2)(items, stackless.getcurrent())
     self.assertEqual(55, stackless.schedule_remove(55))
-    self.assertEqual(None, stackless.getcurrent().tempval)
+    self.assertEqual(None, stackless.current.tempval)
     self.assertEqual([None, 44, None], items)
 
     self.assertRaisesStr(AssertionError, '', stackless.schedule,
@@ -503,15 +522,25 @@ class StacklessTest(unittest.TestCase):
         'Use t=tasklet().capture()', stackless.getcurrent().remove)
 
   def testScheduleRemoveLast(self):
-    def Worker():
+    def Worker1():
       stackless.schedule_remove()
       assert 0
 
-    stackless.tasklet(Worker)()
-    stackless.tasklet(Worker)()
-    # stackless.main will be inserted back when the last tasklet gets
-    # removed from the runnables list.
-    stackless.schedule_remove()
+    def Worker2():
+      stackless.schedule_remove()
+      1 / 0
+
+    stackless.tasklet(Worker1)()
+    stackless.tasklet(Worker2)()
+    try:
+      # In Stackless 2.6.5, stackless.main will be inserted back when the
+      # last tasklet gets removed from the runnables list.
+      stackless.schedule_remove()
+    except ZeroDivisionError:
+      # In Stackless 2.6.4, the last tasklet (Worker2) won't be removed (but
+      # schedule_remove would be equivalent to schedule).
+      assert not hasattr(stackless, '_tasklet_wrapper')  # Not greenstackless.
+      assert '2.6.4 ' <= sys.version < '2.6.5 '
 
   def testHandleExceptionInMainTasklet(self):
     stackless.tasklet(lambda: 1 / 0)()
@@ -519,7 +548,6 @@ class StacklessTest(unittest.TestCase):
     self.assertRaises(ZeroDivisionError, stackless.schedule_remove)
     self.assertEqual(2, stackless.getruncount())  # The None tasklet.
     stackless.schedule()
-
       
   def testLastChannel(self):
     channel_obj = stackless.channel()
@@ -571,13 +599,21 @@ class StacklessTest(unittest.TestCase):
         RuntimeError, 'Deadlock: the last runnable tasklet cannot be blocked.',
         channel_obj.send, 55)
 
-    tasklet1 = stackless.tasklet(lambda: stackless.schedule() << 1)()
-    tasklet2 = stackless.tasklet(lambda: bool(stackless.schedule()) / 0)()
+    def ValueWorker():
+      stackless.schedule()
+      raise ValueError
+
+    def DivideWorker():
+      stackless.schedule()
+      1 / 0
+
+    tasklet1 = stackless.tasklet(ValueWorker)()
+    tasklet2 = stackless.tasklet(DivideWorker)()
     stackless.schedule()
     self.assertEqual(3, stackless.getruncount())
     self.assertTrue(tasklet1.alive)
     self.assertTrue(tasklet2.alive)
-    self.assertRaises(TypeError, channel_obj.receive)
+    self.assertRaises(ValueError, channel_obj.receive)
     self.assertFalse(tasklet1.alive)
     self.assertTrue(tasklet2.alive)
     self.assertEqual(2, stackless.getruncount())
@@ -600,6 +636,146 @@ class StacklessTest(unittest.TestCase):
                          tasklet_obj.bind, lambda: 2 / 0)
     stackless.schedule()
     tasklet_obj.bind(lambda: 3 / 0)
+
+  def testInsertCurrent(self):
+    items = []
+    stackless.tasklet(items.append)(55)
+    stackless.tasklet(items.append)(66)
+    stackless.current.insert()
+    self.assertEqual([], items)
+    stackless.schedule()
+    self.assertEqual([55, 66], items)
+
+  def testLateCall(self):
+    tasklet_obj = stackless.tasklet(lambda: 0)()
+    self.assertRaisesStr(TypeError, 'cframe function must be a callable',
+                         tasklet_obj)
+    tasklet_obj.remove()
+    self.assertRaisesStr(TypeError, 'cframe function must be a callable',
+                         tasklet_obj)
+
+  def testRun(self):
+    stackless.tasklet(stackless.schedule)(42)
+    tasklet_obj = stackless.tasklet(stackless.schedule)(43)
+    stackless.tasklet(stackless.schedule)(44)
+    self.assertEqual(4, stackless.getruncount())
+    self.assertEqual(None, tasklet_obj.run())
+    self.assertEqual(4, stackless.getruncount())
+    self.assertEqual(50, stackless.schedule(50))
+    self.assertEqual(2, stackless.getruncount())
+    self.assertEqual(51, stackless.schedule(51))
+    self.assertEqual(1, stackless.getruncount())
+
+    def Bomber(tasklet_obj, msg):
+      tasklet_obj.tempval = stackless.bomb(AssertionError, msg)
+
+    stackless.tasklet(Bomber)(stackless.current, 'foo')
+    stackless.tasklet(Bomber)(stackless.current, 'bar')
+    self.assertRaisesStr(AssertionError, 'bar', stackless.schedule)
+
+    def Setter(tasklet_obj, msg):
+      tasklet_obj.tempval = msg
+
+    stackless.tasklet(Setter)(stackless.current, 'food')
+    stackless.tasklet(Setter)(stackless.current, 'bard')
+    self.assertEqual('bard', stackless.schedule())
+    self.assertEqual(1, stackless.getruncount())
+    
+    stackless.tasklet(Setter)(stackless.current, 'fooe')
+    tasklet_obj = stackless.tasklet(Setter)(stackless.current, 'bare')
+    stackless.tasklet(Setter)(stackless.current, 'baze')
+    stackless.current.tempval = 'tv'
+    self.assertEqual('tv', stackless.current.run())
+    self.assertEqual('baze', tasklet_obj.run())
+    self.assertEqual('fooe', stackless.schedule())
+    self.assertEqual(1, stackless.getruncount())
+
+    stackless.current.tempval = 50
+    tasklet_obj = stackless.tasklet(lambda: 0)()
+    self.assertEqual(50, tasklet_obj.run())
+    self.assertEqual(None, stackless.current.tempval)
+    self.assertEqual(1, stackless.getruncount())
+
+    stackless.current.tempval = 51
+    self.assertEqual(51, stackless.current.run())
+    self.assertEqual(None, stackless.current.tempval)
+
+  def testRaiseException(self):
+    def Ignorer():
+      try:
+        stackless.schedule()
+        1 / 0
+      except AssertionError, e:
+        assert str(e) == 'ae'
+
+    def Setter(tasklet_obj, msg):
+      tasklet_obj.tempval = msg
+
+    tasklet1 = stackless.tasklet(lambda: 0)()
+    tasklet2 = stackless.tasklet(Setter)(stackless.current, 'back')
+    self.assertEqual('back', tasklet1.kill())
+    self.assertEqual(1, stackless.getruncount())
+
+    tasklet1 = stackless.tasklet(Ignorer)()
+    stackless.schedule()  # Enter the `try:' block in Ignorer.
+    tasklet2 = stackless.tasklet(Setter)(stackless.current, 'back2')
+    self.assertEqual('back2', tasklet1.raise_exception(AssertionError, 'ae'))
+    self.assertEqual(1, stackless.getruncount())
+
+    channel_obj = stackless.channel()
+    tasklet1 = stackless.tasklet(channel_obj.receive)()
+    self.assertEqual(0, channel_obj.balance)
+    stackless.schedule()
+    self.assertEqual(-1, channel_obj.balance)
+    tasklet1.kill()
+    self.assertEqual(0, channel_obj.balance)
+    self.assertEqual(1, stackless.getruncount())
+
+    def ReceiveIgnorer():
+      try:
+        channel_obj.receive()
+        1 / 0
+      except AssertionError, e:
+        assert str(e) == 'ae'
+
+    tasklet1 = stackless.tasklet(ReceiveIgnorer)()
+    self.assertEqual(0, channel_obj.balance)
+    stackless.schedule()
+    self.assertEqual(-1, channel_obj.balance)
+    tasklet1.raise_exception(AssertionError, 'ae')
+    self.assertEqual(0, channel_obj.balance)
+
+  def testSendInsert(self):
+    channel_obj = stackless.channel()
+    self.assertEqual(None, channel_obj.queue)
+    tasklet1 = stackless.tasklet(lambda: 1 / 0)()
+    tasklet2 = stackless.tasklet(channel_obj.receive)()
+    tasklet2.run()
+    self.assertRaisesStr(
+        RuntimeError, 'You cannot remove a blocked tasklet.',
+        tasklet2.remove)
+    # channel_obj.send inserts tasklet2 after current, and since tasklet1 was
+    # after current, the insertion runs tasklet1 eventually, which triggers
+    # the ZeroDivisionError, propagated to current (== main).
+    self.assertRaises(ZeroDivisionError, channel_obj.send, 0)
+    self.assertEqual(1, stackless.getruncount())
+    self.assertEqual(None, channel_obj.queue)
+
+    channel_obj.preference = 1  # Prefer the sender.
+    tasklet1 = stackless.tasklet(lambda: 1 / 0)()
+    tasklet2 = stackless.tasklet(channel_obj.receive)()
+    self.assertEqual(False, tasklet2.blocked)
+    self.assertEqual(True, tasklet2.scheduled)
+    tasklet2.run()
+    self.assertEqual(True, tasklet2.blocked)
+    self.assertEqual(True, tasklet2.scheduled)
+    self.assertEqual(tasklet1, stackless.getcurrent().next)
+    self.assertEqual(None, channel_obj.send(0))
+    self.assertEqual(tasklet1, stackless.getcurrent().next)
+    self.assertEqual(tasklet2, stackless.current.prev)
+    tasklet1.remove()
+    stackless.schedule()
+
 
 if __name__ == '__main__':
   unittest.main()

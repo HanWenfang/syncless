@@ -6,10 +6,8 @@ Limitations of this emulation module over real Stackless:
 
 * both greenlet and the emulation is slower than Stackless
 * greenlet has some memory leaks if greenlets reference each other
-* no stackless.current support (use stackless.getcurrent())
 * no multithreading support (don't use greenstackless in more than one
   thread (not even sequentially) in your application)
-* no deadlock detection if the main tasklet gets stuck
 
 Original _syncless.py downloaded from
 http://github.com/toymachine/concurrence/raw/master/lib/concurrence/_stackless.py
@@ -46,14 +44,12 @@ assert hasattr(greenlet, 'throw'), (
 
 import sys
 import weakref
-from collections import deque
 
 class TaskletExit(SystemExit):
   pass
 
 import __builtin__
 __builtin__.TaskletExit = TaskletExit
-
 
 class bomb(object):
   """Used as a result value for sending exceptions trough a channel."""
@@ -68,19 +64,13 @@ class bomb(object):
 class channel(object):
   """Implementation of stackless's channel object."""
 
-  __slots__ = ['balance', 'preference', '_queue', '__weakref__']
+  __slots__ = ['balance', 'preference', 'queue', '_queue_last', '__weakref__']
 
   def __init__(self):
     self.balance = 0
     self.preference = -1
-    self._queue = deque()
-
-  @property
-  def queue(self):
-    if self._queue:
-      return self._queue[0]
-    else:
-      return None
+    self.queue = None
+    self._queue_last = None
 
   def receive(self):
     return _receive(self, self.preference)
@@ -96,44 +86,101 @@ class channel(object):
       self.send(item)
 
 
+def _remove(tasklet_obj):
+  """Remove the tasklet from the runnables list.
+
+  As a side effect, put `main' back if the list would become empty.
+  """
+  global current
+  if tasklet_obj.next is None:
+    pass
+  elif tasklet_obj.next is tasklet_obj:  # and tasklet_obj is current
+    if tasklet_obj is not main:
+      if main._channel_weak:
+        _remove_from_channel(main)
+      current = main
+      main.next = main.prev = main
+      tasklet_obj.next = tasklet_obj.prev = None
+  else:
+    if tasklet_obj is current:
+      current = tasklet_obj.next
+    tasklet_obj.next.prev = tasklet_obj.prev
+    tasklet_obj.prev.next = tasklet_obj.next
+    tasklet_obj.next = tasklet_obj.prev = None
+
+
+def _insert_before_current(tasklet_obj):
+  """Insert or move tasklet_obj just before current."""
+  global current
+  #DEBUG assert not tasklet_obj._channel_weak
+  if tasklet_obj.next is not current:
+    if tasklet_obj.next:
+      tasklet_obj.next.prev = tasklet_obj.prev
+      tasklet_obj.prev.next = tasklet_obj.next
+    tasklet_obj.next = current
+    tasklet_obj.prev = current.prev
+    current.prev.next = tasklet_obj
+    current.prev = tasklet_obj
+
+
+def _insert_after_current(tasklet_obj):
+  """Insert or move tasklet_obj just after current."""
+  global current
+  #DEBUG assert not tasklet_obj._channel_weak
+  if tasklet_obj.prev is not current:
+    if tasklet_obj.next:
+      tasklet_obj.next.prev = tasklet_obj.prev
+      tasklet_obj.prev.next = tasklet_obj.next
+    tasklet_obj.prev = current
+    tasklet_obj.next = current.next
+    current.next.prev = tasklet_obj
+    current.next = tasklet_obj
+
+
 def _tasklet_wrapper(tasklet_obj, switch_back_ary, args, kwargs):
+  """Tasklet wrapper function run in a greenlet."""
   try:
-    switch_back_ary.pop().switch()
+    switch_back_ary.pop().switch()  # Switch back to tasklet.__call__
     tasklet_obj._func(*args, **kwargs)
-    assert _runnables.popleft() is tasklet_obj
+    assert tasklet_obj is current
+    _remove(current)
   except TaskletExit:  # Let it pass silently.
-    assert _runnables.popleft() is tasklet_obj
+    assert tasklet_obj is current
+    _remove(current)
   except:
     exc_info = sys.exc_info()
-    assert _runnables.popleft() is tasklet_obj
+    assert tasklet_obj is current
     assert tasklet_obj is not main
-    if _runnables:  # Make main _runnables[0].
-      i = 0
-      for task in _runnables:
-        if task is main:
-          if i:
-            _runnables.rotate(-i)
-          break
-        i += 1
+    if tasklet_obj.next is tasklet_obj:  # Last runnable tasklet.
+      if main._channel_weak:
+        if main._channel_weak().balance < 0:
+          main.tempval = bomb(StopIteration, 'the main tasklet is receiving '
+                              'without a sender available.')
+        else:
+          main.tempval = bomb(StopIteration, 'the main tasklet is sending '
+                              'without a receiver available.')
+        _remove(current)  # And insert main.
+        # If runnables is empty, let the error be ignored here, and
+        # so a StopIteration being raised in the main tasklet, see
+        # LazyWorker in StacklessTest.testLastchannel.
+      else:
+        _remove(current)  # And insert main.
+        main.tempval = bomb(*exc_info)
+    else:  # Make main current.
+      if main._channel_weak:
+        _remove_from_channel(main)
+      _insert_after_current(main)
+      _remove(current)
       main.tempval = bomb(*exc_info)
-      if _runnables[0] is not main:
-        _runnables.appendleft(main)
-    elif main._channel_weak:
-      # If _runnables is empty, let the error be ignored here, and
-      # so a StopIteration being raised in the main tasklet, see
-      # LazyWorker in StacklessTest.testLastchannel.
-      main.tempval = None
   finally:
-    if not _runnables:
-      _runnables.append(main)
     # This make sure that flow will continue in the correct greenlet,
     # e.g. the next in the runnables list.
-    tasklet_obj._greenlet.parent = _runnables[0]._greenlet
+    tasklet_obj._greenlet.parent = current._greenlet
     tasklet_obj.alive = False
     tasklet_obj.tempval = None
     del tasklet_obj._greenlet
     del tasklet_obj._func
-    del tasklet_obj.data
+    del tasklet_obj._data
     # Keeping forever: del tasklet_obj.tempval
     # Keeping forever: del tasklet_obj._channel_weak
 
@@ -149,19 +196,25 @@ class tasklet(object):
   """
 
   __slots__ = ['_greenlet', '_func', 'alive', '_channel_weak', 'tempval',
-               'data', '__weakref__']
+               '_data', '__weakref__', 'prev', 'next']
 
-  def __init__(self, f = None, greenlet = None, alive = False):
-    self._greenlet = greenlet
-    self._func = f
-    self.alive = alive
-    self.data = None
+  def __init__(self, func = None):
+    self._greenlet = None
+    self._func = func
+    self.alive = False
+    self._data = None
     self.tempval = None
     self._channel_weak = None
+    self.prev = None
+    self.next = None
 
   @property
   def blocked(self):
     return bool(self._channel_weak)
+
+  @property
+  def scheduled(self):
+    return bool(self.next or self._channel_weak)
 
   @property
   def _channel(self):
@@ -181,21 +234,23 @@ class tasklet(object):
     and the 'task' is first scheduled to run"""
     if self._func is None:
       raise TypeError('tasklet function must be a callable')
-    assert self not in _runnables
+    if getattr(self, '_greenlet', None):
+      raise TypeError('cframe function must be a callable')
+    #DEBUG assert self.next is None
     # TODO(pts): Do we properly avoid circular references to self here?
     self._greenlet = greenlet(_tasklet_wrapper)
     # We need this initial switch so the function enters its `try ...
     # finally' block. We get back control very soon after the initial switch.
     self._greenlet.switch(self, [greenlet.getcurrent()], args, kwargs)
     self.alive = True
-    _runnables.append(self)
+    _insert_before_current(self)
     return self
 
   def kill(self):
-    _throw(self, TaskletExit)
+    return _throw(self, TaskletExit)
 
   def raise_exception(self, exc_class, *args):
-    _throw(self, exc_class(*args))
+    return _throw(self, exc_class(*args))
 
   def throw(self, typ, val, tb):
     """Raise the specified exception with the specified traceback.
@@ -205,16 +260,18 @@ class tasklet(object):
     then tasklet_obj.run() -- or send the bomb in a channel if the
     target tasklet is blocked on receiving from.
     """
-    _throw(self, typ, val, tb)
+    return _throw(self, typ, val, tb)
 
   def __str__(self):
     return repr(self)
 
   def __repr__(self):
-    if hasattr(self, 'name'):
-      _id = self.name
+    if not hasattr(self, '_func'):
+      _id = 'dead'
+    elif getattr(self._func, '__name__', None):
+      _id = self._func.__name__
     else:
-      _id = str(self._func)
+      _id = self._func
     return '<tasklet %s at 0x%0x>' % (_id, id(self))
 
   def is_main(self):
@@ -227,17 +284,16 @@ class tasklet(object):
     the number or runnable (non-blocked) tasklets. The implementation in
     Stackless has O(1) complexity.
     """
-    if self is _runnables[0]:
+    global current
+    if self is current:
       raise RuntimeError('The current tasklet cannot be removed. '
                          'Use t=tasklet().capture()')
     if self._channel_weak:
       raise RuntimeError('You cannot remove a blocked tasklet.')
-    i = 0
-    for task in _runnables:
-      if task is self:
-        del _runnables[i]
-        return self
-      i += 1
+    if self.next:
+      self.next.prev = self.prev
+      self.prev.next = self.next
+      self.next = self.prev = None
     return self
 
   def insert(self):
@@ -251,73 +307,8 @@ class tasklet(object):
       raise RuntimeError('You cannot run an unbound(dead) tasklet')
     if self._channel_weak:
       raise RuntimeError('You cannot run a blocked tasklet')
-    if self not in _runnables:
-      _runnables.append(self)
-
-  @property
-  def next(self):
-    """Return the next tasklet in the doubly-linked list.
-
-    Stackless implements this method for all tasklets. This implementation
-    raises a NotImplementedError unless self is stackless.getcurrent() or
-    self is the last runnable tasklet.
-    """
-    if self is _runnables[0]:
-      return _runnables[len(_runnables) > 1]
-    elif self is _runnables[-1]:
-      return _runnables[0]
-    elif self._channel_weak:
-      channel_obj = self._channel_weak()
-      assert channel_obj
-      # TODO(pts): Implement this with a linked list.
-      queue = channel_obj._queue
-      if self is queue[-1]:
-        return None
-      i = iter(queue)
-      for tasklet_obj in i:
-        if self is tasklet_obj:
-          # No StopIteration because the ifs above.
-          return i.next()
-      assert 0, 'blocked tasklet missing from its own channel'
-    elif is_slow_prev_next_ok:
-      i = iter(_runnables)
-      for tasklet_obj in i:
-        if self is tasklet_obj:
-          # No StopIteration because the ifs above.
-          return i.next()
-    else:
-      raise NotImplementedError('tasklet.next for not current or last')
-
-  @property
-  def prev(self):
-    """Return the next tasklet in the doubly-linked list.
-
-    Stackless implements this method for all tasklets. This implementation
-    raises a NotImplementedError unless self is stackless.getcurrent() or
-    self is the last runnable tasklet.
-    """
-    if self is _runnables[0]:
-      return _runnables[-1]
-    elif self is _runnables[-1]:
-      return _runnables[-2]
-    elif self._channel_weak:
-      channel_obj = self._channel_weak()
-      assert channel_obj
-      queue = channel_obj._queue
-      prev_tasklet_obj = None
-      for tasklet_obj in channel_obj._queue:
-        if self is tasklet_obj:
-          return prev_tasklet_obj
-        prev_tasklet_obj = tasklet_obj
-      assert 0, 'blocked tasklet missing from its own channel'
-    elif is_slow_prev_next_ok:
-      prev_tasklet_obj = None
-      for tasklet_obj in _runnables:
-        if self is tasklet_obj:
-          return prev_tasklet_obj
-        prev_tasklet_obj = tasklet_obj
-    else:
-      raise NotImplementedError('tasklet.prev for not current or last')
+    if self.next is None:
+      _insert_before_current(self)
 
   def run(self):
     """Switch execution to self, make it stackless.getcurrent().
@@ -330,99 +321,155 @@ class tasklet(object):
       raise RuntimeError('You cannot run a blocked tasklet')
     if not self.alive:
       raise RuntimeError('You cannot run an unbound(dead) tasklet')
-    i = 0
-    for task in _runnables:
-      if task is self:
-        if i:
-          _runnables.rotate(-i)
-          self._greenlet.switch()
-        return
-      i += 1
-    _runnables.appendleft(self)
-    self._greenlet.switch()
+    if self.next is None:
+      _insert_before_current(self)
+    return _schedule_to(self)
 
 
-main = tasklet(greenlet = greenlet.getcurrent(), alive = True)
+def main():  # Define function with __name__ for tasklet.__repr__.
+  assert 0
+current = main = tasklet(main)
+main._greenlet = greenlet.getcurrent()
+main.alive = True
+main.next = main.prev = main
 
-#all non-blocked tasks are in this queue
-#all tasks are only once in this queue
-#the current task is the first item in the queue
-_runnables = deque([main])
 
 def schedule(*args):
-  """Schedule the next tasks and puts the current task back at the queue of _runnables."""
-  current_tasklet = _runnables[0]
+  """Schedule the next tasks and puts the current task back at the queue of runnables."""
+  global current
   if args:
     if len(args) != 1:
       raise TypeError('schedule() takes at most 1 argument (%d given)' %
                       len(args))
-    current_tasklet.tempval = args[0]
+    current.tempval = args[0]
   else:
-    current_tasklet.tempval = current_tasklet
-  _runnables.rotate(-1)
-  _runnables[0]._greenlet.switch()
-  data = current_tasklet.tempval
-  current_tasklet.tempval = None
+    current.tempval = current
+  if current.next is current:
+    data = current.tempval
+    current.tempval = None
+  else:
+    tasklet_obj = current
+    current = current.next
+    current._greenlet.switch()
+    data = tasklet_obj.tempval
+    tasklet_obj.tempval = None
   if isinstance(data, bomb):
     raise data.type, data.value, data.traceback
   else:
     return data
+
 
 def schedule_remove(*args):
-  """makes stackless.getcurrent() not _runnables, schedules next tasks"""
-  current_tasklet = _runnables[0]
+  """Remove the current tasklet from the runnables, schedules next tasklet."""
   if args:
     if len(args) != 1:
       raise TypeError('schedule() takes at most 1 argument (%d given)' %
                       len(args))
-    current_tasklet.tempval = args[0]
+    current.tempval = args[0]
   else:
-    current_tasklet.tempval = _runnables[0]
-  _runnables.popleft()
-  if not _runnables:
-    _runnables.append(main)
-  _runnables[0]._greenlet.switch()
-  data = current_tasklet.tempval
-  current_tasklet.tempval = None
+    current.tempval = current
+  tasklet_obj = current
+  _remove(current)
+  current._greenlet.switch()
+  data = tasklet_obj.tempval
+  tasklet_obj.tempval = None
   if isinstance(data, bomb):
     raise data.type, data.value, data.traceback
   else:
     return data
 
 
-def _throw(task, typ, val=None, tb=None):
+def _throw(tasklet_obj, typ, val=None, tb=None):
   """Raise an exception in the tasklet, and run it.
 
   Please note that this implementation has O(r) complexity, where r is
   the number or runnable (non-blocked) tasklets. The implementation in
   Stackless has O(1) complexity.
   """
-  if not task.alive:
+  global current
+  if not tasklet_obj.alive:
     return
   # TODO(pts): Avoid circular parent chain exception here.
-  if (task is not _runnables[0] and
-      _runnables[0]._greenlet.parent is not task._greenlet):
-      task._greenlet.parent = _runnables[0]._greenlet
-  if not task._channel_weak:
-    i = 0
-    for task2 in _runnables:
-      if task2 is task:
-        if i:  # TODO(pts): Redesign to make these iterations O(1).
-          _runnables.rotate(-i)
-          task._greenlet.throw(typ, val, tb)
-          return
-        else:
-          raise typ, val, tb
-      i += 1
-  _runnables.appendleft(task)
-  task._greenlet.throw(typ, val, tb)
+  if tasklet_obj is current:
+    raise typ, val, tb
+  if (current._greenlet.parent is not tasklet_obj._greenlet):
+      tasklet_obj._greenlet.parent = current._greenlet
+  if tasklet_obj._channel_weak:
+    _remove_from_channel(tasklet_obj)
+  if tasklet_obj.next is None:
+    _insert_before_current(tasklet_obj)
+  current, tasklet_obj = tasklet_obj, current
+  current._greenlet.throw(typ, val, tb)
+  data = tasklet_obj.tempval
+  tasklet_obj.tempval = None
+  if isinstance(data, bomb):
+    raise data.type, data.value, data.traceback
+  else:
+    return data
+
+
+def _schedule_to(tasklet_obj):
+  global current
+  #DEBUG assert not tasklet_obj._weak_channel
+  #DEBUG assert tasklet_obj.next
+  if tasklet_obj is not current:
+    current, tasklet_obj = tasklet_obj, current
+    current._greenlet.switch()
+  data = tasklet_obj.tempval
+  tasklet_obj.tempval = None
+  if isinstance(data, bomb):
+    raise data.type, data.value, data.traceback
+  else:
+    return data
+
+
+def _remove_from_channel(tasklet_obj):
+  """Remove tasklet_obj from the channel it is waiting on.
+
+  Also set tasklet_obj.next = tasklet_obj.prev = None.
+  """
+  if tasklet_obj._channel_weak:
+    channel_obj = tasklet_obj._channel_weak()
+    assert channel_obj
+    if tasklet_obj is channel_obj._queue_last:
+      channel_obj._queue_last = None
+      if tasklet_obj is channel_obj.queue:
+        channel_obj.queue = tasklet_obj.next
+      else:
+        tasklet_obj.prev.next = None
+    elif tasklet_obj is channel_obj.queue:
+      channel_obj.queue = tasklet_obj.next
+      if tasklet_obj.next:
+        tasklet_obj.next.prev = None
+    else:
+      tasklet1 = channel_obj.queue
+      assert tasklet1, 'empty channel'
+      tasklet2 = tasklet1.next
+      while tasklet2:
+        if tasklet2 is tasklet_obj:
+          break
+        tasklet1 = tasklet2
+        tasklet2 = tasklet2.next
+      assert tasklet2, 'tasklet not found in channel'
+      tasklet1.next = tasklet_obj.next
+      tasklet_obj.next.prev = tasklet1  # tasklet_obj.next is not None here.
+    tasklet_obj.next = tasklet_obj.prev = None
+    tasklet_obj._channel_weak = None
+
+    if channel_obj.balance < 0:
+      channel_obj.balance += 1
+    elif channel_obj.balance > 0:
+      channel_obj.balance -= 1
+    else: 
+      assert 0, 'tasklet on zero-balance channel'
+
 
 def _receive(channel_obj, preference):
   #Receiving 1):
   #A tasklet wants to receive and there is
   #a queued sending tasklet. The receiver takes
   #its data from the sender, unblocks it,
-  #and inserts it at the end of the _runnabless.
+  #and inserts it at the end of the runnables.
   #The receiver continues with no switch.
   #Receiving 2):
   #A tasklet wants to receive and there is
@@ -432,59 +479,60 @@ def _receive(channel_obj, preference):
   #handle the rest through "Sending 1)".
   if channel_obj.balance > 0: #some sender
     channel_obj.balance -= 1
-    sender = channel_obj._queue.popleft()
-    sender._channel_weak = None
-    data, sender.data = sender.data, None
-    if preference >= 0:
-      #sender preference
-      _runnables.rotate(-1)
-      _runnables.appendleft(sender)
-      _runnables.rotate(1)
-      schedule()
+    sender = channel_obj.queue
+    channel_obj.queue = sender.next
+    if sender.next:
+      channel_obj.queue = sender.next
+      sender.next = sender.prev = None
     else:
-      #receiver preference
-      _runnables.append(sender)
+      #DEBUG assert sender is channel_obj._queue_last
+      channel_obj._queue_last = None
+
+    sender._channel_weak = None
+    data, sender._data = sender._data, None
+    if preference >= 0:  # Prefer the sender.
+      _insert_after_current(sender)
+      _schedule_to(sender)  # TODO(pts): How do we use tempval here?
+    else:
+      _insert_before_current(sender)
   else: #no sender
-    if len(_runnables) == 1 and (_runnables[0] is main or main._channel_weak):
+    if current.next is current and (current is main or main._channel_weak):
       # Strange exception name.
       raise RuntimeError('Deadlock: the last runnable tasklet '
                          'cannot be blocked.')
-    current = _runnables.popleft()
-    channel_obj._queue.append(current)
+    tasklet_obj = current
+    _remove(current)
+    tasklet_obj.tempval = None
+    tasklet_obj._channel_weak = weakref.ref(channel_obj)
+    if channel_obj.queue:
+      channel_obj._queue_last.next = tasklet_obj
+    else:
+      channel_obj.queue = tasklet_obj
+    tasklet_obj.prev = channel_obj._queue_last
+    tasklet_obj.next = None
+    channel_obj._queue_last = tasklet_obj
     channel_obj.balance -= 1
-    current._channel_weak = weakref.ref(channel_obj)
-    if not _runnables:
-      _runnables.append(main)
-    try:
-      _runnables[0]._greenlet.switch()
-      if current._channel_weak:
-        assert current is main
-        if isinstance(current.tempval, bomb):
-          bomb_obj, current.tempval = current.tempval, None
-          raise bomb_obj[0], bomb_obj[1], bomb_obj[2]
-        else:
-          assert current.tempval is None
-          raise StopIteration('the main tasklet is receiving '
-                              'without a sender available.')
-    except:
-      channel_obj._queue.remove(current)
-      channel_obj.balance += 1
-      current._channel_weak = None
-      raise
-
-    data, current.data = current.data, None
+    current._greenlet.switch()  # This may raise an exception (from _throw).
+    # Whoever has insterted us back is responsible for removing us from the
+    # channel by now.
+    assert tasklet_obj._channel_weak is None, 'receive still has channel'
+    if isinstance(tasklet_obj.tempval, bomb):
+      bomb_obj, tasklet_obj.tempval = tasklet_obj.tempval, None
+      raise bomb_obj.type, bomb_obj.value, bomb_obj.traceback
+    data, current._data = current._data, None
 
   if isinstance(data, bomb):
     raise data.type, data.value, data.traceback
   else:
     return data
 
+
 def _send(channel_obj, data, preference):
   #  Sending 1):
   #  A tasklet wants to send and there is
   #  a queued receiving tasklet. The sender puts
   #  its data into the receiver, unblocks it,
-  #  and inserts it at the top of the _runnabless.
+  #  and inserts it at the top of the runnables.
   #  The receiver is scheduled.
   #  Sending 2):
   #  A tasklet wants to send and there is
@@ -494,51 +542,62 @@ def _send(channel_obj, data, preference):
   #  handle the rest through "Receiving 1)".
   if channel_obj.balance < 0: #some receiver
     channel_obj.balance += 1
-    receiver = channel_obj._queue.popleft()
-    receiver.data = data
+    receiver = channel_obj.queue
+    channel_obj.queue = receiver.next
+    if receiver.next:
+      channel_obj.queue = receiver.next
+      receiver.next = receiver.prev = None
+    else:
+      #DEBUG assert receiver is channel_obj._queue_last
+      channel_obj._queue_last = None
+
+    receiver._data = data
     receiver._channel_weak = None
-    #put receiver just after current task in _runnables and schedule (which will pick it up)
-    if preference < 0: #receiver pref
-      _runnables.rotate(-1)
-      _runnables.appendleft(receiver)
-      _runnables.rotate(1)
-      schedule()
-    else: #sender pref
-      _runnables.append(receiver)
-  else: #no receiver
-    if len(_runnables) == 1 and (_runnables[0] is main or main._channel_weak):
+    # Put receiver just after the current tasklet in runnables and schedule
+    # (which will pick it up).
+    if preference < 0:  # Prefer the receiver.
+      _insert_after_current(receiver)
+      _schedule_to(receiver)
+    else:
+      _insert_before_current(receiver)
+  else: # No receiver.
+    if current.next is current and (current is main or main._channel_weak):
       raise RuntimeError('Deadlock: the last runnable tasklet '
                          'cannot be blocked.')
-    current = _runnables.popleft()
-    channel_obj._queue.append(current)
+    tasklet_obj = current
+    _remove(current)
+    tasklet_obj.tempval = None
+    tasklet_obj._data = data
+    tasklet_obj._channel_weak = weakref.ref(channel_obj)
+    if channel_obj.queue:
+      channel_obj._queue_last.next = tasklet_obj
+    else:
+      channel_obj.queue = tasklet_obj
+    tasklet_obj.prev = channel_obj._queue_last
+    tasklet_obj.next = None
+    channel_obj._queue_last = tasklet_obj
     channel_obj.balance += 1
-    current.data = data
-    current._channel_weak = weakref.ref(channel_obj)
-    if not _runnables:
-      _runnables.append(main)
-    try:
-      _runnables[0]._greenlet.switch()
-      if current._channel_weak:
-        assert current is main
-        if isinstance(current.tempval, bomb):
-          bomb_obj, current.tempval = current.tempval, None
-          raise bomb_obj[0], bomb_obj[1], bomb_obj[2]
-        else:
-          assert current.tempval is None
-          raise StopIteration('the main tasklet is sending '
-                              'without a receiver available.')
-    except:
-      channel_obj._queue.remove(current)
-      channel_obj.balance -= 1
-      current.data = None
-      current._channel_weak = None
-      raise
+    current._greenlet.switch()  # This may raise an exception (from _throw).
+    # Whoever has insterted us back is responsible for removing us from the
+    # channel by now.
+    assert tasklet_obj._channel_weak is None
+    if isinstance(tasklet_obj.tempval, bomb):
+      bomb_obj, tasklet_obj.tempval = tasklet_obj.tempval, None
+      raise bomb_obj.type, bomb_obj.value, bomb_obj.traceback
+
 
 def getruncount():
-  return len(_runnables)
+  i = 1
+  tasklet_obj = current.next
+  while tasklet_obj is not current:
+    i += 1
+    tasklet_obj = tasklet_obj.next
+  return i
+
 
 def getcurrent():
-  return _runnables[0]
+  return current
+
 
 def getmain():
   return main
