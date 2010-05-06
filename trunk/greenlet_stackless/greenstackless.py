@@ -36,13 +36,13 @@ Limitations of this emulation module over real Stackless:
 """
 
 try:
-    from py.magic import greenlet #as of version 1.0 of py, it does not supply greenlets anymore
+  from py.magic import greenlet #as of version 1.0 of py, it does not supply greenlets anymore
 except ImportError:
-    from greenlet import greenlet #there is an older package containing just the greenlet lib
+  from greenlet import greenlet #there is an older package containing just the greenlet lib
 
 assert hasattr(greenlet, 'throw'), (
-    'wrong version of greenlet loaded; please get greenlet from svn co '
-    'http://codespeak.net/svn/py/release/0.9.x/py/c-extension/greenlet')
+  'wrong version of greenlet loaded; please get greenlet from svn co '
+  'http://codespeak.net/svn/py/release/0.9.x/py/c-extension/greenlet')
 
 import sys
 
@@ -55,37 +55,77 @@ __builtin__.TaskletExit = TaskletExit
 
 
 class bomb(object):
-    """used as a result value for sending exceptions trough a channel"""
-    def __init__(self, exc_type = None, exc_value = None, exc_traceback = None):
-        self.type = exc_type
-        self.value = exc_value
-        self.traceback = exc_traceback
+  """Used as a result value for sending exceptions trough a channel."""
 
-    def raise_(self):
-        raise self.type, self.value, self.traceback
+  __slots__ = ['type', 'value', 'traceback']
+
+  def __init__(self, exc_type = None, exc_value = None, exc_traceback = None):
+    self.type = exc_type
+    self.value = exc_value
+    self.traceback = exc_traceback
 
 class channel(object):
-    """Implementation of stackless's channel object."""
+  """Implementation of stackless's channel object."""
 
-    __slots__ = ['balance', 'preference', 'queue']
+  __slots__ = ['balance', 'preference', 'queue']
 
-    def __init__(self):
-        self.balance = 0
-        self.preference = -1
-        self.queue = deque()
+  def __init__(self):
+    self.balance = 0
+    self.preference = -1
+    self.queue = deque()
 
-    def receive(self):
-        return _scheduler._receive(self, self.preference)
+  def receive(self):
+    return _receive(self, self.preference)
 
-    def send(self, data):
-        return _scheduler._send(self, data, self.preference)
+  def send(self, data):
+    return _send(self, data, self.preference)
 
-    def send_exception(self, exc_type, *args):
-        self.send(bomb(exc_type, exc_type(*args)))
+  def send_exception(self, exc_type, *args):
+    self.send(bomb(exc_type, exc_type(*args)))
 
-    def send_sequence(self, iterable):
-        for item in iterable:
-            self.send(item)
+  def send_sequence(self, iterable):
+    for item in iterable:
+      self.send(item)
+
+
+def _tasklet_wrapper(tasklet_obj, switch_back_ary, args, kwargs):
+  try:
+    switch_back_ary.pop().switch()
+    tasklet_obj.func(*args, **kwargs)
+    assert _runnables.popleft() is tasklet_obj
+  except TaskletExit:  # Let it pass silently.
+    assert _runnables.popleft() is tasklet_obj
+  except:
+    exc_info = sys.exc_info()
+    assert _runnables.popleft() is tasklet_obj
+    assert tasklet_obj is not main
+    if _runnables:  # Make main _runnables[0].
+      i = 0
+      for task in _runnables:
+        if task is main:
+          if i:
+            _runnables.rotate(-i)
+          break
+        i += 1
+      main.tempval = bomb(*exc_info)
+      if _runnables[0] is not main:
+        _runnables.appendleft(main)
+    elif main.blocked:
+      # If _runnables is empty, let the error be ignored here, and
+      # so a StopIteration being raised in the main tasklet, see
+      # LazyWorker in StacklessTest.testLastchannel.
+      main.tempval = None
+  finally:
+    if not _runnables:
+      _runnables.append(main)
+    # This make sure that flow will continue in the correct greenlet,
+    # e.g. the next in the runnables list.
+    tasklet_obj._greenlet.parent = _runnables[0]._greenlet
+    tasklet_obj.alive = False
+    tasklet_obj.tempval = None
+    del tasklet_obj._greenlet
+    del tasklet_obj.func
+    del tasklet_obj.data
 
 
 is_slow_prev_next_ok = False
@@ -93,382 +133,367 @@ is_slow_prev_next_ok = False
 
 
 class tasklet(object):
-    """Implementation of stackless's tasklet object."""
+  """Implementation of stackless's tasklet object.
 
-    __slots__ = ['greenlet', 'func', 'alive', 'blocked', 'tempval', 'data']
+  TODO(pts): Implement tasklet._channel as a weak reference.
+  """
 
-    def __init__(self, f = None, greenlet = None, alive = False):
-        self.greenlet = greenlet
-        self.func = f
-        self.alive = alive
-        self.blocked = False
-        self.data = None
-        self.tempval = None
+  __slots__ = ['_greenlet', 'func', 'alive', 'blocked', 'tempval', 'data']
 
-    def bind(self, func):
-        if not callable(func):
-            raise TypeError('tasklet function must be a callable')
-        self.func = func
+  def __init__(self, f = None, greenlet = None, alive = False):
+    self._greenlet = greenlet
+    self.func = f
+    self.alive = alive
+    self.blocked = False
+    self.data = None
+    self.tempval = None
 
-    def __call__(self, *args, **kwargs):
-        """this is where the new task starts to run, e.g. it is where the greenlet is created
-        and the 'task' is first scheduled to run"""
-        if self.func is None:
-            raise TypeError('tasklet function must be a callable')
+  def bind(self, func):
+    if not callable(func):
+      raise TypeError('tasklet function must be a callable')
+    self.func = func
 
-        def _func(*_args, **_kwargs):
-            try:
-                self.func(*args, **kwargs)
-            except TaskletExit:
-                pass #let it pass silently
-            except:
-                assert self is not main
-                # Stackless aborts the whole process upon an unhandled
-                # exception in the tasklet, so do we.
-                main.throw(*sys.exc_info())
-            finally:
-                assert _scheduler.current == self
-                _scheduler.remove(self)
-                if _scheduler._runnable: #there are more tasklets scheduled to run next
-                    #this make sure that flow will continue in the correct greenlet, e.g. the next in the schedule
-                    self.greenlet.parent = _scheduler._runnable[0].greenlet
-                self.alive = False
-                self.tempval = None
-                del self.greenlet
-                del self.func
-                del self.data
+  def __call__(self, *args, **kwargs):
+    """this is where the new task starts to run, e.g. it is where the greenlet is created
+    and the 'task' is first scheduled to run"""
+    if self.func is None:
+      raise TypeError('tasklet function must be a callable')
+    assert self not in _runnables
+    # TODO(pts): Do we properly avoid circular references to self here?
+    self._greenlet = greenlet(_tasklet_wrapper)
+    # We need this initial switch so the function enters its `try ...
+    # finally' block. We get back control very soon after the initial switch.
+    self._greenlet.switch(self, [greenlet.getcurrent()], args, kwargs)
+    self.alive = True
+    _runnables.append(self)
+    return self
 
-        self.greenlet = greenlet(_func)
-        self.alive = True
-        _scheduler.append(self)
+  def kill(self):
+    _throw(self, TaskletExit)
+
+  def raise_exception(self, exc_class, *args):
+    _throw(self, exc_class(*args))
+
+  def throw(self, typ, val, tb):
+    """Raise the specified exception with the specified traceback.
+
+    Please note there is no such method tasklet.throw in Stackless. In
+    stackless, one can use tasklet_obj.tempval = stackless.bomb(...), and
+    then tasklet_obj.run() -- or send the bomb in a channel if the
+    target tasklet is blocked on receiving from.
+    """
+    _throw(self, typ, val, tb)
+
+  def __str__(self):
+    return repr(self)
+
+  def __repr__(self):
+    if hasattr(self, 'name'):
+      _id = self.name
+    else:
+      _id = str(self.func)
+    return '<tasklet %s at 0x%0x>' % (_id, id(self))
+
+  def is_main(self):
+    return self is main
+
+  def remove(self):
+    """Remove self from the main scheduler queue.
+
+    Please note that this implementation has O(r) complexity, where r is
+    the number or runnable (non-blocked) tasklets. The implementation in
+    Stackless has O(1) complexity.
+    """
+    if self is _runnables[0]:
+      raise RuntimeError('The current tasklet cannot be removed. '
+                         'Use t=tasklet().capture()')
+    if self.blocked:
+      raise RuntimeError('You cannot remove a blocked tasklet.')
+    i = 0
+    for task in _runnables:
+      if task is self:
+        del _runnables[i]
         return self
+      i += 1
+    return self
 
-    def kill(self):
-        _scheduler.throw(self, TaskletExit)
+  def insert(self):
+    """Add self to the end of the scheduler queue, unless already in.
 
-    def raise_exception(self, exc_class, *args):
-        _scheduler.throw(self, exc_class(*args))
+    Please note that this implementation has O(r) complexity, where r is
+    the number or runnable (non-blocked) tasklets. The implementation in
+    Stackless has O(1) complexity.
+    """
+    if not self.alive:
+      raise RuntimeError('You cannot run an unbound(dead) tasklet')
+    if self.blocked:
+      raise RuntimeError('You cannot run a blocked tasklet')
+    if self not in _runnables:
+      _runnables.append(self)
 
-    def throw(self, typ, val, tb):
-        """Raise the specified exception with the specified traceback.
+  @property
+  def next(self):
+    """Return the next tasklet in the doubly-linked list.
 
-        Please note there is no such method tasklet.throw in Stackless. In
-        stackless, one can use tasklet_obj.tempval = stackless.bomb(...), and
-        then tasklet_obj.run() -- or send the bomb in a channel if the
-        target tasklet is blocked on receiving from.
-        """
-        _scheduler.throw(self, typ, val, tb)
+    Stackless implements this method for all tasklets. This implementation
+    raises a NotImplementedError unless self is stackless.getcurrent() or
+    self is the last runnable tasklet.
+    """
+    if self is _runnables[0]:
+      return _runnables[len(_runnables) > 1]
+    elif self is _runnables[-1]:
+      return _runnables[0]
+    elif is_slow_prev_next_ok:
+      i = iter(_runnables)
+      for tasklet_obj in i:
+        if self is tasklet_obj:
+          # No StopIteration because the ifs above.
+          return i.next()
+    else:
+      raise NotImplementedError('tasklet.next for not current or last')
 
-    def __str__(self):
-        return repr(self)
+  @property
+  def prev(self):
+    """Return the next tasklet in the doubly-linked list.
 
-    def __repr__(self):
-        if hasattr(self, 'name'):
-            _id = self.name
-        else:
-            _id = str(self.func)
-        return '<tasklet %s at 0x%0x>' % (_id, id(self))
+    Stackless implements this method for all tasklets. This implementation
+    raises a NotImplementedError unless self is stackless.getcurrent() or
+    self is the last runnable tasklet.
+    """
+    if self is _runnables[0]:
+      return _runnables[-1]
+    elif self is _runnables[-1]:
+      return _runnables[-2]
+    elif is_slow_prev_next_ok:
+      prev_tasklet_obj = None
+      for tasklet_obj in _runnables:
+        if self is tasklet_obj:
+          return prev_tasklet_obj
+        prev_tasklet_obj = tasklet_obj
+    else:
+      raise NotImplementedError('tasklet.prev for not current or last')
 
-    def is_main(self):
-        return self is main
+  def run(self):
+    """Switch execution to self, make it stackless.getcurrent().
 
-    def remove(self):
-        """Remove self from the main scheduler queue.
-
-        Please note that this implementation has O(r) complexity, where r is
-        the number or runnable (non-blocked) tasklets. The implementation in
-        Stackless has O(1) complexity.
-        """
-        if self.blocked:
-            raise RuntimeError('You cannot remove a blocked tasklet.')
-        i = 0
-        for task in _scheduler._runnable:
-            if task is self:
-                del _scheduler._runnable[i]
-                return self
-            i += 1
-        return self
-
-    def insert(self):
-        """Add self to the end of the scheduler queue, unless already in.
-
-        Please note that this implementation has O(r) complexity, where r is
-        the number or runnable (non-blocked) tasklets. The implementation in
-        Stackless has O(1) complexity.
-        """
-        if not self.alive:
-            raise RuntimeError('You cannot run an unbound(dead) tasklet')
-        if self.blocked:
-            raise RuntimeError('You cannot run a blocked tasklet')
-        if self not in _scheduler._runnable:
-            _scheduler._runnable.append(self)
-
-    @property
-    def next(self):
-        """Return the next tasklet in the doubly-linked list.
-
-        Stackless implements this method for all tasklets. This implementation
-        raises a NotImplementedError unless self is scheduler.getcurrent() or
-        self is the last runnable tasklet.
-        """
-        runnable = _scheduler._runnable
-        if self is runnable[0]:
-            return runnable[len(runnable) > 1]
-        elif self is runnable[-1]:
-            return runnable[0]
-        elif is_slow_prev_next_ok:
-            i = iter(runnable)
-            for tasklet_obj in i:
-                if self is tasklet_obj:
-                    # No StopIteration because the ifs above.
-                    return i.next()
-        else:
-            raise NotImplementedError('tasklet.next for not current or last')
-
-    @property
-    def prev(self):
-        """Return the next tasklet in the doubly-linked list.
-
-        Stackless implements this method for all tasklets. This implementation
-        raises a NotImplementedError unless self is scheduler.getcurrent() or
-        self is the last runnable tasklet.
-        """
-        runnable = _scheduler._runnable
-        if self is runnable[0]:
-            return runnable[-1]
-        elif self is runnable[-1]:
-            return runnable[-2]
-        elif is_slow_prev_next_ok:
-            prev_tasklet_obj = None
-            for tasklet_obj in runnable:
-                if self is tasklet_obj:
-                    return prev_tasklet_obj
-                prev_tasklet_obj = tasklet_obj
-        else:
-            raise NotImplementedError('tasklet.prev for not current or last')
-
-    def run(self):
-        """Switch execution to self, make it stackless.getcurrent().
-
-        Please note that this implementation has O(r) complexity, where r is
-        the number or runnable (non-blocked) tasklets. The implementation in
-        Stackless has O(1) complexity.
-        """
-        if self.blocked:
-            raise RuntimeError('You cannot run a blocked tasklet')
-        if not self.alive:
-            raise RuntimeError('You cannot run an unbound(dead) tasklet')
-        runnable = _scheduler._runnable
-        i = 0
-        for task in runnable:
-            if task is self:
-                if i:
-                    runnable.rotate(-i)
-                    self.greenlet.switch()
-                return
-            i += 1
-        runnable.appendleft(self)
-        self.greenlet.switch()
+    Please note that this implementation has O(r) complexity, where r is
+    the number or runnable (non-blocked) tasklets. The implementation in
+    Stackless has O(1) complexity.
+    """
+    if self.blocked:
+      raise RuntimeError('You cannot run a blocked tasklet')
+    if not self.alive:
+      raise RuntimeError('You cannot run an unbound(dead) tasklet')
+    i = 0
+    for task in _runnables:
+      if task is self:
+        if i:
+          _runnables.rotate(-i)
+          self._greenlet.switch()
+        return
+      i += 1
+    _runnables.appendleft(self)
+    self._greenlet.switch()
 
 
 main = tasklet(greenlet = greenlet.getcurrent(), alive = True)
 
-
-class scheduler(object):
-    def __init__(self):
-        #all non blocked tasks are in this queue
-        #all tasks are only once in this queue
-        #the current task is the first item in the queue
-        self._runnable = deque([main])
-
-    def schedule(self, *args):
-        """schedules the next tasks and puts the current task back at the queue of runnables"""
-        runnable = self._runnable
-        current_tasklet = runnable[0]
-        if args:
-          if len(args) != 1:
-            raise TypeError('schedule() takes at most 1 argument (%d given)' %
-                            len(args))
-          current_tasklet.tempval = args[0]
-        else:
-          current_tasklet.tempval = current_tasklet
-        runnable.rotate(-1)
-        runnable[0].greenlet.switch()
-        retval = current_tasklet.tempval
-        current_tasklet.tempval = None
-        return retval
-
-    def schedule_remove(self, *args):
-        """makes stackless.getcurrent() not runnable, schedules next tasks"""
-        runnable = self._runnable
-        current_tasklet = runnable[0]
-        if args:
-          if len(args) != 1:
-            raise TypeError('schedule() takes at most 1 argument (%d given)' %
-                            len(args))
-          current_tasklet.tempval = args[0]
-        else:
-          current_tasklet.tempval = runnable[0]
-        if len(runnable) > 1:
-            runnable.popleft()
-            runnable[0].greenlet.switch()
-        retval = current_tasklet.tempval
-        current_tasklet.tempval = None
-        return retval
-
-    def schedule_block(self):
-        """blocks the current task and schedules next"""
-        self._runnable.popleft()
-        next_task = self._runnable[0]
-        next_task.greenlet.switch()
-
-    def throw(self, task, typ, val=None, tb=None):
-        """Raise an exception in the tasklet, and run it.
-
-        Please note that this implementation has O(r) complexity, where r is
-        the number or runnable (non-blocked) tasklets. The implementation in
-        Stackless has O(1) complexity.
-        """
-        if not task.alive: return #this is what stackless does
-        runnable = self._runnable
-        # TODO(pts): Avoid cyclic parent chain exception here.
-        if (task is not runnable[0] and
-            runnable[0].greenlet.parent is not task.greenlet):
-            task.greenlet.parent = runnable[0].greenlet
-        if not task.blocked:
-            i = 0
-            for task2 in runnable:
-                if task2 is task:
-                    if i:
-                        runnable.rotate(-i)
-                        task.greenlet.throw(typ, val, tb)
-                        return
-                    else:
-                        raise typ, val, tb
-                i += 1
-        runnable.appendleft(task)
-        task.greenlet.throw(typ, val, tb)
-
-    def _receive(self, channel, preference):
-        #Receiving 1):
-        #A tasklet wants to receive and there is
-        #a queued sending tasklet. The receiver takes
-        #its data from the sender, unblocks it,
-        #and inserts it at the end of the runnables.
-        #The receiver continues with no switch.
-        #Receiving 2):
-        #A tasklet wants to receive and there is
-        #no queued sending tasklet.
-        #The receiver will become blocked and inserted
-        #into the queue. The next sender will
-        #handle the rest through "Sending 1)".
-        if channel.balance > 0: #some sender
-            channel.balance -= 1
-            sender = channel.queue.popleft()
-            sender.blocked = False
-            data, sender.data = sender.data, None
-            if preference >= 0:
-                #sender preference
-                self._runnable.rotate(-1)
-                self._runnable.appendleft(sender)
-                self._runnable.rotate(1)
-                self.schedule()
-            else:
-                #receiver preference
-                self._runnable.append(sender)
-        else: #no sender
-            current = self._runnable[0]
-            channel.queue.append(current)
-            channel.balance -= 1
-            current.blocked = True
-            try:
-                self.schedule_block()
-            except:
-                channel.queue.remove(current)
-                channel.balance += 1
-                current.blocked = False
-                raise
-
-            data, current.data = current.data, None
-
-        if isinstance(data, bomb):
-            data.raise_()
-        else:
-            return data
-
-    def _send(self, channel, data, preference):
-        #  Sending 1):
-        #    A tasklet wants to send and there is
-        #    a queued receiving tasklet. The sender puts
-        #    its data into the receiver, unblocks it,
-        #    and inserts it at the top of the runnables.
-        #    The receiver is scheduled.
-        #  Sending 2):
-        #    A tasklet wants to send and there is
-        #    no queued receiving tasklet.
-        #    The sender will become blocked and inserted
-        #    into the queue. The next receiver will
-        #    handle the rest through "Receiving 1)".
-        #print 'send q', channel.queue
-        if channel.balance < 0: #some receiver
-            channel.balance += 1
-            receiver = channel.queue.popleft()
-            receiver.data = data
-            receiver.blocked = False
-            #put receiver just after current task in runnable and schedule (which will pick it up)
-            if preference < 0: #receiver pref
-                self._runnable.rotate(-1)
-                self._runnable.appendleft(receiver)
-                self._runnable.rotate(1)
-                self.schedule()
-            else: #sender pref
-                self._runnable.append(receiver)
-        else: #no receiver
-            current = self.current
-            channel.queue.append(current)
-            channel.balance += 1
-            current.data = data
-            current.blocked = True
-            try:
-                self.schedule_block()
-            except:
-                channel.queue.remove(current)
-                channel.balance -= 1
-                current.data = None
-                current.blocked = False
-                raise
-
-    def remove(self, task):
-        assert task.blocked or task in self._runnable
-        if task in self._runnable:
-            self._runnable.remove(task)
-
-    def append(self, task):
-        assert task not in self._runnable
-        self._runnable.append(task)
-
-    @property
-    def runcount(self):
-        return len(self._runnable)
-
-    @property
-    def current(self):
-        return self._runnable[0]
-
-#there is only 1 scheduler, this is it:
-_scheduler = scheduler()
-
-def getruncount():
-    return _scheduler.runcount
-
-def getcurrent():
-    return _scheduler.current
-
-def getmain():
-    return main
+#all non-blocked tasks are in this queue
+#all tasks are only once in this queue
+#the current task is the first item in the queue
+_runnables = deque([main])
 
 def schedule(*args):
-    return _scheduler.schedule(*args)
+  """Schedule the next tasks and puts the current task back at the queue of _runnables."""
+  current_tasklet = _runnables[0]
+  if args:
+    if len(args) != 1:
+      raise TypeError('schedule() takes at most 1 argument (%d given)' %
+                      len(args))
+    current_tasklet.tempval = args[0]
+  else:
+    current_tasklet.tempval = current_tasklet
+  _runnables.rotate(-1)
+  _runnables[0]._greenlet.switch()
+  data = current_tasklet.tempval
+  current_tasklet.tempval = None
+  if isinstance(data, bomb):
+    raise data.type, data.value, data.traceback
+  else:
+    return data
 
 def schedule_remove(*args):
-    return _scheduler.schedule_remove(*args)
+  """makes stackless.getcurrent() not _runnables, schedules next tasks"""
+  current_tasklet = _runnables[0]
+  if args:
+    if len(args) != 1:
+      raise TypeError('schedule() takes at most 1 argument (%d given)' %
+                      len(args))
+    current_tasklet.tempval = args[0]
+  else:
+    current_tasklet.tempval = _runnables[0]
+  _runnables.popleft()
+  if not _runnables:
+    _runnables.append(main)
+  _runnables[0]._greenlet.switch()
+  data = current_tasklet.tempval
+  current_tasklet.tempval = None
+  if isinstance(data, bomb):
+    raise data.type, data.value, data.traceback
+  else:
+    return data
+
+
+def _throw(task, typ, val=None, tb=None):
+  """Raise an exception in the tasklet, and run it.
+
+  Please note that this implementation has O(r) complexity, where r is
+  the number or runnable (non-blocked) tasklets. The implementation in
+  Stackless has O(1) complexity.
+  """
+  if not task.alive:
+    return
+  # TODO(pts): Avoid circular parent chain exception here.
+  if (task is not _runnables[0] and
+      _runnables[0]._greenlet.parent is not task._greenlet):
+      task._greenlet.parent = _runnables[0]._greenlet
+  if not task.blocked:
+    i = 0
+    for task2 in _runnables:
+      if task2 is task:
+        if i:  # TODO(pts): Redesign to make these iterations O(1).
+          _runnables.rotate(-i)
+          task._greenlet.throw(typ, val, tb)
+          return
+        else:
+          raise typ, val, tb
+      i += 1
+  _runnables.appendleft(task)
+  task._greenlet.throw(typ, val, tb)
+
+def _receive(channel, preference):
+  #Receiving 1):
+  #A tasklet wants to receive and there is
+  #a queued sending tasklet. The receiver takes
+  #its data from the sender, unblocks it,
+  #and inserts it at the end of the _runnabless.
+  #The receiver continues with no switch.
+  #Receiving 2):
+  #A tasklet wants to receive and there is
+  #no queued sending tasklet.
+  #The receiver will become blocked and inserted
+  #into the queue. The next sender will
+  #handle the rest through "Sending 1)".
+  if channel.balance > 0: #some sender
+    channel.balance -= 1
+    sender = channel.queue.popleft()
+    sender.blocked = False
+    data, sender.data = sender.data, None
+    if preference >= 0:
+      #sender preference
+      _runnables.rotate(-1)
+      _runnables.appendleft(sender)
+      _runnables.rotate(1)
+      schedule()
+    else:
+      #receiver preference
+      _runnables.append(sender)
+  else: #no sender
+    if len(_runnables) == 1 and (_runnables[0] is main or main.blocked):
+      # Strange exception name.
+      raise RuntimeError('Deadlock: the last runnable tasklet '
+                         'cannot be blocked.')
+    current = _runnables.popleft()
+    channel.queue.append(current)
+    channel.balance -= 1
+    current.blocked = True
+    if not _runnables:
+      _runnables.append(main)
+    try:
+      _runnables[0]._greenlet.switch()
+      if current.blocked:
+        assert current is main
+        if isinstance(current.tempval, bomb):
+          bomb_obj, current.tempval = current.tempval, None
+          raise bomb_obj[0], bomb_obj[1], bomb_obj[2]
+        else:
+          assert current.tempval is None
+          raise StopIteration('the main tasklet is receiving '
+                              'without a sender available.')
+    except:
+      channel.queue.remove(current)
+      channel.balance += 1
+      current.blocked = False
+      raise
+
+    data, current.data = current.data, None
+
+  if isinstance(data, bomb):
+    raise data.type, data.value, data.traceback
+  else:
+    return data
+
+def _send(channel, data, preference):
+  #  Sending 1):
+  #  A tasklet wants to send and there is
+  #  a queued receiving tasklet. The sender puts
+  #  its data into the receiver, unblocks it,
+  #  and inserts it at the top of the _runnabless.
+  #  The receiver is scheduled.
+  #  Sending 2):
+  #  A tasklet wants to send and there is
+  #  no queued receiving tasklet.
+  #  The sender will become blocked and inserted
+  #  into the queue. The next receiver will
+  #  handle the rest through "Receiving 1)".
+  #print 'send q', channel.queue
+  if channel.balance < 0: #some receiver
+    channel.balance += 1
+    receiver = channel.queue.popleft()
+    receiver.data = data
+    receiver.blocked = False
+    #put receiver just after current task in _runnables and schedule (which will pick it up)
+    if preference < 0: #receiver pref
+      _runnables.rotate(-1)
+      _runnables.appendleft(receiver)
+      _runnables.rotate(1)
+      schedule()
+    else: #sender pref
+      _runnables.append(receiver)
+  else: #no receiver
+    if len(_runnables) == 1 and (_runnables[0] is main or main.blocked):
+      raise RuntimeError('Deadlock: the last runnable tasklet '
+                         'cannot be blocked.')
+    current = _runnables.popleft()
+    channel.queue.append(current)
+    channel.balance += 1
+    current.data = data
+    current.blocked = True
+    if not _runnables:
+      _runnables.append(main)
+    try:
+      _runnables[0]._greenlet.switch()
+      if current.blocked:
+        assert current is main
+        if isinstance(current.tempval, bomb):
+          bomb_obj, current.tempval = current.tempval, None
+          raise bomb_obj[0], bomb_obj[1], bomb_obj[2]
+        else:
+          assert current.tempval is None
+          raise StopIteration('the main tasklet is sending '
+                              'without a receiver available.')
+    except:
+      channel.queue.remove(current)
+      channel.balance -= 1
+      current.data = None
+      current.blocked = False
+      raise
+
+def getruncount():
+  return len(_runnables)
+
+def getcurrent():
+  return _runnables[0]
+
+def getmain():
+  return main
