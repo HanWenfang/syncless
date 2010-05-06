@@ -233,6 +233,7 @@ cdef extern from "stackless_api.h":
     int PyTasklet_Alive(tasklet)
     tasklet PyStackless_GetCurrent()
     #tasklet PyTasklet_New(type type_type, object func);
+cdef extern int PyTasklet_GetBlocked(tasklet task)
 cdef extern from "./coio_c_helper.h":
     # This involves a call to PyStackless_Schedule(None, 1).
     object coio_c_wait(event_t *ev, timeval *timeout)
@@ -332,37 +333,18 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
 #        print name
 #        PyStackless_Schedule(None, 0)  # remove
 
-def LinkHelper():
-    raise RuntimeError('LinkHelper tasklet called')
-
 # TODO(pts): Experiment calling these from Python instead of C.
-def MainLoop(tasklet link_helper_tasklet):
-    # !! fix Segmentation fault with tbug.py; needs link_helper_tasklet
+def MainLoop():
     #cdef PyTaskletObject *pprev
     #cdef PyTaskletObject *pnext
     cdef int loop_retval
-    cdef PyTaskletObject *ptemp
     cdef PyTaskletObject *p
-    cdef PyTaskletObject *c
-    o = PyStackless_GetCurrent()
-    # Using c instead of o below prevents reference counting.
-    c = <PyTaskletObject*>o
-    p = <PyTaskletObject*>link_helper_tasklet
-    assert c != p
+    cdef PyTaskletObject *m
+    cdef tasklet tm
+    tm = PyStackless_GetCurrent()
+    m = <PyTaskletObject*>tm
 
     while 1:  # `while 1' is more efficient in Pyrex than `while True'
-        #print 'MainLoop1', PyStackless_GetRunCount()
-        # !! TODO(pts): what if nothing registered and we're running MainLoop
-        # maybe loop has returned true and
-        # stackless.current.prev is stackless.current.
-
-        # We add link_helper_tasklet to the end of the queue. All other
-        # tasklets added by event_loop(...) below will be added between
-        # link_helper_tasklet
-        if p.next != NULL:
-            PyTasklet_Remove(link_helper_tasklet)
-        PyTasklet_Insert(link_helper_tasklet)
-
         # This runs 1 iteration of the libevent main loop: waiting for
         # I/O events and calling callbacks.
         #
@@ -377,9 +359,27 @@ def MainLoop(tasklet link_helper_tasklet):
         #
         # We compare against 2 because of stackless.current
         # (main_loop_tasklet) and link_helper_tasklet.
-        if PyStackless_GetRunCount() > 2:
+        if PyStackless_GetRunCount() > 1:
+            p = m.prev
+            # We must and do make sure that there are no non-local exits
+            # (e.g. exceptions) until the corresponding Py_DECREF.
+            Py_INCREF(<object>p)
             with nogil:
                 event_loop(EVLOOP_ONCE | EVLOOP_NONBLOCK)
+            if (p.next and not PyTasklet_GetBlocked(<tasklet>p) and
+                p.next != m):
+                # Move m (main_loop_tasklet) after p (last_tasklet).
+                #
+                # We do this so that the tasklets inserted by the loop(...)
+                # call above are run first, preceding tasklets already
+                # alive. This makes scheduling more fair on a busy server.
+                m.prev.next = m.next
+                m.next.prev = m.prev
+                m.next = p.next
+                m.prev = p
+                p.next.prev = m
+                p.next = m
+            Py_DECREF(<object>p)
         else:
             # Block, wait for events once, without timeout.
             with nogil:
@@ -390,31 +390,10 @@ def MainLoop(tasklet link_helper_tasklet):
                 # returning here the stackless tasklet queue becomes empty,
                 # so the process will exit (sys.exit(0)).
                 #
-                # SUXX: event_loop() of libev never returns true here.
+                # !! SUXX: event_loop() of libev never returns true here.
                 #
-                # SUXX: there are registered events after an evdns lookup.
-                PyTasklet_Remove(link_helper_tasklet)
+                # !! SUXX: there are registered events after an evdns lookup.
                 return
-
-        # Swap link_helper_tasklet and stackless.current in the queue.  We
-        # do this so that the tasklets inserted by the loop(...) call above
-        # are run first, preceding tasklets already alive. This makes
-        # scheduling more fair on a busy server.
-        #
-        # The swap implementation would work even for p == c, or if p and c
-        # are adjacent.
-        ptemp = p.next
-        p.next = c.next
-        c.next = ptemp
-        p.next.prev = p
-        c.next.prev = c
-        ptemp = p.prev
-        p.prev = c.prev
-        c.prev = ptemp
-        p.prev.next = p
-        c.prev.next = c
-
-        PyTasklet_Remove(link_helper_tasklet)
 
         PyStackless_Schedule(None, 0)  # remove=0
 
