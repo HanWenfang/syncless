@@ -2,7 +2,16 @@
 
 """Partial emulation of the Stackless Python API using greenlet.
 
-Original _suncless.py downloaded from
+Limitations of this emulation module over real Stackless:
+
+* both greenlet and the emulation is slower than Stackless
+* greenlet has some memory leaks if greenlets reference each other
+* no stackless.current support (use stackless.getcurrent())
+* no multithreading support (don't use greenstackless in more than one
+  thread (not even sequentially) in your application)
+* no deadlock detection if the main tasklet gets stuck
+
+Original _syncless.py downloaded from
 http://github.com/toymachine/concurrence/raw/master/lib/concurrence/_stackless.py
 at Thu Jan  7 22:59:54 CET 2010. Then modified and added unit test
 (test/stackless_test.py).
@@ -24,15 +33,6 @@ This code was inspired by:
 http://aigamedev.com/programming-tips/round-robin-multi-tasking and
 also by the pypy implementation of the same thing (buggy, not being maintained?) at
 https://codespeak.net/viewvc/pypy/dist/pypy/lib/stackless.py?view=markup
-
-Limitations of this emulation module over real Stackless:
-
-* both greenlet and the emulation is slower than Stackless
-* greenlet has some memory leaks if greenlets reference each other
-* no stackless.current support (use stackless.getcurrent())
-* no multithreading support (don't use greenstackless in more than one
-  thread (not even sequentially) in your application)
-* no deadlock detection if the main tasklet gets stuck
 """
 
 try:
@@ -45,10 +45,11 @@ assert hasattr(greenlet, 'throw'), (
   'http://codespeak.net/svn/py/release/0.9.x/py/c-extension/greenlet')
 
 import sys
-
+import weakref
 from collections import deque
 
-class TaskletExit(SystemExit):pass
+class TaskletExit(SystemExit):
+  pass
 
 import __builtin__
 __builtin__.TaskletExit = TaskletExit
@@ -67,12 +68,19 @@ class bomb(object):
 class channel(object):
   """Implementation of stackless's channel object."""
 
-  __slots__ = ['balance', 'preference', 'queue']
+  __slots__ = ['balance', 'preference', '_queue', '__weakref__']
 
   def __init__(self):
     self.balance = 0
     self.preference = -1
-    self.queue = deque()
+    self._queue = deque()
+
+  @property
+  def queue(self):
+    if self._queue:
+      return self._queue[0]
+    else:
+      return None
 
   def receive(self):
     return _receive(self, self.preference)
@@ -91,7 +99,7 @@ class channel(object):
 def _tasklet_wrapper(tasklet_obj, switch_back_ary, args, kwargs):
   try:
     switch_back_ary.pop().switch()
-    tasklet_obj.func(*args, **kwargs)
+    tasklet_obj._func(*args, **kwargs)
     assert _runnables.popleft() is tasklet_obj
   except TaskletExit:  # Let it pass silently.
     assert _runnables.popleft() is tasklet_obj
@@ -110,7 +118,7 @@ def _tasklet_wrapper(tasklet_obj, switch_back_ary, args, kwargs):
       main.tempval = bomb(*exc_info)
       if _runnables[0] is not main:
         _runnables.appendleft(main)
-    elif main.blocked:
+    elif main._channel_weak:
       # If _runnables is empty, let the error be ignored here, and
       # so a StopIteration being raised in the main tasklet, see
       # LazyWorker in StacklessTest.testLastchannel.
@@ -124,8 +132,10 @@ def _tasklet_wrapper(tasklet_obj, switch_back_ary, args, kwargs):
     tasklet_obj.alive = False
     tasklet_obj.tempval = None
     del tasklet_obj._greenlet
-    del tasklet_obj.func
+    del tasklet_obj._func
     del tasklet_obj.data
+    # Keeping forever: del tasklet_obj.tempval
+    # Keeping forever: del tasklet_obj._channel_weak
 
 
 is_slow_prev_next_ok = False
@@ -138,25 +148,38 @@ class tasklet(object):
   TODO(pts): Implement tasklet._channel as a weak reference.
   """
 
-  __slots__ = ['_greenlet', 'func', 'alive', 'blocked', 'tempval', 'data']
+  __slots__ = ['_greenlet', '_func', 'alive', '_channel_weak', 'tempval',
+               'data', '__weakref__']
 
   def __init__(self, f = None, greenlet = None, alive = False):
     self._greenlet = greenlet
-    self.func = f
+    self._func = f
     self.alive = alive
-    self.blocked = False
     self.data = None
     self.tempval = None
+    self._channel_weak = None
+
+  @property
+  def blocked(self):
+    return bool(self._channel_weak)
+
+  @property
+  def _channel(self):
+    # This propery has an odd name (starting with _), to mimic Stackless.
+    return self._channel_weak and self._channel_weak()
 
   def bind(self, func):
     if not callable(func):
       raise TypeError('tasklet function must be a callable')
-    self.func = func
+    if getattr(self, '_greenlet', None):
+      raise RuntimeError('tasklet is already bound to a frame')
+    self._func = func
+    return self
 
   def __call__(self, *args, **kwargs):
     """this is where the new task starts to run, e.g. it is where the greenlet is created
     and the 'task' is first scheduled to run"""
-    if self.func is None:
+    if self._func is None:
       raise TypeError('tasklet function must be a callable')
     assert self not in _runnables
     # TODO(pts): Do we properly avoid circular references to self here?
@@ -191,7 +214,7 @@ class tasklet(object):
     if hasattr(self, 'name'):
       _id = self.name
     else:
-      _id = str(self.func)
+      _id = str(self._func)
     return '<tasklet %s at 0x%0x>' % (_id, id(self))
 
   def is_main(self):
@@ -207,7 +230,7 @@ class tasklet(object):
     if self is _runnables[0]:
       raise RuntimeError('The current tasklet cannot be removed. '
                          'Use t=tasklet().capture()')
-    if self.blocked:
+    if self._channel_weak:
       raise RuntimeError('You cannot remove a blocked tasklet.')
     i = 0
     for task in _runnables:
@@ -226,7 +249,7 @@ class tasklet(object):
     """
     if not self.alive:
       raise RuntimeError('You cannot run an unbound(dead) tasklet')
-    if self.blocked:
+    if self._channel_weak:
       raise RuntimeError('You cannot run a blocked tasklet')
     if self not in _runnables:
       _runnables.append(self)
@@ -243,6 +266,19 @@ class tasklet(object):
       return _runnables[len(_runnables) > 1]
     elif self is _runnables[-1]:
       return _runnables[0]
+    elif self._channel_weak:
+      channel_obj = self._channel_weak()
+      assert channel_obj
+      # TODO(pts): Implement this with a linked list.
+      queue = channel_obj._queue
+      if self is queue[-1]:
+        return None
+      i = iter(queue)
+      for tasklet_obj in i:
+        if self is tasklet_obj:
+          # No StopIteration because the ifs above.
+          return i.next()
+      assert 0, 'blocked tasklet missing from its own channel'
     elif is_slow_prev_next_ok:
       i = iter(_runnables)
       for tasklet_obj in i:
@@ -264,6 +300,16 @@ class tasklet(object):
       return _runnables[-1]
     elif self is _runnables[-1]:
       return _runnables[-2]
+    elif self._channel_weak:
+      channel_obj = self._channel_weak()
+      assert channel_obj
+      queue = channel_obj._queue
+      prev_tasklet_obj = None
+      for tasklet_obj in channel_obj._queue:
+        if self is tasklet_obj:
+          return prev_tasklet_obj
+        prev_tasklet_obj = tasklet_obj
+      assert 0, 'blocked tasklet missing from its own channel'
     elif is_slow_prev_next_ok:
       prev_tasklet_obj = None
       for tasklet_obj in _runnables:
@@ -280,7 +326,7 @@ class tasklet(object):
     the number or runnable (non-blocked) tasklets. The implementation in
     Stackless has O(1) complexity.
     """
-    if self.blocked:
+    if self._channel_weak:
       raise RuntimeError('You cannot run a blocked tasklet')
     if not self.alive:
       raise RuntimeError('You cannot run an unbound(dead) tasklet')
@@ -357,7 +403,7 @@ def _throw(task, typ, val=None, tb=None):
   if (task is not _runnables[0] and
       _runnables[0]._greenlet.parent is not task._greenlet):
       task._greenlet.parent = _runnables[0]._greenlet
-  if not task.blocked:
+  if not task._channel_weak:
     i = 0
     for task2 in _runnables:
       if task2 is task:
@@ -371,7 +417,7 @@ def _throw(task, typ, val=None, tb=None):
   _runnables.appendleft(task)
   task._greenlet.throw(typ, val, tb)
 
-def _receive(channel, preference):
+def _receive(channel_obj, preference):
   #Receiving 1):
   #A tasklet wants to receive and there is
   #a queued sending tasklet. The receiver takes
@@ -384,10 +430,10 @@ def _receive(channel, preference):
   #The receiver will become blocked and inserted
   #into the queue. The next sender will
   #handle the rest through "Sending 1)".
-  if channel.balance > 0: #some sender
-    channel.balance -= 1
-    sender = channel.queue.popleft()
-    sender.blocked = False
+  if channel_obj.balance > 0: #some sender
+    channel_obj.balance -= 1
+    sender = channel_obj._queue.popleft()
+    sender._channel_weak = None
     data, sender.data = sender.data, None
     if preference >= 0:
       #sender preference
@@ -399,19 +445,19 @@ def _receive(channel, preference):
       #receiver preference
       _runnables.append(sender)
   else: #no sender
-    if len(_runnables) == 1 and (_runnables[0] is main or main.blocked):
+    if len(_runnables) == 1 and (_runnables[0] is main or main._channel_weak):
       # Strange exception name.
       raise RuntimeError('Deadlock: the last runnable tasklet '
                          'cannot be blocked.')
     current = _runnables.popleft()
-    channel.queue.append(current)
-    channel.balance -= 1
-    current.blocked = True
+    channel_obj._queue.append(current)
+    channel_obj.balance -= 1
+    current._channel_weak = weakref.ref(channel_obj)
     if not _runnables:
       _runnables.append(main)
     try:
       _runnables[0]._greenlet.switch()
-      if current.blocked:
+      if current._channel_weak:
         assert current is main
         if isinstance(current.tempval, bomb):
           bomb_obj, current.tempval = current.tempval, None
@@ -421,9 +467,9 @@ def _receive(channel, preference):
           raise StopIteration('the main tasklet is receiving '
                               'without a sender available.')
     except:
-      channel.queue.remove(current)
-      channel.balance += 1
-      current.blocked = False
+      channel_obj._queue.remove(current)
+      channel_obj.balance += 1
+      current._channel_weak = None
       raise
 
     data, current.data = current.data, None
@@ -433,7 +479,7 @@ def _receive(channel, preference):
   else:
     return data
 
-def _send(channel, data, preference):
+def _send(channel_obj, data, preference):
   #  Sending 1):
   #  A tasklet wants to send and there is
   #  a queued receiving tasklet. The sender puts
@@ -446,12 +492,11 @@ def _send(channel, data, preference):
   #  The sender will become blocked and inserted
   #  into the queue. The next receiver will
   #  handle the rest through "Receiving 1)".
-  #print 'send q', channel.queue
-  if channel.balance < 0: #some receiver
-    channel.balance += 1
-    receiver = channel.queue.popleft()
+  if channel_obj.balance < 0: #some receiver
+    channel_obj.balance += 1
+    receiver = channel_obj._queue.popleft()
     receiver.data = data
-    receiver.blocked = False
+    receiver._channel_weak = None
     #put receiver just after current task in _runnables and schedule (which will pick it up)
     if preference < 0: #receiver pref
       _runnables.rotate(-1)
@@ -461,19 +506,19 @@ def _send(channel, data, preference):
     else: #sender pref
       _runnables.append(receiver)
   else: #no receiver
-    if len(_runnables) == 1 and (_runnables[0] is main or main.blocked):
+    if len(_runnables) == 1 and (_runnables[0] is main or main._channel_weak):
       raise RuntimeError('Deadlock: the last runnable tasklet '
                          'cannot be blocked.')
     current = _runnables.popleft()
-    channel.queue.append(current)
-    channel.balance += 1
+    channel_obj._queue.append(current)
+    channel_obj.balance += 1
     current.data = data
-    current.blocked = True
+    current._channel_weak = weakref.ref(channel_obj)
     if not _runnables:
       _runnables.append(main)
     try:
       _runnables[0]._greenlet.switch()
-      if current.blocked:
+      if current._channel_weak:
         assert current is main
         if isinstance(current.tempval, bomb):
           bomb_obj, current.tempval = current.tempval, None
@@ -483,10 +528,10 @@ def _send(channel, data, preference):
           raise StopIteration('the main tasklet is sending '
                               'without a receiver available.')
     except:
-      channel.queue.remove(current)
-      channel.balance -= 1
+      channel_obj._queue.remove(current)
+      channel_obj.balance -= 1
       current.data = None
-      current.blocked = False
+      current._channel_weak = None
       raise
 
 def getruncount():

@@ -17,6 +17,7 @@ except ImportError:
   import greenstackless as stackless
   assert 'greenlet' in sys.modules
   print >>sys.stderr, 'info: using greenlet'
+assert issubclass(TaskletExit, BaseException)
 
 
 class StacklessTest(unittest.TestCase):
@@ -87,7 +88,7 @@ class StacklessTest(unittest.TestCase):
     ta = stackless.tasklet(Worker)('A', c)
     tb = stackless.tasklet(Worker)('B', c)
     tc = stackless.tasklet(Worker)('C', c)
-    td = stackless.tasklet(Worker)('D', c)
+    td = stackless.tasklet().bind(Worker)('D', c)
     self.assertEqual(5, stackless.getruncount())
     self.assertTrue(td is stackless.getcurrent().prev)
     self.assertTrue(ta is stackless.getcurrent().next)
@@ -371,29 +372,35 @@ class StacklessTest(unittest.TestCase):
     """Test how the linked lists are formed when blocked on a channel."""
     stackless.is_slow_prev_next_ok = True
     channel_obj = stackless.channel()
+    self.assertEqual(None, channel_obj.queue)
     tasklet1 = stackless.tasklet(channel_obj.receive)()
-    #tasklet2 = stackless.tasklet(channel_obj.receive)()
-    #tasklet3 = stackless.tasklet(channel_obj.receive)()
     assert tasklet1.next is stackless.getcurrent()
 
     stackless.schedule()
+    self.assertEqual(tasklet1, channel_obj.queue)
     assert tasklet1.next is None
     assert tasklet1.prev is None
 
     tasklet2 = stackless.tasklet(channel_obj.receive)()
+    self.assertEqual(True, tasklet1.blocked)
+    self.assertEqual(channel_obj, tasklet1._channel)
+    self.assertEqual(False, tasklet2.blocked)
+    self.assertEqual(None, tasklet2._channel)
     stackless.schedule()
-    # !! TODO(pts): Add these prev/next checks to greenstackless.
-    #assert tasklet1.next is tasklet2
+    self.assertEqual(channel_obj, tasklet2._channel)
+    assert tasklet1.next is tasklet2
     assert tasklet1.prev is None
 
     tasklet3 = stackless.tasklet(channel_obj.receive)()
+    self.assertEqual(tasklet1, channel_obj.queue)
     stackless.schedule()
-    #assert tasklet1.next is tasklet2
-    #assert tasklet2.next is tasklet3
+    self.assertEqual(tasklet1, channel_obj.queue)
+    assert tasklet1.next is tasklet2
+    assert tasklet2.next is tasklet3
     assert tasklet3.next is None
     assert tasklet1.prev is None
-    #assert tasklet2.prev is tasklet1
-    #assert tasklet3.prev is tasklet2
+    assert tasklet2.prev is tasklet1
+    assert tasklet3.prev is tasklet2
 
   def testRunBlockedTasklet(self):
     def Worker(channel_obj):
@@ -587,6 +594,12 @@ class StacklessTest(unittest.TestCase):
         RuntimeError, 'You cannot run an unbound(dead) tasklet',
         tasklet_obj.insert)
 
+  def testLateBind(self):
+    tasklet_obj = stackless.tasklet(lambda: 0)()
+    self.assertRaisesStr(RuntimeError, 'tasklet is already bound to a frame',
+                         tasklet_obj.bind, lambda: 2 / 0)
+    stackless.schedule()
+    tasklet_obj.bind(lambda: 3 / 0)
 
 if __name__ == '__main__':
   unittest.main()
