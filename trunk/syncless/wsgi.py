@@ -84,11 +84,11 @@ import logging
 import re
 import sys
 import socket
-import stackless
 import time
 import traceback
 import types
 
+from syncless.best_stackless import stackless
 from syncless import coio
 
 # TODO(pts): Add tests.
@@ -145,9 +145,14 @@ HTTP_STATUS_STRINGS = {
     500: 'Internal Server Error',
 }
 
-assert issubclass(socket.error, IOError)
-if getattr(socket, '_ssl', None):
-  assert issubclass(socket._ssl.SSLError, IOError)
+if issubclass(socket.error, IOError):
+  # Python2.6
+  IOError_all = IOError
+else:
+  # Python2.5
+  IOError_all = (IOError, socket.error)
+if getattr(socket, '_ssl', None) and getattr(socket._ssl, 'SSLError', None):
+  assert issubclass(socket._ssl.sslerror, IOError)
 
 # ---
 
@@ -271,7 +276,7 @@ class WsgiFile(object):
       else:
         try:
           self._sock.sendall(data)
-        except IOError, e:
+        except IOError_all, e:
           raise WsgiWriteError(*e.args)
 
   def writelines(self, msgs):
@@ -285,7 +290,7 @@ class WsgiFile(object):
       # Now data is non-empty (because we will self._write_buffer that way).
       try:
         self._sock.sendall(data)
-      except IOError, e:
+      except IOError_all, e:
         raise WsgiWriteError(*e.args)
 
   def discard_write_buffer(self):
@@ -323,7 +328,7 @@ class WsgiFile(object):
         while data:
           output.append(data)
           data = self._sock.recv(size)
-      except IOError, e:
+      except IOError_all, e:
         raise WsgiReadError(*e.args)
     elif size > 0:
       try:
@@ -338,7 +343,7 @@ class WsgiFile(object):
           to_read = min(8192, size)
           if not to_read:
             break
-      except IOError, e:
+      except IOError_all, e:
         raise WsgiReadError(*e.args)
     return ''.join(output)
 
@@ -367,7 +372,7 @@ class WsgiFile(object):
       if size:
         try:
           data = self._sock.recv(size)
-        except IOError, e:
+        except IOError_all, e:
           raise WsgiReadError(*e.args)
         if not data:  # EOF
           data = ''.join(rb)
@@ -397,7 +402,7 @@ class WsgiFile(object):
             self._read_limit -= len(data)
           else:
             return self._read_limit
-      except IOError, e:
+      except IOError_all, e:
         raise WsgiReadError(*e.args)
     return 0
 
@@ -477,7 +482,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
     # Do the SSL handshake in a non-blocking way.
     try:
       sock.do_handshake()
-    except IOError, e:
+    except IOError_all, e:
       if is_debug:
         logging.debug('https SSL handshake failed: %s' % e)
       return
@@ -555,7 +560,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
               logging.debug('received non-HTTP request: %r' % req_buf[:64])
             return  # Possibly https request (starts with '\x80')
           req_new = None
-      except IOError, e:  # Raised in sock.recv above.
+      except IOError_all, e:  # Raised in sock.recv above.
         if is_debug:
           logging.debug('error reading HTTP request: %s' % e)
       # TODO(pts): Speed up this splitting?
@@ -685,7 +690,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           if not do_keep_alive_ary[0]:
             try:
               sock.close()
-            except IOError, e:
+            except IOError_all, e:
               raise WsgiWriteError(*e.args)
           headers_sent_ary[0] = True
 
@@ -815,7 +820,8 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             data = ''
           items = None
           if headers_sent_ary[0]:
-            if len(data) != res_content_length_ary[1]:
+            if (res_content_length_ary and
+                len(data) != res_content_length_ary[1]):
               if len(data) > res_content_length_ary[1]:
                 # SUXX: wget(1) will keep retrying here.
                 logging.error(
@@ -922,7 +928,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             if not do_keep_alive_ary[0]:
               try:
                 sock.close()
-              except IOError, e:
+              except IOError_all, e:
                 raise WsgiWriteError(*e.args)
 
           # Iterate over `items' below in another tasklet, so we can read
@@ -962,7 +968,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
     sockfile.discard_write_buffer()
     try:
       sock.close()
-    except IOError:
+    except IOError_all:
       pass
     if is_debug:
       logging.debug('connection closed sock=%x' % id(sock))
