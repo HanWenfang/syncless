@@ -203,7 +203,7 @@ static inline PyObject *coio_c_handle_eagain(
   if (swi->timeout_value < 0.0)
     return coio_c_wait(wakeup_ev, NULL);
   retval = coio_c_wait(wakeup_ev, &swi->tv);
-  if (retval != coio_event_happened_token) {
+  if (retval != coio_event_happened_token && retval != NULL) {
     Py_DECREF(retval);
     PyErr_SetString(coio_socket_timeout, "timed out");
     return NULL;
@@ -250,6 +250,8 @@ static inline PyObject *coio_c_socket_call(PyObject *function, PyObject *args,
     Py_XDECREF(ptype); Py_XDECREF(pvalue); Py_XDECREF(ptraceback);
     Py_DECREF(retval);  /* errno_obj */
     /* TODO(pts): Make sure this call is inlined. */
-    coio_c_handle_eagain(swi, evtype);
+    retval = coio_c_handle_eagain(swi, evtype);
+    if (retval == NULL) return NULL;
+    Py_DECREF(retval);
   }
 }
