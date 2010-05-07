@@ -15,7 +15,8 @@
 #
 #
 # This code is designed for Stackless Python 2.6. It has been tested with
-# Stackless Python 2.6.4 and 2.6.5.
+# Stackless Python 2.6.4 and 2.6.5. It also works (with reduced performance)
+# with Python 2.5 and greenlet.
 #
 # Please note that stackless.schedule_remove() is ignored for stackless.main
 # (but another tasklet may remove stackless.main), and also if there are no
@@ -52,6 +53,11 @@ import stackless
 import socket
 #import __builtin__
 import types
+
+cdef object socket_error "coio_socket_error"
+socket_error = socket.error
+cdef object socket_timeout "coio_socket_timeout"
+socket_timeout = socket.timeout
 
 # These are some Pyrex magic declarations which will enforce type safety in
 # our *.pxi files by turning GCC warnings about const and signedness to Pyrex
@@ -239,6 +245,15 @@ cdef extern from "stackless_api.h":
     #tasklet PyTasklet_New(type type_type, object func);
 cdef extern int PyTasklet_GetBlocked(tasklet task)
 cdef extern from "./coio_c_helper.h":
+    struct socket_wakeup_info_s "coio_socket_wakeup_info":
+        event_t read_ev
+        event_t write_ev
+        # -1.0 if None (infinite timeout).
+        double timeout_value
+        int fd
+        # Corresponds to timeout (if not None).
+        timeval tv
+
     # This involves a call to PyStackless_Schedule(None, 1).
     object coio_c_wait(event_t *ev, timeval *timeout)
     # A temporary event_t will be allocated, and its ev_arg would be set to
@@ -246,6 +261,9 @@ cdef extern from "./coio_c_helper.h":
     object coio_c_wait_for(int fd, short evtype, event_handler handler,
                            timeval *timeout)
     char coio_loaded()
+    object coio_c_handle_eagain(socket_wakeup_info_s *swi, short evtype) 
+    object coio_c_socket_call(object function, object args,
+                              socket_wakeup_info_s *swi, short evtype)
 
 # --- Low-level event functions
 
@@ -370,7 +388,8 @@ def MainLoop():
             Py_INCREF(<object>p)
             with nogil:
                 event_loop(EVLOOP_ONCE | EVLOOP_NONBLOCK)
-            if (p.next and not PyTasklet_GetBlocked(<tasklet>p) and
+            if (p.next != NULL and
+                not PyTasklet_GetBlocked(<tasklet>p) and
                 p.next != m):
                 # Move m (main_loop_tasklet) after p (last_tasklet).
                 #
@@ -502,7 +521,7 @@ cdef int nbevent_read(evbuffer_s *read_eb, int fd, int n):
 # TODO(pts): doc:
 # It is assumed that the user never sets a waiting_tasklet.tempval to
 # waiting_token.
-cdef object waiting_token "waiting_token"
+cdef object waiting_token "coio_waiting_token"
 waiting_token = object()
 
 # event_happened_token is the token in waiting_tasklet.tempval to signify
@@ -513,7 +532,7 @@ waiting_token = object()
 # TODO(pts): doc:
 # It is assumed that the user never sets a waiting_tasklet.tempval to
 # event_happened_token.
-cdef object event_happened_token "event_happened_token"
+cdef object event_happened_token "coio_event_happened_token"
 event_happened_token = object()
 
 # Since this function returns void, exceptions raised (e.g. if <tasklet>arg)
@@ -1090,18 +1109,18 @@ cdef class nbfile:
     def wait_for_readable(nbfile self, object timeout=None):
         cdef event_t *wakeup_ev_ptr
         cdef timeval tv
-        cdef float timeout_float
+        cdef double timeout_double
         # !! TODO(pts): Speed: return early if already readable.
         if timeout is None:
             coio_c_wait(&self.read_wakeup_ev, NULL)
             return True
         else:
-            timeout_float = timeout
-            if timeout_float < 0.0:
+            timeout_double = timeout
+            if timeout_double < 0.0:
                 raise ValueError('Timeout value out of range')
-            tv.tv_sec = <long>timeout_float
+            tv.tv_sec = <long>timeout_double
             tv.tv_usec = <unsigned int>(
-                (timeout_float - <float>tv.tv_sec) * 1000000.0)
+                (timeout_double - <double>tv.tv_sec) * 1000000.0)
             return coio_c_wait_for(
                 self.read_fd, c_EV_READ, HandleCTimeoutWakeup, &tv
                 ) is event_happened_token
@@ -1377,43 +1396,6 @@ def fdopen(int fd, mode='r', int bufsize=-1,
 cdef class nbsocket
 cdef class nbsslsocket
 
-cdef struct socket_wakeup_info_s:
-    event_t wakeup_ev
-    # -1.0 if None (infinite timeout).
-    float timeout_value
-    int fd
-    # Corresponds to timeout (if not None).
-    timeval tv
-
-cdef object handle_eagain(socket_wakeup_info_s *swi, int evtype):
-    if swi.timeout_value == 0.0:
-        raise socket.error(EAGAIN, strerror(EAGAIN))
-    if swi.timeout_value < 0.0:
-        # !! This doesn't work if swi.wakeup_ev is already in use.
-        event_set(&swi.wakeup_ev, swi.fd, evtype,
-                  HandleCWakeup, NULL)
-        coio_c_wait(&swi.wakeup_ev, NULL)
-    else:
-        # TODO(pts): Get rid of event_set here (set only event_handler, evtype).
-        event_set(&swi.wakeup_ev, swi.fd, evtype,
-                  HandleCTimeoutWakeup, NULL)
-        if coio_c_wait(&swi.wakeup_ev, &swi.tv) is not event_happened_token:
-            # Same error message as in socket.socket.
-            raise socket.error('timed out')
-
-# With `cdef void', an exception here would be ignored, so
-# we just do a `cdef object'. We don't make this a method so it won't
-# be virtual.
-cdef object coio_socket_call(object function, object args,
-                             socket_wakeup_info_s *swi, short evtype):
-    while 1:
-        try:
-            return function(*args)
-        except socket.error, e:
-            if e.args[0] != EAGAIN:  # !!!
-                raise
-            handle_eagain(swi, evtype)  # !!
-
 # Implementation backend class for sockets. Should be socket._socket.socket
 # (which is the same as socket._realsocket)
 socket_impl = socket._realsocket
@@ -1460,6 +1442,10 @@ cdef class nbsocket:
         # systems.
         set_fd_nonblocking(self.swi.fd)
         self.swi.timeout_value = -1.0
+        event_set(&self.swi.read_ev,  self.swi.fd, c_EV_READ,
+                  HandleCTimeoutWakeup, NULL)
+        event_set(&self.swi.write_ev, self.swi.fd, c_EV_WRITE,
+                  HandleCTimeoutWakeup, NULL)
 
     def fileno(nbsocket self):
         return self.swi.fd
@@ -1522,7 +1508,7 @@ cdef class nbsocket:
             return self.realsock.family
 
     property timeout:
-        """Return a nonnegative float, or -1.0 if there is no timeout.
+        """Return a nonnegative double, or -1.0 if there is no timeout.
 
         socket._realsocket has a read-only .timeout, socket.socket doesn't
         have an attribute named timeout.
@@ -1569,24 +1555,23 @@ cdef class nbsocket:
             self.swi.tv.tv_sec = self.swi.tv.tv_usec = 0
 
     def settimeout(nbsocket self, timeout):
-        cdef float timeout_float
+        cdef double timeout_double
         if timeout is None:
             # SUXX: Pyrex or Cython wouldn't catch the type error if we had
             # None instead of -1.0 here.
             self.swi.timeout_value = -1.0
         else:
-            timeout_float = timeout
-            if timeout_float < 0.0:
+            timeout_double = timeout
+            if timeout_double < 0.0:
                 raise ValueError('Timeout value out of range')
-            self.swi.timeout_value = timeout_float
-            self.swi.tv.tv_sec = <long>timeout_float
+            self.swi.timeout_value = timeout_double
+            self.swi.tv.tv_sec = <long>timeout_double
             self.swi.tv.tv_usec = <unsigned int>(
-                (timeout_float - <float>self.swi.tv.tv_sec) * 1000000.0)
+                (timeout_double - <double>self.swi.tv.tv_sec) * 1000000.0)
 
     def accept(nbsocket self):
-        # !! e.errno for Python 2.6; e.args[0]
-        asock, addr = coio_socket_call(self.realsock.accept, (),
-                                       &self.swi, c_EV_READ)
+        asock, addr = coio_c_socket_call(self.realsock.accept, (),
+                                         &self.swi, c_EV_READ)
         esock = type(self)(asock)  # Create new nbsocket.
         return esock, addr
 
@@ -1601,7 +1586,7 @@ cdef class nbsocket:
             if err:
                 # We might get EALREADY occasionally for some slow connects.
                 if err != EAGAIN and err != EINPROGRESS and err != EALREADY:
-                    raise socket.error(err, strerror(err))
+                    raise socket_error(err, strerror(err))
 
                 # Workaround for Linux 2.6.31-20 for the delayed non-blocking
                 # select() problem.
@@ -1611,7 +1596,7 @@ cdef class nbsocket:
                     tv.tv_usec = connect_magic_usec
                     os_select(0, NULL, NULL, NULL, &tv)
 
-                handle_eagain(&self.swi, c_EV_WRITE)
+                coio_c_handle_eagain(&self.swi, c_EV_WRITE)
             else:
                 return
 
@@ -1634,7 +1619,7 @@ cdef class nbsocket:
                 tv.tv_usec = connect_magic_usec
                 os_select(0, NULL, NULL, NULL, &tv)
 
-            handle_eagain(&self.swi, c_EV_WRITE)
+            coio_c_handle_eagain(&self.swi, c_EV_WRITE)
 
     def shutdown(nbsocket self, object how):
         while 1:
@@ -1642,61 +1627,31 @@ cdef class nbsocket:
             if err != EAGAIN:
                 return err
             # TODO(pts): Can this happen (with SO_LINGER?).
-            handle_eagain(&self.swi, c_EV_WRITE)
+            coio_c_handle_eagain(&self.swi, c_EV_WRITE)
 
     def recv(nbsocket self, *args):
-        while 1:
-            try:
-                return self.realsock.recv(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_READ)
+        return coio_c_socket_call(self.realsock.recv, args,
+                                  &self.swi, c_EV_READ)
 
     def recvfrom(nbsocket self, *args):
-        while 1:
-            try:
-                return self.realsock.recvfrom(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_READ)
+        return coio_c_socket_call(self.realsock.recvfrom, args,
+                                  &self.swi, c_EV_READ)
 
     def recv_into(nbsocket self, *args):
-        while 1:
-            try:
-                return self.realsock.recv_into(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_READ)
+        return coio_c_socket_call(self.realsock.recv_into, args,
+                                  &self.swi, c_EV_READ)
 
     def recvfrom_into(nbsocket self, *args):
-        while 1:
-            try:
-                return self.realsock.recvfrom_into(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_READ)
+        return coio_c_socket_call(self.realsock.recvfrom_into, args,
+                                  &self.swi, c_EV_READ)
 
     def send(nbsocket self, *args):
-        while 1:
-            try:
-                return self.realsock.send(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_WRITE)
+        return coio_c_socket_call(self.realsock.send, args,
+                                  &self.swi, c_EV_WRITE)
 
     def sendto(nbsocket self, *args):
-        while 1:
-            try:
-                return self.realsock.sendto(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_WRITE)
+        return coio_c_socket_call(self.realsock.sendto, args,
+                                  &self.swi, c_EV_WRITE)
 
     def sendall(nbsocket self, object data, int flags=0):
         cdef int got
@@ -1705,20 +1660,20 @@ cdef class nbsocket:
             # TODO(pts): Write directly to self.swi.fd.
             got = self.realsock.send(data, flags)
             assert got > 0
-        except socket.error, e:
-            if e.args[0] != EAGAIN:
+        except socket_error, e:
+            if e.args[0] != EAGAIN:  # Pyton2.5 doesn't support e.errno.
                 raise
-            handle_eagain(&self.swi, c_EV_WRITE)
+            coio_c_handle_eagain(&self.swi, c_EV_WRITE)
             got = 0
         while got < len(data):
             try:
                 got2 = self.realsock.send(buffer(data, got), flags)
                 assert got2 > 0
                 got += got2
-            except socket.error, e:
+            except socket_error, e:
                 if e.args[0] != EAGAIN:
                     raise
-                handle_eagain(&self.swi, c_EV_WRITE)
+                coio_c_handle_eagain(&self.swi, c_EV_WRITE)
 
     def makefile_samefd(nbsocket self, mode='r+', int bufsize=-1):
         """Create and return an nbfile with self.swi.fd.
@@ -1744,7 +1699,7 @@ cdef class nbsocket:
         cdef int fd
         fd = dup(self.swi.fd)
         if fd < 0:
-            raise socket.error(errno, strerror(errno))
+            raise socket_error(errno, strerror(errno))
         # TODO(pts): Verify proper close semantics for _realsocket emulation.
         return nbfile(fd, fd, bufsize, bufsize, do_close=1, close_ref=self,
                       do_set_fd_nonblocking=0)
@@ -1887,6 +1842,10 @@ cdef class nbsslsocket:
         self.realsock.setblocking(False)
         #self.sslsock.setblocking(False)
         self.swi.timeout_value = -1.0
+        event_set(&self.swi.read_ev,  self.swi.fd, c_EV_READ,
+                  HandleCTimeoutWakeup, NULL)
+        event_set(&self.swi.write_ev, self.swi.fd, c_EV_WRITE,
+                  HandleCTimeoutWakeup, NULL)
 
         # Do the handshake as late as possible, so that we are already
         # non-blocking.
@@ -1983,7 +1942,7 @@ cdef class nbsslsocket:
             return self.sslsock._makefile_refs
 
     property timeout:
-        """Return a nonnegative float, or -1.0 if there is no timeout."""
+        """Return a nonnegative double, or -1.0 if there is no timeout."""
         def __get__(self):
             if self.swi.timeout_value < 0:
                 return None
@@ -2022,17 +1981,17 @@ cdef class nbsslsocket:
             self.swi.tv.tv_sec = self.swi.tv.tv_usec = 0
 
     def settimeout(nbsslsocket self, timeout):
-        cdef float timeout_float
+        cdef double timeout_double
         if timeout is None:
             self.swi.timeout_value = -1.0
         else:
-            timeout_float = timeout
-            if timeout_float < 0.0:
+            timeout_double = timeout
+            if timeout_double < 0.0:
                 raise ValueError('Timeout value out of range')
-            self.swi.timeout_value = timeout_float
-            self.swi.tv.tv_sec = <long>timeout_float
+            self.swi.timeout_value = timeout_double
+            self.swi.tv.tv_sec = <long>timeout_double
             self.swi.tv.tv_usec = <unsigned int>(
-                (timeout_float - <float>self.swi.tv.tv_sec) * 1000000.0)
+                (timeout_double - <double>self.swi.tv.tv_sec) * 1000000.0)
 
     def read(nbsslsocket self, len=1024):
         """Emulate ssl.SSLSocket.read, doesn't make much sense."""
@@ -2041,9 +2000,9 @@ cdef class nbsslsocket:
                 return self.sslobj.read(len)
             except SSLError, e:
                 if e.errno == SSL_ERROR_WANT_READ:
-                    handle_eagain(&self.swi, c_EV_READ)
+                    coio_c_handle_eagain(&self.swi, c_EV_READ)
                 elif e.errno == SSL_ERROR_WANT_WRITE:
-                    handle_eagain(&self.swi, c_EV_WRITE)
+                    coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                 elif (e.errno == SSL_ERROR_EOF and
                       self.sslsock.suppress_ragged_eofs):
                     return ''
@@ -2057,22 +2016,16 @@ cdef class nbsslsocket:
                 return self.sslobj.write(data)
             except SSLError, e:
                 if e.errno == SSL_ERROR_WANT_READ:
-                    handle_eagain(&self.swi, c_EV_READ)
+                    coio_c_handle_eagain(&self.swi, c_EV_READ)
                 elif e.errno == SSL_ERROR_WANT_WRITE:
-                    handle_eagain(&self.swi, c_EV_WRITE)
+                    coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                 else:
                     raise
 
     def accept(nbsslsocket self):
         cdef nbsslsocket asslsock
-        while 1:
-            try:
-                asock, addr = self.realsock.accept()
-                break
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_READ)
+        asock, addr = coio_c_socket_call(self.realsock.accept, (),
+                                         &self.swi, c_EV_READ)
         asslsock = nbsslsocket(
             sockwrapper(asock),
             keyfile=self.sslsock.keyfile,
@@ -2101,7 +2054,7 @@ cdef class nbsslsocket:
             err = self.realsock.connect_ex(address)
             if err:
                 if err != EAGAIN and err != EINPROGRESS:
-                    raise socket.error(err, strerror(err))
+                    raise socket_error(err, strerror(err))
 
                 # Workaround for Linux 2.6.31-20 for the delayed non-blocking
                 # select() problem.
@@ -2111,7 +2064,7 @@ cdef class nbsslsocket:
                     tv.tv_usec = connect_magic_usec
                     os_select(0, NULL, NULL, NULL, &tv)
 
-                handle_eagain(&self.swi, c_EV_WRITE)
+                coio_c_handle_eagain(&self.swi, c_EV_WRITE)
             else:
                 break
 
@@ -2132,12 +2085,12 @@ cdef class nbsslsocket:
         SSL handshake, and connects only the socket._realsocket.
         
         Returns:
-          0 on success; errno for socket.error and -800 - errno for
+          0 on success; errno for socket_error and -800 - errno for
           ssl.SSLError.
         """
         try:
             self.connect(address)
-        except socket.error, e:
+        except socket_error, e:
             return e.args[0]
         except ssl.SSLError, e:
             return -800 - e.errno  # TODO(pts): Better reporting
@@ -2152,7 +2105,7 @@ cdef class nbsslsocket:
             if err != EAGAIN:
                 return err
             # TODO(pts): Can this happen (with SO_LINGER?).
-            handle_eagain(&self.swi, c_EV_WRITE)
+            coio_c_handle_eagain(&self.swi, c_EV_WRITE)
 
     def pending(nbsslsocket self):
         # TODO(pts): How is this method useful?
@@ -2173,9 +2126,9 @@ cdef class nbsslsocket:
                 return
             except SSLError, e:
                 if e.errno == SSL_ERROR_WANT_READ:
-                    handle_eagain(&self.swi, c_EV_READ)
+                    coio_c_handle_eagain(&self.swi, c_EV_READ)
                 elif e.errno == SSL_ERROR_WANT_WRITE:
-                    handle_eagain(&self.swi, c_EV_WRITE)
+                    coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                 else:
                     raise
 
@@ -2202,51 +2155,31 @@ cdef class nbsslsocket:
                     return self.sslobj.read(buflen)
                 except SSLError, e:
                     if e.errno == SSL_ERROR_WANT_READ:
-                        handle_eagain(&self.swi, c_EV_READ)
+                        coio_c_handle_eagain(&self.swi, c_EV_READ)
                     elif e.errno == SSL_ERROR_WANT_WRITE:
-                        handle_eagain(&self.swi, c_EV_WRITE)
+                        coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                     elif (e.errno == SSL_ERROR_EOF and
                           self.sslsock.suppress_ragged_eofs):
                         return ''
                     else:
                         raise
-        while 1:
-            try:
-                return self.realsock.recv(buflen, flags)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_READ)
+        return coio_c_socket_call(self.realsock.recv, (buflen, flags),
+                                  &self.swi, c_EV_READ)
 
     def recvfrom(nbsslsocket self, *args):
         raise NotImplementedError  # !!
-        while 1:
-            try:
-                return self.realsock.recvfrom(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_READ)
+        return coio_c_socket_call(self.realsock.recvfrom, args,
+                                  &self.swi, c_EV_READ)
 
     def recv_into(nbsslsocket self, *args):
         raise NotImplementedError  # !!
-        while 1:
-            try:
-                return self.realsock.recv_into(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_READ)
+        return coio_c_socket_call(self.realsock.recv_into, args,
+                                  &self.swi, c_EV_READ)
 
     def recvfrom_into(nbsslsocket self, *args):
         raise NotImplementedError  # !!
-        while 1:
-            try:
-                return self.realsock.recvfrom_into(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_READ)
+        return coio_c_socket_call(self.realsock.recvfrom_into, args,
+                                  &self.swi, c_EV_READ)
 
     def send(nbsslsocket self, data, int flags=0):
         if self.sslobj:
@@ -2258,28 +2191,18 @@ cdef class nbsslsocket:
                     return self.sslobj.write(data)
                 except SSLError, e:
                     if e.errno == SSL_ERROR_WANT_READ:
-                        handle_eagain(&self.swi, c_EV_READ)
+                        coio_c_handle_eagain(&self.swi, c_EV_READ)
                     elif e.errno == SSL_ERROR_WANT_WRITE:
-                        handle_eagain(&self.swi, c_EV_WRITE)
+                        coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                     else:
                         raise
-        while 1:
-            try:
-                return self.realsock.send(data, flags)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_WRITE)
+        return coio_c_socket_call(self.realsock.send, (data, flags),
+                                  &self.swi, c_EV_WRITE)
 
     def sendto(nbsslsocket self, *args):
         raise NotImplementedError  # !!
-        while 1:
-            try:
-                return self.realsock.sendto(*args)
-            except socket.error, e:
-                if e.args[0] != EAGAIN:
-                    raise
-                handle_eagain(&self.swi, c_EV_WRITE)
+        return coio_c_socket_call(self.realsock.sendto, args,
+                                  &self.swi, c_EV_WRITE)
 
     def sendall(nbsslsocket self, object data, int flags=0):
         cdef int got
@@ -2298,9 +2221,9 @@ cdef class nbsslsocket:
                         got2 = self.sslobj.write(buf)
                     except SSLError, e:
                         if e.errno == SSL_ERROR_WANT_READ:
-                            handle_eagain(&self.swi, c_EV_READ)
+                            coio_c_handle_eagain(&self.swi, c_EV_READ)
                         elif e.errno == SSL_ERROR_WANT_WRITE:
-                            handle_eagain(&self.swi, c_EV_WRITE)
+                            coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                         else:
                             raise
                     assert got2 > 0
@@ -2313,10 +2236,10 @@ cdef class nbsslsocket:
                 try:
                     got2 = 0  # Pacify gcc warning.
                     got2 = self.realsock.send(buf, flags)
-                except socket.error, e:
+                except socket_error, e:
                     if e.args[0] != EAGAIN:
                         raise
-                    handle_eagain(&self.swi, c_EV_WRITE)
+                    coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                 assert got2 > 0
                 got += got2
                 if got >= len(data):
@@ -2363,7 +2286,7 @@ cdef void HandleCSleepWakeup(int fd, short evtype, void *arg) with gil:
     PyTasklet_Insert(<tasklet>arg)
 
 
-def sleep(float duration):
+def sleep(double duration):
     """Non-blocking drop-in replacement for time.sleep.
 
     * If sleeping_tasklet.raise_exception(...) or sleeping_tasklet.kill()
@@ -2387,7 +2310,7 @@ def sleep(float duration):
     if duration <= 0:
         return
     tv.tv_sec = <long>duration
-    tv.tv_usec = <unsigned int>((duration - <float>tv.tv_sec) * 1000000.0)
+    tv.tv_usec = <unsigned int>((duration - <double>tv.tv_sec) * 1000000.0)
     # See #define evtimer_set(...) in event.h.
     return coio_c_wait_for(-1, 0, HandleCSleepWakeup, &tv)
 
@@ -2396,7 +2319,7 @@ def sleep(float duration):
 
 
 # Helper method used by receive_with_timeout.
-def ReceiveSleepHelper(float timeout, tasklet receiver_tasklet):
+def ReceiveSleepHelper(double timeout, tasklet receiver_tasklet):
   if sleep(timeout):  # If timeout has been reached or woken up.
     if PyTasklet_Alive(receiver_tasklet):
       # This call immediately activates receiver_tasklet.
@@ -2410,7 +2333,7 @@ def receive_with_timeout(object timeout, object receive_channel,
   Args:
     timeout: Number of seconds of timeout, or None if infinite.
   """
-  cdef timeout_float
+  cdef timeout_double
   if timeout is None:  # Infinite timeout.
     return receive_channel.receive()
   sleeper_tasklet = stackless.tasklet(ReceiveSleepHelper)(
@@ -2474,7 +2397,7 @@ cdef class selecter:
         cdef int i
         cdef int fd
         cdef timeval tv
-        cdef float duration
+        cdef double duration
         cdef dict fd_to_fh
         cdef list readable_fds
         cdef list writeable_fds
@@ -2491,7 +2414,7 @@ cdef class selecter:
             else:
                 tv.tv_sec = <long>duration
                 tv.tv_usec = <unsigned int>(
-                    (duration - <float>tv.tv_sec) * 1000000.0)
+                    (duration - <double>tv.tv_sec) * 1000000.0)
         if self.wakeup_evs != NULL:
             PyMem_Free(self.wakeup_evs)
         self.wakeup_evs = <event_t*>PyMem_Malloc(sizeof(event_t) * c)
@@ -2599,7 +2522,7 @@ cdef class wakeup_info_event:
                   int handle,
                   timeout):
         cdef timeval tv
-        cdef float timeout_float
+        cdef double timeout_double
         assert wakeup_info_obj
         self.wakeup_info_obj = wakeup_info_obj  # Implied Py_INCREF.
         event_set(&self.ev, handle, evtype, HandleCWakeupInfoWakeup,
@@ -2607,10 +2530,10 @@ cdef class wakeup_info_event:
         if timeout is None:
             event_add(&self.ev, NULL)
         else:
-            timeout_float = timeout
-            tv.tv_sec = <long>timeout_float
+            timeout_double = timeout
+            tv.tv_sec = <long>timeout_double
             tv.tv_usec = <unsigned int>(
-                (timeout_float - <float>tv.tv_sec) * 1000000.0)
+                (timeout_double - <double>tv.tv_sec) * 1000000.0)
             event_add(&self.ev, &tv)
         Py_INCREF(self)
 
@@ -2760,14 +2683,14 @@ cdef class concurrence_event:
     # because the Py_INCREF(self) above ensures that if the event is
     # pending, then this object is not deleted.
 
-    def add(self, float timeout=-1):
+    def add(self, double timeout=-1):
         """Add event to be executed after an optional timeout."""
         if not self.pending():
             Py_INCREF(self)
             
         if timeout >= 0.0:
             self.tv.tv_sec = <long>timeout
-            self.tv.tv_usec = <long>((timeout - <float>self.tv.tv_sec) * 1000000.0)
+            self.tv.tv_usec = <long>((timeout - <double>self.tv.tv_sec) * 1000000.0)
             if event_add(&self.ev, &self.tv) == -1:
                 raise EventError('could not add event')
         else:
