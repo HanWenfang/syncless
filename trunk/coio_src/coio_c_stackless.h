@@ -204,20 +204,28 @@ static void tasklet_dealloc(PyTaskletObject *tasklet) {
 
 static PyTypeObject PyTaskletObject_Type;
 
-static PyObject *tasklet_get_next(PyTaskletObject *task) {
+static PyObject *tasklet_get_next(PyTaskletObject *tasklet) {
   PyObject *ret = Py_None;
-  if (task->next != NULL &&
-      PyObject_TypeCheck(task->next, &PyTaskletObject_Type))
-    ret = (PyObject *) task->next;
+  if (tasklet->next != NULL &&
+      PyObject_TypeCheck(tasklet->next, &PyTaskletObject_Type))
+    ret = (PyObject *) tasklet->next;
   Py_INCREF(ret);
   return ret;
 }
 
-static PyObject *tasklet_get_prev(PyTaskletObject *task) {
+static PyObject *tasklet_get_prev(PyTaskletObject *tasklet) {
   PyObject *ret = Py_None;
-  if (task->prev != NULL &&
-      PyObject_TypeCheck(task->prev, &PyTaskletObject_Type))
-    ret = (PyObject *) task->prev;
+  if (tasklet->prev != NULL &&
+      PyObject_TypeCheck(tasklet->prev, &PyTaskletObject_Type))
+    ret = (PyObject *) tasklet->prev;
+  Py_INCREF(ret);
+  return ret;
+}
+
+static PyObject *tasklet_get_tempval(PyTaskletObject *tasklet) {
+  PyObject *ret = Py_None;
+  if (tasklet->tempval != NULL)
+    ret = tasklet->tempval;
   Py_INCREF(ret);
   return ret;
 }
@@ -262,12 +270,20 @@ static int tasklet_set_prev(PyTaskletObject *tasklet, PyObject *value) {
   return 0;
 }
 
-static PyMemberDef tasklet_members[] = {
-  {"tempval", T_OBJECT_EX, offsetof(PyTaskletObject, tempval), 0},
-  {0},
-};
+static int tasklet_set_tempval(PyTaskletObject *tasklet, PyObject *value) {
+  PyObject *tmp = (PyObject*)tasklet->tempval;
+  Py_INCREF(value);
+  tasklet->tempval = value;
+  Py_XDECREF(tmp);
+  return 0;
+}
 
 static PyGetSetDef tasklet_getset[] = {
+  /* Doing a PyGetSetDef instead of a PyMemberDef for tempval, because of
+   * inheritance (other classes inheriting PyTaskletObject.
+   */
+  {"tempval", (getter)tasklet_get_tempval, (setter)tasklet_set_tempval,
+   "the next tasklet in a a circular list of tasklets."},
   {"next", (getter)tasklet_get_next, (setter)tasklet_set_next,
    "the next tasklet in a a circular list of tasklets."},
   {"prev", (getter)tasklet_get_prev, (setter)tasklet_set_prev,
@@ -310,7 +326,7 @@ static PyTypeObject PyTaskletObject_Type = {
   0,                      /*tp_iter*/
   0,                      /*tp_iternext*/
   tasklet_methods,        /*tp_methods*/
-  tasklet_members,        /*tp_members*/
+  0,                      /*tp_members*/
   tasklet_getset,         /*tp_getset*/
   0,                      /*tp_base*/
   0,                      /*tp_dict*/
@@ -456,17 +472,15 @@ PyMODINIT_FUNC initcoio(void) {
   if (NULL == (all_modules = PySys_GetObject("modules"))) return;
   if (NULL != (stackless_module =
                PyDict_GetItemString(all_modules, "stackless"))) {
-    PyErr_SetString(PyExc_AssertionError, "stackless already loaded");
-    return;
+    if (PyObject_HasAttrString(stackless_module, "is_greenstackless") != 1) {
+      Py_DECREF(stackless_module);
+      PyErr_SetString(PyExc_AssertionError, "stackless already loaded"
+                      " -- are you loading syncless.coio in the "
+                      "non-Stackless Python it was compiled for?");
+      return;
+    }
+    Py_DECREF(stackless_module);
   }
-  if (NULL != (stackless_module =
-               PyDict_GetItemString(all_modules, "syncless.greenstackless"))) {
-    /* !! TODO(pts): Update the base classes on the fly. */
-    PyErr_SetString(PyExc_AssertionError,
-                    "syncless.greenstackless already loaded");
-    return;
-  }
-
   mod = Py_InitModule3("syncless.coio_greenstackless_helper",
                        stmin_methods, stmin__doc__);
   if (!mod) {
@@ -484,6 +498,18 @@ PyMODINIT_FUNC initcoio(void) {
   }
   Py_INCREF(&PyTaskletObject_Type);
   PyModule_AddObject(mod, "tasklet", (PyObject*)&PyTaskletObject_Type);
+
+  if (NULL != (stackless_module =
+               PyDict_GetItemString(all_modules, "syncless.greenstackless"))) {
+    PyObject *function, *retval;
+    function = PyObject_GetAttrString(stackless_module, "_coio_rebase");
+    Py_DECREF(stackless_module);
+    if (function == NULL) return;
+    retval = PyObject_CallFunction(function, "O", mod);
+    Py_DECREF(function);
+    if (retval == NULL) return;
+    Py_DECREF(retval);
+  }
 
   greenstackless_module = PyImport_ImportModule("syncless.greenstackless");
   if (!greenstackless_module) {

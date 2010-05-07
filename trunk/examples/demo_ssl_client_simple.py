@@ -1,6 +1,9 @@
 #! /usr/local/bin/stackless2.6
 
-"""Demo for fetching a https:// page using Syncless' NonBlockingSslSocket."""
+"""Demo for fetching a https:// page using Syncless' NonBlockingSslSocket.
+
+This needs Python 2.6 because of the SSL support.
+"""
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 

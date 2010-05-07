@@ -1,7 +1,12 @@
 #! /usr/local/bin/stackless2.6
 # by pts@fazekas.hu at Sun Apr 18 23:45:16 CEST 2010
+#
+# SQLite doesn't work with Syncless, because it blocks too much.
+# This file is a demonstration how long time SQLite might spend on a single
+# query.
+
 import sqlite3
-import stackless
+from syncless.best_stackless import stackless
 import sys
 
 def ProgressHandler():

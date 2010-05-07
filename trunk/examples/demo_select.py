@@ -7,7 +7,6 @@ Please note that select(2) is inherently slow. Please see FAQ entry Q14 in
 README.txt .
 """
 
-import stackless
 import sys
 
 from syncless import coio

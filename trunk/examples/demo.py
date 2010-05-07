@@ -4,6 +4,8 @@
 # by pts@fazekas.hu at Sun Dec 20 21:49:16 CET 2009
 #
 
+from syncless import coio  # Load it early, before `import stackless'.
+
 import cgi
 import logging
 import socket

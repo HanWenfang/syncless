@@ -2,9 +2,9 @@
 # by pts@fazekas.hu at Sun Apr 18 12:44:36 CEST 2010
 
 import sys
-import stackless
 
 import mysql.connector as mysql_dbapi
+from syncless.best_stackless import stackless
 from syncless import patch
 
 try:

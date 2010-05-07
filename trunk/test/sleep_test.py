@@ -1,6 +1,5 @@
 #! /usr/local/bin/stackless2.6
 
-import stackless
 import unittest
 
 from syncless import coio
@@ -29,7 +28,7 @@ class SleepTest(unittest.TestCase):
   def testOtherTaskletSleep(self):
     self.assertEqual(LOOPRET, coio.nonblocking_loop_for_tests())  # No registered events.
     log_items = []
-    sleep_done_channel = stackless.channel()
+    sleep_done_channel = coio.stackless.channel()
     sleep_done_channel.preference = 1  # Prefer the sender.
 
     def Sleeper():
@@ -38,10 +37,10 @@ class SleepTest(unittest.TestCase):
       log_items.append('slept')
       sleep_done_channel.send(None)
 
-    tasklet_obj = stackless.tasklet(Sleeper)()
+    tasklet_obj = coio.stackless.tasklet(Sleeper)()
     assert tasklet_obj.alive
     assert tasklet_obj.scheduled
-    stackless.schedule()
+    coio.stackless.schedule()
     assert ['sleeping'] == log_items
     assert not tasklet_obj.scheduled
     assert tasklet_obj.alive
@@ -61,14 +60,14 @@ class SleepTest(unittest.TestCase):
         log_items.append(str(e))
       log_items.append('slept')
 
-    tasklet_obj = stackless.tasklet(Sleeper)()
+    tasklet_obj = coio.stackless.tasklet(Sleeper)()
     assert tasklet_obj.alive
     assert tasklet_obj.scheduled
-    stackless.schedule()
+    coio.stackless.schedule()
     assert not tasklet_obj.scheduled
     assert tasklet_obj.alive
     assert 0 == coio.nonblocking_loop_for_tests()  # We have registered events.
-    tasklet_obj.tempval = stackless.bomb(AssertionError, 'bombed')
+    tasklet_obj.tempval = coio.stackless.bomb(AssertionError, 'bombed')
     tasklet_obj.run()
     assert ['bombed', 'slept'] == log_items
     assert not tasklet_obj.alive
@@ -82,10 +81,10 @@ class SleepTest(unittest.TestCase):
       coio.sleep(99999999)  # Quite a lot, won't be reached.
       log_items.append('slept')
 
-    tasklet_obj = stackless.tasklet(Sleeper)()
+    tasklet_obj = coio.stackless.tasklet(Sleeper)()
     assert tasklet_obj.alive
     assert tasklet_obj.scheduled
-    stackless.schedule()
+    coio.stackless.schedule()
     assert not tasklet_obj.scheduled
     assert tasklet_obj.alive
     assert 0 == coio.nonblocking_loop_for_tests()  # We have registered events.
@@ -102,15 +101,15 @@ class SleepTest(unittest.TestCase):
       coio.sleep(99999999)  # Quite a lot, won't be reached.
       log_items.append('slept')
 
-    tasklet_obj = stackless.tasklet(Sleeper)()
+    tasklet_obj = coio.stackless.tasklet(Sleeper)()
     assert tasklet_obj.alive
     assert tasklet_obj.scheduled
-    stackless.schedule()
+    coio.stackless.schedule()
     assert not tasklet_obj.scheduled
     assert tasklet_obj.alive
     assert 0 == coio.nonblocking_loop_for_tests()  # We have registered events.
     tasklet_obj.insert()
-    stackless.schedule()
+    coio.stackless.schedule()
     assert ['slept'] == log_items
     assert not tasklet_obj.alive
     self.assertEqual(LOOPRET, coio.nonblocking_loop_for_tests())  # No registered events.

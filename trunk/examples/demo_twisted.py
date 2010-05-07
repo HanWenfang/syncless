@@ -28,7 +28,7 @@ __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import os
 import sys
-import stackless
+from syncless.best_stackless import stackless
 
 import syncless.reactor
 # It has to be installed before `twisted.internet.reactor' is imported.

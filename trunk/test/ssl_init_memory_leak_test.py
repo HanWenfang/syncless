@@ -2,13 +2,10 @@
 
 import gc
 import socket
-import ssl
 import types
 import unittest
 from syncless import coio
 from syncless import patch
-
-orig_sslsocket_init = ssl.SSLSocket.__init__
 
 class SslInitMemoryLeakTest(unittest.TestCase):
   def testPatchedSslSocket(self):
@@ -33,6 +30,12 @@ class SslInitMemoryLeakTest(unittest.TestCase):
     count1 = gc.get_count()[0]
     self.assertTrue(count1 >= count0)
     return count1 - count0 >= 1000
+
+try:
+  import ssl
+  orig_sslsocket_init = ssl.SSLSocket.__init__
+except ImportError:
+  del SslInitMemoryLeakTest
 
 if __name__ == '__main__':
   unittest.main()

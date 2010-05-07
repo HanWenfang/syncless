@@ -5,6 +5,7 @@
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
+# !!! This doesn't work in Python2.5, handler doesn't get called.
 
 import sys
 import socket
@@ -71,7 +72,9 @@ def handler(client_socket):
 def server():
   server_socket = Socket.new()
   server_socket.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-  server_socket.bind(('127.0.0.1', 8080))
+  server_address = ('127.0.0.1', 8080)
+  print >>sys.stderr, 'info: listening on %r' % (server_address,)
+  server_socket.bind(server_address)
   server_socket.listen(128)
 
   print >>sys.stderr, 'info: listening on: %r' % (
@@ -87,9 +90,8 @@ def ProgressReporter(delta_sec):
     coio.sleep(delta_sec)
 
 if __name__ == '__main__':
-  import stackless
   from syncless import coio
   from syncless import patch
   patch.patch_concurrence()
-  stackless.tasklet(ProgressReporter)(0.2)
+  coio.stackless.tasklet(ProgressReporter)(0.2)
   dispatch(server)

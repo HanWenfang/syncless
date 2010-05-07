@@ -13,7 +13,6 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 """
 
-import stackless
 import sys
 
 from syncless import coio
@@ -43,10 +42,10 @@ def Asker(timeout, age_answer_channel):
 if __name__ == '__main__':
   patch.patch_stdin_and_stdout()  # sets sys.stdin = sys.stdout = ...
   patch.patch_stderr()  # For fair exeption reporting.
-  age_answer_channel = stackless.channel()
+  age_answer_channel = coio.stackless.channel()
   age_answer_channel.preference = 1  # Prefer the sender.
   timeout = 3
-  asker_tasklet = stackless.tasklet(Asker)(timeout, age_answer_channel)
+  asker_tasklet = coio.stackless.tasklet(Asker)(timeout, age_answer_channel)
   age = coio.receive_with_timeout(timeout, age_answer_channel)
   if age is None:  # Timed out.
     if asker_tasklet.alive:
@@ -54,4 +53,3 @@ if __name__ == '__main__':
     print 'You were too slow entering your age.'
   else:
     print 'Got age: %r.' % age
-  stackless.schedule_remove(None)  # Run until all tasklets exit.

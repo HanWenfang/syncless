@@ -20,7 +20,6 @@ also listens for interactive TCP connections (using telnet).
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import socket
-import stackless
 import sys
 
 from syncless import coio
@@ -30,7 +29,7 @@ nick_to_file = {
 }
 """Dictionary mapping participants' nicknames to file objects."""
 
-broadcast_channel = stackless.channel()
+broadcast_channel = coio.stackless.channel()
 """Strings sent to this channel are broadcast to all participants."""
 
 
@@ -128,7 +127,7 @@ def ChatListener(addr):
   while True:
     cs, csaddr = ss.accept()
     print >>sys.stderr, 'info: connection from %r' % (csaddr,)
-    stackless.tasklet(ChatWorker)(cs.makefile(), csaddr)
+    coio.stackless.tasklet(ChatWorker)(cs.makefile(), csaddr)
     cs = csaddr = None  # Free memory early.
 
 
@@ -139,11 +138,11 @@ if __name__ == '__main__':
   port = 1337
   if len(sys.argv) > 1:
     port = int(sys.argv[1])
-  broadcast_channel = stackless.channel()
+  broadcast_channel = coio.stackless.channel()
   broadcast_channel.preference = 1  # Prefer the sender.
-  stackless.tasklet(BroadcastWorker)()
-  stackless.tasklet(ChatListener)(('127.0.0.1', port))
+  coio.stackless.tasklet(BroadcastWorker)()
+  coio.stackless.tasklet(ChatListener)(('127.0.0.1', port))
   # sys.stdin here can be used for writing, as set up by patch_stdin_and_stdout
-  stackless.tasklet(ChatWorker)(sys.stdin, 'console')
-  stackless.schedule_remove(None)
+  coio.stackless.tasklet(ChatWorker)(sys.stdin, 'console')
+  coio.stackless.schedule_remove(None)
   # The program will run indefinitely because BroadcastWorker never exists.

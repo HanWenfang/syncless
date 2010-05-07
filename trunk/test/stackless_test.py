@@ -9,14 +9,17 @@ under non-Stackless Python.
 import sys
 import unittest
 
+
 try:
   import stackless
   print >>sys.stderr, 'info: using stackless'
 except ImportError:
   #import syncless.greenstackless as stackless
-  import greenstackless as stackless
+  from syncless.best_stackless import stackless
+  assert 'stackless' in sys.modules
   assert 'greenlet' in sys.modules
   print >>sys.stderr, 'info: using greenlet'
+
 assert issubclass(TaskletExit, BaseException)
 
 
@@ -775,6 +778,11 @@ class StacklessTest(unittest.TestCase):
     self.assertEqual(tasklet2, stackless.current.prev)
     tasklet1.remove()
     stackless.schedule()
+
+  def testIsMain(self):
+    self.assertTrue(isinstance(stackless.current, stackless.tasklet))
+    self.assertEqual(True, stackless.current.is_main)
+    self.assertEqual(stackless.main, stackless.current)
 
 
 if __name__ == '__main__':

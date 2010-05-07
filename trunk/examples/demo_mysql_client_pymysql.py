@@ -3,13 +3,14 @@
 
 import re
 import sys
-import stackless
 import warnings
 
+# This warning hack needs Python2.6.
 with warnings.catch_warnings():
   warnings.simplefilter('ignore', DeprecationWarning)
   import pymysql.connections
   import pymysql as mysql_dbapi
+from syncless.best_stackless import stackless
 from syncless import patch
 
 # Hotfix.

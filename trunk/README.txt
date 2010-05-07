@@ -98,20 +98,40 @@ Remember your picks above.
 
      $ sudo ln -s python2.6 stackless2.6
 
-3. If you have picked libev, download and install libev from
+3. If you have picked greenlet, download and install it from source.
+   Syncless needs a recent version of greenlet (>= 0.3.1, >= 2010-04-06).
+   Older versions lack the `throw' method. Get it from
+   http://pypi.python.org/pypi/greenlet  (pip and easy_install also work).
+
+   You can also check it out from the SVN repository with:
+
+     $ svn co http://codespeak.net/svn/py/release/0.9.x/py/c-extension/greenlet
+
+   Please note that http://www.undefined.org/python/#greenlet contains an old
+   version (without greenlet.greenlet.throw).
+
+   Install it as usual:
+
+     $ $PYTHON setup.py build
+     $ sudo $PYTHON setup.py install
+
+   , where $PYTHON is your choice of Python above: stackless2.6, python2.5,
+   python2.6.
+
+4. If you have picked libev, download and install libev from
    http://software.schmorp.de/pkg/libev.html
 
    Syncless has been tested on Linux with libev-3.9. The version shipped
    with your Linux distribution will probably also be OK if it's new enough.
 
-4. If you have picked libev, you also have to install libevhdns. Download
+5. If you have picked libev, you also have to install libevhdns. Download
    the libevhdns sources from http://code.google.com/p/libevhdns/ , and
    install them. The minimum version required is 1.4.13.4.
 
    Most probably your Linux distribution doesn't have libevhdns, so you should
    install libevhdns from source.
 
-5. If you have picked libevent1, download the libevent1 sources from
+6. If you have picked libevent1, download the libevent1 sources from
    http://www.monkey.org/~provos/libevent/ , and install them. The minimum
    version required is 1.4.13. Make sure you don't download version 2.x.
 
@@ -120,7 +140,7 @@ Remember your picks above.
    installing from source. You don't have to install the development
    package, Syncless works without it.
 
-6. If you have picked libevent2, download the libevent2 sources from
+7. If you have picked libevent2, download the libevent2 sources from
    http://www.monkey.org/~provos/libevent/ , and install them. The minimum
    version required is 2.0.4. Make sure you don't download version 1.x.
 
@@ -131,7 +151,7 @@ Remember your picks above.
    http://code.google.com/p/syncless/ . Extract the .tar.gz file and cd into
    the directory.
 
-   Alteratively, you may check out the trunk from SVN:
+   Alteratively, you may check out the trunk from the SVN repository:
 
      svn checkout http://syncless.googlecode.com/svn/trunk/ syncless-read-only
 
@@ -141,7 +161,7 @@ Remember your picks above.
      $ $PYTHON setup.py build
      $ sudo $PYTHON setup.py install
 
-   , where $PYTHON is your choice of Python: stackless2.6, python2.5,
+   , where $PYTHON is your choice of Python above: stackless2.6, python2.5,
    python2.6.
 
    Please note that you don't have to run the `install' step to experiment
@@ -713,6 +733,22 @@ Links
 ~~~~~
 * doc: related: eventlet vs gevent:
   http://blog.gevent.org/2010/02/27/why-gevent/
+* doc: http://www.disinterest.org/resource/stackless/2.6.4-docs-html/library/stackless/channels.html
+* doc: http://wiki.netbsd.se/kqueue_tutorial
+* doc: http://stackoverflow.com/questions/554805/stackless-python-network-performance-degrading-over-time
+* doc: speed benchmark: http://muharem.wordpress.com/2007/07/31/erlang-vs-stackless-python-a-first-benchmark/
+
+Asynchronous DNS for Python:
+
+* twisted.names.client from http://twistedmatrix.com
+* dnspython: http://glyphy.com/asynchronous-dns-queries-python-2008-02-09
+             http://www.dnspython.org/
+* adns-python: http://code.google.com/p/adns/python
+*              http://michael.susens-schurter.com/blog/2007/09/18/a-lesson-on-python-dns-and-threads/comment-page-1/
+
+Info: In interactive stackless, repeated invocations of stackless.current may
+  return different objects.
+
 
 Release procedure
 ~~~~~~~~~~~~~~~~~
@@ -756,9 +792,29 @@ Planned features
   priority on Ctrl-<C>, so it would be the next to be scheduled).
 # TODO(pts): Evaluate how fast stack copying (Stackless hard switching) is.
 * TODO(pts): Monkey-patch os.fork() with event_reinit().
-* TODO(pts): Monkey-pathh signal.signal(...).
+* TODO(pts): Monkey-patch signal.signal(...).
 * TODO(pts): Automatic install script for Linux.
+* TODO(pts): Add SSL support for Python2.5 (it already has socket._ssl.ssl).
+* TODO(pts): Document Pyrex vs Cython
 * !! SUXX: why can't we connect() with O_NONBLOCK at a very high rate (just
   as with normal sockets?)
+* TODO(pts): Specify TCP socket timeout. Verify it.
+* TODO(pts): Specify total HTTP write timeout.
+* TODO(pts): Move the main loop to another tasklet (?) so async operations can
+  work even at initialization.
+* TODO(pts): Implement an async DNS resolver HTTP interface.
+  (This will demonstrate asynchronous socket creation.)
+* TODO(pts): Document that scheduling is not fair if there are multiple readers
+  on the same fd.
+* TODO(pts): Implement broadcasting chatbot.
+* TODO(pts): Close connection on 413 Request Entity Too Large.
+* TODO(pts): Prove that there is no memory leak over a long running time.
+* TODO(pts): Use socket.recv_into() for buffering.
+* TODO(pts): Handle signals (at least KeyboardInterrupt).
+* TODO(pts): Handle errno.EPIPE.
+* TODO(pts): Handle errno.EINTR. (Do we need this in Python?)
+* TODO(pts): /infinite 100K buffer on localhost is much faster than 10K.
+* TODO(pts): Consider alternative implementation with eventlet.
+* TODO(pts): Implement an SSL-capable HTTP proxy as a referenc
 
 __EOF__

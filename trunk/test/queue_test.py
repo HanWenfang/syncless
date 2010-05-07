@@ -1,10 +1,9 @@
 #! /usr/local/bin/stackless2.6
 # by pts@fazekas.hu at Wed May  5 19:53:45 CEST 2010
 
-import stackless
 import unittest
 
-from syncless import coio
+from syncless.best_stackless import stackless
 from syncless import util
 
 

@@ -9,7 +9,6 @@ import warnings
 warnings.simplefilter('ignore', DeprecationWarning)  # for popen2
 
 import popen2
-import stackless
 import sys
 
 from syncless import coio
@@ -27,7 +26,7 @@ if __name__ == "__main__":
     patch.patch_os()
   else:
     patch.patch_popen2()
-  stackless.tasklet(ProgressReporter)(0.05)
+  coio.stackless.tasklet(ProgressReporter)(0.05)
   r, w = popen2.popen2('sleep 1; ps x')
   for line in r:
     print repr(line)

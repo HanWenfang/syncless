@@ -1,11 +1,13 @@
 #! /usr/local/bin/stackless2.6
 # by pts@fazekas.hu at Sun Apr 18 15:00:18 CEST 2010
+#
+# This demo needs Python2.6 because Python2.5 doesn't have proper SSL support.
 
 import re
-import stackless
 import sys
 import urllib2
 
+from syncless.best_stackless import stackless
 from syncless import coio
 from syncless import patch
 

@@ -5,7 +5,6 @@
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
-import stackless
 import sys
 
 import tornado.httpserver
@@ -61,7 +60,7 @@ if __name__ == "__main__":
   http_server.listen(6666)  # listen queue is forced to be 128
   print >>sys.stderr, 'info: listening on %r' % (
       http_server._socket.getsockname(),)
-  stackless.tasklet(ProgressReporter)(0.05)
+  coio.stackless.tasklet(ProgressReporter)(0.05)
   ioloop_obj = tornado.ioloop.IOLoop.instance()
   assert 'TornadoSynclessPoll' == type(ioloop_obj._impl).__name__
   ioloop_obj.start()

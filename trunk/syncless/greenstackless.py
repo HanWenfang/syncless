@@ -2,8 +2,13 @@
 
 """Partial emulation of the Stackless Python API using greenlet.
 
+The emulation is partial, i.e. it doesn't emulate all Stackless classes or
+methods -- but for those it emulates, it aims to be as faithful as possible,
+even sacrificing speed. See stackless_test.py for a comprehensive test suite.
+
 Limitations of this emulation module over real Stackless:
 
+* no stackless.runcount (use stackless.getruncount() instead)
 * both greenlet and the emulation is slower than Stackless
 * greenlet has some memory leaks if greenlets reference each other
 * no multithreading support (don't use greenstackless in more than one
@@ -46,18 +51,54 @@ import weakref
 class TaskletExit(SystemExit):
   pass
 
-import __builtin__
-__builtin__.TaskletExit = TaskletExit
+__import__('__builtin__').TaskletExit = TaskletExit
+
+
+def ImportTooLateError(object):
+  """Raised when syncless.coio is imported too late.
+
+  To solve this problem, either import syncless.greenstackless (or
+  syncless.best_stackless) before syncless.coio, or don't create any tasklets
+  or bombs before importing syncless.coio.
+  """
+
+
+class NewTooLateError(object):
+  """Raised when an old-class tasklet or bomb instance is created.
+
+  To solve this problem, create all your tasklets and bombs after importing
+  syncless.coio.
+  """
+
+
+def _process_slots(slots, superclass, dict_obj=None):
+  """Return __slots__ list without items which conflict with superclass."""
+  if not isinstance(superclass, type):
+    raise TypeError
+  slots = set(slots)
+  if dict_obj:
+    for name in slots:
+      dict_obj.pop(name, None)
+  for name in dir(superclass):
+    if not name.startswith('__') and name in slots:
+      slots.remove(name)
+  if '__weakref__' in slots:
+    try:
+      type('dummy', (superclass,), {'__slots__': ['__weakref__']})
+    except TypeError, e:
+      if '__weakref__' not in str(e):
+        raise
+      slots.remove('__weakref__')
+  return list(slots)
+
 
 # !! TODO(pts): Rebase the `bomb' and `tasklet' classes later.
 greenstackless_helper = sys.modules.get('syncless.coio_greenstackless_helper')
 if greenstackless_helper:
   bomb = greenstackless_helper.bomb
-  tasklet_base = greenstackless_helper.tasklet
-  tasklet_slots = ()
+  _tasklet_base = greenstackless_helper.tasklet
 else:
-  tasklet_base = object
-  tasklet_slots = ('__weakref__', 'next', 'prev', 'tempval')
+  _tasklet_base = object
   class bomb(object):
     """Result value for sending exceptions trough a channel."""
 
@@ -192,20 +233,22 @@ def _tasklet_wrapper(tasklet_obj, switch_back_ary, args, kwargs):
     # Keeping forever: del tasklet_obj._channel_weak
 
 
-is_slow_prev_next_ok = False
-"""Bool indicating if emulating tasklet.prev and teasklet.next slowly."""
+_tasklets_created = 0
 
 
-class tasklet(tasklet_base):
+class tasklet(_tasklet_base):
   """Implementation of stackless's tasklet object.
 
   TODO(pts): Implement tasklet._channel as a weak reference.
   """
 
-  __slots__ = ['_greenlet', '_func', 'alive', '_channel_weak',
-               '_data'] + list(tasklet_slots)
+  __slots__ = _process_slots(
+      ['_greenlet', '_func', 'alive', '_channel_weak',
+       '_data', 'next', 'prev', 'tempval', '__weakref__'], _tasklet_base)
 
-  def __init__(self, func = None):
+  def __init__(self, func=None):
+    global _tasklets_created
+    _tasklets_created += 1
     self._greenlet = None
     self._func = func
     self.alive = False
@@ -281,6 +324,7 @@ class tasklet(tasklet_base):
       _id = self._func
     return '<tasklet %s at 0x%0x>' % (_id, id(self))
 
+  @property
   def is_main(self):
     return self is main
 
@@ -334,12 +378,19 @@ class tasklet(tasklet_base):
     return _schedule_to(self)
 
 
-def main():  # Define function with __name__ for tasklet.__repr__.
-  assert 0
-current = main = tasklet(main)
-main._greenlet = greenlet.getcurrent()
-main.alive = True
-main.next = main.prev = main
+def _get_new_main():
+  def main():  # Define function with __name__ for tasklet.__repr__.
+    assert 0
+  main = tasklet(main)
+  main._greenlet = greenlet.getcurrent()
+  main.alive = True
+  main.next = main.prev = main
+  return main
+
+def _new_too_late(*args):
+  raise NewTooLateError
+
+current = main = _get_new_main()
 
 
 def schedule(*args):
@@ -610,8 +661,39 @@ def getcurrent():
 def getmain():
   return main
 
-#from syncless import coio_greenstackless_helper
-# !! rebase
-#main.next = 'foo'
+
+def _coio_rebase(helper_module):
+  """Rebase classes `tasklet' and `bomb' from those in the helper_module."""
+  global tasklet
+  global bomb
+  global current
+  global main
+  global _tasklets_created
+  is_tasklet_ok = list(tasklet.__bases__) == [helper_module.tasklet]
+  if is_tasklet_ok and bomb is helper_module.bomb:
+    return
+  if main is not current:
+    raise ImportTooLateError
+  if main.next is not main:
+    raise ImportTooLateError
+  # We should check for the number of bombs as well, but that would be too
+  # much work.
+  if _tasklets_created != 1:
+    raise ImportTooLateError
+  if not is_tasklet_ok:
+    dict_obj = dict(tasklet.__dict__)
+    dict_obj['__slots__'] = _process_slots(
+        dict_obj['__slots__'], helper_module.tasklet, dict_obj)
+    tasklet.__new__ = classmethod(_new_too_late)
+    tasklet = type(tasklet.__name__, (helper_module.tasklet,), dict_obj)
+    current = main = _get_new_main()
+    _tasklets_created = 1
+    assert type(main) is tasklet
+  if bomb is not helper_module.bomb:
+    bomb.__new__ = classmethod(_new_too_late)
+    bomb = helper_module.bomb
+
+
+is_greenstackless = True
 del greenstackless_helper
-del tasklet_base
+del _tasklet_base
