@@ -215,12 +215,9 @@ cdef extern from "pymem.h":
     void *PyMem_Malloc(size_t)
     void *PyMem_Realloc(void*, size_t)
     void PyMem_Free(void*)
-#cdef extern from *:
-#    ctypedef class aaaaaa.bbbbbb.cccccc [object CCCCCCObject]:
-#        pass   
-cdef extern from "frameobject.h":  # Needed by core/stackless_structs.h
-    pass
-cdef extern from "core/stackless_structs.h":
+cdef extern from "./coio_c_stackless.h":
+    # cdef extern from "frameobject.h":  # Needed by core/stackless_structs.h
+    # cdef extern from "core/stackless_structs.h":
     ctypedef struct PyTaskletObject
     # This is only for pointer manipulation with reference counting.
     ctypedef struct PyTaskletObject:
@@ -233,7 +230,7 @@ cdef extern from "core/stackless_structs.h":
         cdef object curexc_type
         cdef object curexc_value
         cdef object curexc_traceback
-cdef extern from "stackless_api.h":
+    #cdef extern from "stackless_api.h":
     object PyStackless_Schedule(object retval, int remove)
     int PyStackless_GetRunCount()
     # Return -1 on exception, 0 on OK.
@@ -243,7 +240,7 @@ cdef extern from "stackless_api.h":
     int PyTasklet_Alive(tasklet)
     tasklet PyStackless_GetCurrent()
     #tasklet PyTasklet_New(type type_type, object func);
-cdef extern int PyTasklet_GetBlocked(tasklet task)
+    int PyTasklet_GetBlocked(tasklet task)
 cdef extern from "./coio_c_helper.h":
     struct socket_wakeup_info_s "coio_socket_wakeup_info":
         event_t read_ev
