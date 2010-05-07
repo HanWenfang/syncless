@@ -553,6 +553,7 @@ setup(name='syncless',
       long_description=
           "Syncless is an experimental, lightweight, non-blocking (asynchronous) client "
           "and server socket network communication library for Stackless Python 2.6. "
+          "(and also for regular Python with greenlet). "
           "For high speed, Syncless uses libev (and libevent), and parts of "
           "Syncless' code is implemented in C (Pyrex). Thus Syncless can be faster than "
           "many other non-blocking Python communication libraries. Syncless contains an "
