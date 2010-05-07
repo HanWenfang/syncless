@@ -7,7 +7,8 @@ by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
 -- Mon Apr 19 02:54:24 CEST 2010
 
 Syncless is an experimental, lightweight, non-blocking (asynchronous) client
-and server socket network communication library for Stackless Python 2.6.
+and server socket network communication library for Stackless Python 2.6
+(and also for regular Python with greenlet).
 For high speed, Syncless uses libev (and libevent), and parts of
 Syncless' code is implemented in C (Pyrex). Thus Syncless can be faster than
 many other non-blocking Python communication libraries. Syncless contains an
