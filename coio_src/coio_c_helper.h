@@ -70,8 +70,8 @@ static struct event* coio_event_pool_malloc_event(void) {
 
 /* --- Waiting */
 
-static PyObject *waiting_token;
-static PyObject *event_happened_token;
+static PyObject *coio_waiting_token;
+static PyObject *coio_event_happened_token;
 
 /**
  * Make the current tasklet wait on event ev with the specified timeout,
@@ -108,10 +108,10 @@ static inline PyObject *coio_c_wait(struct event *ev,
     ev->ev_arg = PyStackless_GetCurrent();  /* implicit Py_INCREF */
   }
   event_add(ev, timeout);
-  /* This also sets stackless.current.tempval = waiting_token */
-  tempval = PyStackless_Schedule(waiting_token, /*do_remove:*/1);
+  /* This also sets stackless.current.tempval = coio_waiting_token */
+  tempval = PyStackless_Schedule(coio_waiting_token, /*do_remove:*/1);
   Py_DECREF(((PyObject*)ev->ev_arg));  /* stackless.current above */
-  if (tempval != event_happened_token) {
+  if (tempval != coio_event_happened_token) {
     /* We also run this on an exception (tempval == 0). */
     event_del(ev);  /* harmless if event_del(ev) has already been called */
   }
@@ -147,9 +147,9 @@ static inline PyObject *coio_c_wait_for(
   event_set(ev, fd, evtype, callback, PyStackless_GetCurrent());
   event_add(ev, timeout);
   /* This also sets stackless.current.tempval = None */
-  tempval = PyStackless_Schedule(waiting_token, /*do_remove:*/1);
+  tempval = PyStackless_Schedule(coio_waiting_token, /*do_remove:*/1);
   Py_DECREF(((PyObject*)ev->ev_arg));  /* stackless.current above */
-  if (tempval != event_happened_token) {
+  if (tempval != coio_event_happened_token) {
     /* We also run this on an exception (tempval == 0). */
     event_del(ev);  /* harmless if event_del(ev) has already been called */
   }
@@ -162,4 +162,94 @@ static inline int coio_loaded(void) {
   if (loaded) return 1;
   loaded = 1;
   return 0;
+}
+
+struct coio_socket_wakeup_info {
+  struct event read_ev;
+  struct event write_ev;
+  double timeout_value;
+  int fd;
+  struct timeval tv;
+};
+
+static PyObject *coio_socket_error;
+static PyObject *coio_socket_timeout;
+
+static inline PyObject *coio_c_handle_eagain(
+    struct coio_socket_wakeup_info *swi,
+    short evtype) {
+  /*
+  cdef event_t *wakeup_ev
+  if evtype == c_EV_READ:
+      wakeup_ev = &swi.read_ev
+  elif evtype == c_EV_WRITE:
+      wakeup_ev = &swi.write_ev
+  if swi.timeout_value == 0.0:
+      raise socket_error(EAGAIN, strerror(EAGAIN))
+  if swi.timeout_value < 0.0:
+      coio_c_wait(wakeup_ev, NULL)
+  else:
+      if coio_c_wait(wakeup_ev, &swi.tv) is not event_happened_token:
+          # Same error message as in socket.socket.
+          raise socket_error('timed out')
+  */
+  PyObject *retval;
+  struct event *wakeup_ev;
+  if (swi->timeout_value == 0.0)
+      return PyErr_SetFromErrno(coio_socket_error);
+  wakeup_ev =
+      evtype == EV_READ ?  &swi->read_ev :
+      evtype == EV_WRITE ? &swi->write_ev : 0;
+  if (swi->timeout_value < 0.0)
+    return coio_c_wait(wakeup_ev, NULL);
+  retval = coio_c_wait(wakeup_ev, &swi->tv);
+  if (retval != coio_event_happened_token) {
+    Py_DECREF(retval);
+    PyErr_SetString(coio_socket_timeout, "timed out");
+    return NULL;
+  }
+  return retval;
+}
+
+static inline PyObject *coio_c_socket_call(PyObject *function, PyObject *args,
+                                           struct coio_socket_wakeup_info *swi,
+                                           short evtype) {
+  /*
+  while 1:
+    try:
+      return function(*args)
+    except socket_error, e:
+      if e.args[0] != EAGAIN:
+        raise
+      handle_eagain(swi, evtype)
+  */
+  /* TODO(pts): Ensure there are no memory leaks. */
+  PyObject *retval;
+  PyObject *ptype, *pvalue, *ptraceback;
+  while (1) {
+    retval = PyObject_CallObject(function, args);
+    if (retval != NULL) return retval;
+    if (!PyErr_ExceptionMatches(coio_socket_error)) return NULL;
+    PyErr_Fetch(&ptype, &pvalue, &ptraceback);
+    assert(pvalue != NULL);
+    retval = PyTuple_GetItem(pvalue, 0);
+    if (retval == NULL) {
+      PyErr_Restore(ptype, pvalue, ptraceback);
+      return NULL;
+    }
+    if (!PyInt_Check(retval)) {
+      Py_DECREF(retval);
+      PyErr_Restore(ptype, pvalue, ptraceback);
+      return NULL;
+    }
+    if (PyInt_AsLong(retval) != EAGAIN) {
+      Py_DECREF(retval);
+      PyErr_Restore(ptype, pvalue, ptraceback);
+      return NULL;
+    }
+    Py_XDECREF(ptype); Py_XDECREF(pvalue); Py_XDECREF(ptraceback);
+    Py_DECREF(retval);  /* errno_obj */
+    /* TODO(pts): Make sure this call is inlined. */
+    coio_c_handle_eagain(swi, evtype);
+  }
 }
