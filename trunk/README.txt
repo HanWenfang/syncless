@@ -50,46 +50,115 @@ Requirements
 ~~~~~~~~~~~~
 * A recent Unix system. Tested on Linux 2.6, should work on FreeBSD. Testers
   for other Unix variants are welcome. It won't work on Win32 or Win64.
-* Stackless Python (recommended) or normal (C)Python with greenlet (slow,
-  may leak memory, not recommended).
+* Stackless Python 2.6.x (recommended, especially for production use) or
+  normal (C)Python 2.5 or 2.6 with greenlet (slow, may leak memory,
+  not recommended in general, but it's easy to install and try).
 * Python 2.6 (recommended, for epoll(7) support) or Python 2.5.
-* A C compiler and the Python development package (.h files) for
+* A C compiler (gcc) and the Python development package (.h files) for
   compilation.
-* TODO(pts): Reimplement this: SSL client sockets.
+* Various development packages such as python2.5-dev and libssl-dev already
+  installed.
 
-How to use
-~~~~~~~~~~
-1. Download and install Stackless Python 2.6.x from http://stackless.com/
-   For convenience, rename the executable to /usr/local/bin/stackless2.6
-
-2. Download and install libev from http://software.schmorp.de/pkg/libev.html
-   Syncless has been tested on Linux with libev-3.9. The version shipped
-   with your Linux distribution will probably also be OK.
-
-3. Download and install libevhdns from http://code.google.com/p/libevhdns/ .
-   Most probably your Linux distribution doesn't have this package, so you
-   should install libevhdns from source.
-
-4. Download and extract Syncless.
-
-5. Install Syncless:
-
-     $ stackless2.6 ./setup.py build
-     $ sudo stackless2.6 ./setup.py install
-
-6. In the Syncless directory, run
-
-     $ stackless2.6 ./demo.py
-
-7. Have a look at examples/demo_*.py in the source directory to study the
-   examples.
-
-The original blog announcement of Syncless' precedessor:
-http://ptspts.blogspot.com/2009/12/experimental-http-server-using.html
-
-Example code
+Installation
 ~~~~~~~~~~~~
-See examples/demo_*.py in the Syncless source directory.
+For a Python with coroutine support, you have these options (pick one):
+
+* Python 2.6 with greenlet  (easy to install, slow, may leak memory, not
+  recommended in general, but recommended if you want to try Syncless
+  quickly without bothering to install Stackless Python)
+* Python 2.5 with greenlet  (like Python2.6, but without SSL support)
+* Stackless Python >= 2.6.4  (recommended for production use)
+
+For an asynchronous event notification library with DNS support, you have
+these options (pick one):
+
+* libev >= 3.9 + libevhdns  (recommended, fastest)
+* libevent2 >= 2.0.4  (recommended if you don't like libev)
+* libevent1 >= 1.4.13  (not recommended, because it can register only a single
+  event on the same filehandle with the same purpose at a time
+
+Remember your picks above.
+
+0. Install a C compiler (e.g. $ apt-get install gcc).
+
+1. If you have picked Python 2.5 or Python 2.6 (non-Stackless), install it
+   either from source or from binary package. When installing from binary
+   package, please install the headers as well. For example, on Debian and
+   Ubuntu, run one of:
+
+     $ sudo apt-get install python2.5 python2.5-dev
+     $ sudo apt-get install python2.6 python2.6-dev
+   
+2. If you have picked Stackless, most probably you have to download it and
+   install it from source. Download and install Stackless Python 2.6.x (not
+   3.x) from http://stackless.com/
+
+   For convenience, rename the installed executable or make a symlink to
+   /usr/local/bin/stackless2.6:
+
+     $ sudo ln -s python2.6 stackless2.6
+
+3. If you have picked libev, download and install libev from
+   http://software.schmorp.de/pkg/libev.html
+
+   Syncless has been tested on Linux with libev-3.9. The version shipped
+   with your Linux distribution will probably also be OK if it's new enough.
+
+4. If you have picked libev, you also have to install libevhdns. Download
+   the libevhdns sources from http://code.google.com/p/libevhdns/ , and
+   install them. The minimum version required is 1.4.13.4.
+
+   Most probably your Linux distribution doesn't have libevhdns, so you should
+   install libevhdns from source.
+
+5. If you have picked libevent1, download the libevent1 sources from
+   http://www.monkey.org/~provos/libevent/ , and install them. The minimum
+   version required is 1.4.13. Make sure you don't download version 2.x.
+
+   Most probably your Linux distribution has a libevent1, but it's too old
+   (like 1.3). If it's at least 1.4, you can try that one instead of
+   installing from source. You don't have to install the development
+   package, Syncless works without it.
+
+6. If you have picked libevent2, download the libevent2 sources from
+   http://www.monkey.org/~provos/libevent/ , and install them. The minimum
+   version required is 2.0.4. Make sure you don't download version 1.x.
+
+   Most probably your Linux distribution doesn't have libevent2, so you should
+   install libevent2 from source.
+
+7. Download the newest version of Syncless. Get the .tar.gz file from here:
+   http://code.google.com/p/syncless/ . Extract the .tar.gz file and cd into
+   the directory.
+
+   Alteratively, you may check out the trunk from SVN:
+
+     svn checkout http://syncless.googlecode.com/svn/trunk/ syncless-read-only
+
+8. Compile and install Syncless. Make sure you are in the directory
+   containing setup.py and syncless/patch.py . Then run
+
+     $ $PYTHON setup.py build
+     $ sudo $PYTHON setup.py install
+
+   , where $PYTHON is your choice of Python: stackless2.6, python2.5,
+   python2.6.
+
+   Please note that you don't have to run the `install' step to experiment
+   with syncless: after the `build' step, you can run the demos in the
+   `examples' directory, and you can also run the tests in the `test'
+   directory.
+
+How to use (with example code)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+1. Follow the steps in `Installation'.
+
+2. In the Syncless directory, run
+
+     $ stackless2.6 ./examples/demo.py
+
+3. Have a look at examples/demo_*.py in the source directory to study the
+   examples.
 
 Author
 ~~~~~~
@@ -686,9 +755,9 @@ Planned features
   is delayed) This is hard to achieve (but the main tasklet can be given
   priority on Ctrl-<C>, so it would be the next to be scheduled).
 # TODO(pts): Evaluate how fast stack copying (Stackless hard switching) is.
-* TODO(pts): Make stackless.schedule_remove() work again.
 * TODO(pts): Monkey-patch os.fork() with event_reinit().
 * TODO(pts): Monkey-pathh signal.signal(...).
+* TODO(pts): Automatic install script for Linux.
 * !! SUXX: why can't we connect() with O_NONBLOCK at a very high rate (just
   as with normal sockets?)
 

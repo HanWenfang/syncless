@@ -16,6 +16,14 @@ GNU General Public License for more details.
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
+import sys
+have_stackless = 'stackless' in sys.modules
+try:
+  from greenlet import greenlet
+  have_greenlet = True
+except ImportError:
+  have_greenlet = False
+
 import glob
 import os
 import os.path
@@ -406,16 +414,25 @@ def FindLib(retval, compiler, prefixes, includes, library, symbols,
   log.error('library %s not found or not working' % library)
   return False
 
-def FindLibEv(command_obj):
+def AutoDetect(command_obj):
   # We could add more directories (e.g. those in /etc/ld.so.conf), but that's
   # system-specific, see http://stackoverflow.com/questions/2230467 .
   # TODO(pts): Issue a fatal error if libev or libevhdns was not found.
   # TODO(pts): Find libevhdns separately.
   retval = {'include_dirs': [], 'library_dirs': [], 'libraries': [],
             'define_macros': [], 'is_found': False}
+
+  if have_stackless:
+    retval['define_macros'].append(('COIO_USE_CO_STACKLESS', True))
+  elif have_greenlet:
+    retval['define_macros'].append(('COIO_USE_CO_GREENLET', True))
+  else:
+    raise LinkError('neither stackless or greenlet found, '
+                    'see the Installation section of README.txt')
+
   compiler = GetCompiler(command_obj)
-  prefixes = os.getenv('LD_LIBRARY_PATH', '').split(':') + [
-                sys.prefix, '/usr']
+  prefixes = filter(bool, os.getenv('LD_LIBRARY_PATH', '').split(':') +
+                    [sys.prefix, '/usr/local', '/usr'])
   is_found = False
 
   is_asked = False
@@ -444,7 +461,7 @@ def FindLibEv(command_obj):
   if event_driver in (None, 'libevent2'):
     if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
             includes=['event2/event_compat.h'], library='event',
-            symbols=['event_init', 'event_loop']) and
+            symbols=['event_init', 'event_loop', 'event_reinit']) and
         FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
             includes=['event2/dns.h', 'event2/dns_compat.h'],
             library='event',
@@ -467,7 +484,7 @@ def FindLibEv(command_obj):
         break
     if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes2,
             includes=['event.h'], library=lib_event,
-            symbols=['event_init', 'event_loop']) and
+            symbols=['event_init', 'event_loop', 'event_reinit']) and
         FindLib(retval=retval, compiler=compiler, prefixes=prefixes2,
             includes=['evdns.h'], library=lib_event,
             symbols=['evdns_resolve_ipv4', 'evdns_resolve_reverse_ipv6'])):
@@ -477,7 +494,8 @@ def FindLibEv(command_obj):
       retval['define_macros'].append(('COIO_USE_LIBEVENT1', None))
 
   if not retval.pop('is_found'):
-    raise LinkError('libevent/libev not found')
+    raise LinkError('libevent/libev not found, '
+                    'see the Installation section of README.txt')
 
   repr_retval = repr(retval)
   log.info('using C env %s' % repr_retval)
@@ -494,12 +512,15 @@ event = Extension(name='syncless.coio',
                   sources=['coio_src/coio.c'],
                   depends=['coio_src/coio_c_helper.h',
                            'coio_src/coio_c_evbuffer.h',
+                           'coio_src/coio_c_stackless.h',
+                           'coio_src/coio_c_include_libevent.h',
                            'coio_src/coio_ev_event.h',
+                           'coio_src/coio_event1_event.h',
                            'setup.cenv',
                           ],
                   # Using a function for library_dirs here is a nonstandard
                   # distutils extension, see also MyBuildExtDirs.
-                  library_dirs=FindLibEv,
+                  library_dirs=AutoDetect,
                   libraries=[])
 
 # chdir to to the directory containing setup.py. Building extensions wouldn't

@@ -152,7 +152,7 @@ class StacklessTest(unittest.TestCase):
     self.assertEqual(2, stackless.getruncount())
     t.remove()
     self.assertEqual(1, stackless.getruncount())
-    t.insert()
+    self.assertEqual(t, t.insert())
     self.assertEqual(2, stackless.getruncount())
     self.assertEqual(None, c.send('msg1'))
     self.assertEqual(c.balance, -3)
