@@ -423,9 +423,12 @@ def AutoDetect(command_obj):
             'define_macros': [], 'is_found': False}
 
   if have_stackless:
-    retval['define_macros'].append(('COIO_USE_CO_STACKLESS', True))
+    retval['define_macros'].append(('COIO_USE_CO_STACKLESS', None))
   elif have_greenlet:
-    retval['define_macros'].append(('COIO_USE_CO_GREENLET', True))
+    if not hasattr(greenlet, 'throw'):
+      raise LinkError('detected old (unusable) version of greenlet, '
+                      'see the Installation section of README.txt')
+    retval['define_macros'].append(('COIO_USE_CO_GREENLET', None))
   else:
     raise LinkError('neither stackless or greenlet found, '
                     'see the Installation section of README.txt')

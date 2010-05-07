@@ -4,7 +4,10 @@
 # TODO(pts): Add a proper test, with our custom (blocking) SSL server.
 # TODO(pts): Add a proper test for a non-blocking SSL server and its client.
 
-"""Demo for fetching a https:// page using Syncless coio."""
+"""Demo for fetching a https:// page using Syncless coio.
+
+This needs Python 2.6 because of the SSL support.
+"""
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 

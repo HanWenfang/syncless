@@ -193,10 +193,10 @@ def patch_concurrence():
   """
   import logging
   import sys
-  import stackless
   from concurrence import core
   from concurrence import _event
   from syncless import coio
+  stackless = coio.stackless
 
   def Exit(code=0):
     raise SystemExit(code)

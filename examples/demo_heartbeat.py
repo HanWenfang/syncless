@@ -6,9 +6,9 @@
 
 import logging
 import socket
-import stackless
 import time
 
+from syncless.best_stackless import stackless
 from syncless import coio
 
 
@@ -80,6 +80,6 @@ if __name__ == '__main__':
   while True:
     client_socket, addr = server_socket.accept()
     logging.info('connection from %r, runcount=%d' %
-                 (addr, stackless.runcount))
+                 (addr, stackless.getruncount()))
     stackless.tasklet(Worker)(client_socket, addr)
     client_socket = addr = None  # Free memory early.

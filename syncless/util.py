@@ -15,10 +15,10 @@ GNU General Public License for more details.
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
-import stackless
 import sys
 from collections import deque
 
+from syncless.best_stackless import stackless
 from syncless import coio
 
 
@@ -45,7 +45,7 @@ def run_in_tasklet_with_timeout(function, timeout, default_value=None,
       results.extend(sys.exc_info())
     if sleeper_tasklet.alive:
       sleeper_tasklet.insert()  # Interrupt coio.sleep().
-  worker_tasklet = stackless.tasklet(Worker)(
+  worker_tasklet = coio.stackless.tasklet(Worker)(
       stackless.current, function, args, kwargs)
   try:
     coio.sleep(timeout)

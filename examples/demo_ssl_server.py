@@ -4,13 +4,20 @@
 # TODO(pts): Add a proper test, with our custom (blocking) SSL server.
 # TODO(pts): Add a proper test for a non-blocking SSL server and its client.
 
+"""Demo for implementing a HTTPS server by hand using Syncless coio.
+
+Please note that syncless.wsgi also supports SSL (see examples/demo.py),
+please use that in production instead of writing your own HTTP(S) server.
+
+This needs Python 2.6 because of the SSL support.
+"""
+
 import errno
 import gc
 import os
 import os.path
 import socket
 import ssl
-import stackless
 import sys
 from syncless import coio
 from syncless import patch
@@ -98,6 +105,6 @@ if __name__ == '__main__':
       # handshake.
       print >>sys.stderr, 'error: %s' % e  # !!
       continue
-    stackless.tasklet(HandleRequest)(csslsock, addr)
+    coio.stackless.tasklet(HandleRequest)(csslsock, addr)
     csslsock = addr = None  # Free memory early.
-    stackless.schedule(None)  # Give a chance for HandleRequest.
+    coio.stackless.schedule(None)  # Give a chance for HandleRequest.

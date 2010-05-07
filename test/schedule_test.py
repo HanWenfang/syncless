@@ -1,24 +1,21 @@
 #! /usr/local/bin/stackless2.6
 
-"""Test for the Syncless scheduler.
-
-!! make this test work with coio instead of nbio.
-"""
+"""Test for the Syncless scheduler."""
 
 import os
-import stackless
 import sys
 import unittest
 
+from syncless.best_stackless import stackless
 from syncless import coio
 
 class ScheduleTest(unittest.TestCase):
 
   def setUp(self):
-    self.assertEqual(2, stackless.runcount)
+    self.assertEqual(2, stackless.getruncount())
 
   def tearDown(self):
-    self.assertEqual(2, stackless.runcount)
+    self.assertEqual(2, stackless.getruncount())
 
   def testFairAAANothing(self):
     pass

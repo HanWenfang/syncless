@@ -6,7 +6,6 @@
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import os
-import stackless
 import sys
 
 from syncless import coio
@@ -21,7 +20,7 @@ if __name__ == "__main__":
   # Without this patch_...() call the ProgressReporter wouldn't be scheduled,
   # and thus the progress dots wouldn't be printed.
   patch.patch_os()
-  stackless.tasklet(ProgressReporter)(0.05)
+  coio.stackless.tasklet(ProgressReporter)(0.05)
   f = os.popen('sleep 1; ps x; exit 10', 'r')
   for line in f:
     print repr(line)

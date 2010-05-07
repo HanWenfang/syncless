@@ -1,8 +1,6 @@
-# Copyright (c) 2007-2008 Twisted Matrix Laboratories.
-# See LICENSE for details.
+#! /usr/local/bin/python2.4
 
-"""
-A Syncless-based implementation of the twisted main loop.
+"""A Syncless-based implementation of the Twisted main loop.
 
 This Python module was written by reusing the source code of
 libevent.reactor v0.3, available from http://launchpad.net/python-libevent
@@ -17,10 +15,12 @@ listeners or connectors are added):
 API Stability: stable
 
 Maintainer of LibEventReactor: U{Thomas Herve <mailto:therve@free.fr>}
+Copyright (c) 2007-2008 Twisted Matrix Laboratories.
 """
 
+__author__ = 'pts@fazekas.hu (Peter Szabo)'
+
 import sys
-import stackless
 
 from zope.interface import implements
 
@@ -165,6 +165,7 @@ class SynclessReactor(PosixReactorBase):
         import signal
         from syncless import coio
 
+        # !!! fix this reactor (there is no coio.event anymore)
         coio.sigint_event.delete()
         coio.sigint_event = evt = coio.event(
             callback=self.sigInt, handle=signal.SIGINT,
@@ -243,9 +244,7 @@ class SynclessReactor(PosixReactorBase):
 
 
 def install():
-    """
-    Install the Syncless reactor.
-    """
+    """Install the Syncless reactor."""
     # As a side effect, this calls `from syncless import coio', which
     # creates and starts the coio.main_loop_tasklet, which calls
     # event_loop() indefinitely.

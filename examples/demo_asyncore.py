@@ -251,14 +251,13 @@ if __name__=="__main__":
     s=Server('',port,RequestHandler)
     print "SimpleAsyncHTTPServer running on port %s" %port
 
-    import stackless
     from syncless import coio
     from syncless import patch
     def ProgressWorker(sleep_amount):
         while True:
             os.write(2, '.')
             coio.sleep(sleep_amount)
-    stackless.tasklet(ProgressWorker)(0.1)
+    coio.stackless.tasklet(ProgressWorker)(0.1)
     patch.patch_asyncore()
 
     try:

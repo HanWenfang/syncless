@@ -5,7 +5,6 @@
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
-import stackless
 import subprocess
 import sys
 
@@ -24,7 +23,7 @@ if __name__ == "__main__":
     patch.patch_os()
   else:
     patch.patch_subprocess()
-  stackless.tasklet(ProgressReporter)(0.05)
+  coio.stackless.tasklet(ProgressReporter)(0.05)
   p = subprocess.Popen('sleep 1; ps x', stdout=subprocess.PIPE, shell=True,
                        close_fds=True)
   for line in p.stdout:

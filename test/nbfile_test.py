@@ -1,7 +1,6 @@
 #! /usr/local/bin/stackless2.6
 # by pts@fazekas.hu at Sat Apr 24 00:25:31 CEST 2010
 
-import stackless
 import os
 import unittest
 
@@ -45,13 +44,13 @@ class NbfileTest(unittest.TestCase):
 
   def AssertReadLineWait(self, expected_read, to_write, limit=-1):
     appender_calls = []
-    reader_tasklet = stackless.current
+    reader_tasklet = coio.stackless.current
     def Appender():
       appender_calls.append(10)
       self.f.write(to_write)
       if to_write and limit:
         appender_calls.append(20)
-        stackless.schedule()
+        coio.stackless.schedule()
       else:
         appender_calls.append(20)
       if reader_tasklet.scheduled and not reader_tasklet.blocked:
@@ -59,14 +58,14 @@ class NbfileTest(unittest.TestCase):
       else:
         appender_calls.append(31)
         self.f.write('\n')
-    stackless.tasklet(Appender)()
+    coio.stackless.tasklet(Appender)()
     if to_write and limit:
       expected_calls = [10, 20]
     else:
       expected_calls = []
     self.assertEqual([expected_read, expected_calls],
                      [self.f.readline(limit), appender_calls])
-    stackless.schedule()
+    coio.stackless.schedule()
     self.assertEqual([10, 20, 30], appender_calls)
 
   def testReadLineWait(self):
@@ -99,15 +98,15 @@ class NbfileTest(unittest.TestCase):
     read_chars = []
     def Reader():
       read_chars.append(self.f.read(1))
-    reader1_tasklet = stackless.tasklet(Reader)()
-    reader2_tasklet = stackless.tasklet(Reader)()
-    stackless.schedule()
+    reader1_tasklet = coio.stackless.tasklet(Reader)()
+    reader2_tasklet = coio.stackless.tasklet(Reader)()
+    coio.stackless.schedule()
     assert not reader1_tasklet.scheduled
     assert not reader2_tasklet.scheduled
     self.f.write('ab')
     self.f.flush()
     self.assertEqual([], read_chars)
-    stackless.schedule()
+    coio.stackless.schedule()
     if coio.has_feature_multiple_events_on_same_fd():
       self.assertEqual(['a', 'b'], read_chars)
       assert not reader1_tasklet.alive

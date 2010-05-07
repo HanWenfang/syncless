@@ -281,10 +281,11 @@ def method():
 def reinit(int do_recreate=0):
     cdef int got
     if do_recreate:
-        event_del(&sigint_ev)
-        got = coio_event_reinit(1)
-        if got >= 0:
-            _setup_sigint()
+        if sigint_ev.ev_flags:
+          event_del(&sigint_ev)
+          got = coio_event_reinit(1)
+          if got >= 0:
+              _setup_sigint()
     else:
         got = coio_event_reinit(0)
     if got < 0:
@@ -433,6 +434,8 @@ cdef void HandleCSigInt(int fd, short evtype, void *arg) with gil:
        pass
 
 cdef event_t sigint_ev
+sigint_ev.ev_flags = 0
+
 cdef void _setup_sigint():
     event_set(&sigint_ev, SIGINT, c_EV_SIGNAL | c_EV_PERSIST,
               HandleCSigInt, NULL)
@@ -442,6 +445,9 @@ cdef void _setup_sigint():
     # This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
     # gets control) a KeyboardInterrupt in the main tasklet.
     event_add(&sigint_ev, NULL)
+
+#def unregister_sigint():
+#   """Un
 
 cdef void set_fd_nonblocking(int fd):
     # This call works on Unix, but it's not portable (to e.g. Windows).
