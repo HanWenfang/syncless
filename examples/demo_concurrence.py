@@ -5,7 +5,8 @@
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
-# !!! This doesn't work in Python2.5, handler doesn't get called.
+# This doesn't work in Python 2.5, the handler doesn't get called. Please
+# note that it works with Python 2.6 + greenlet and Stackless Python 2.6.
 
 import sys
 import socket
