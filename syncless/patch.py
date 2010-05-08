@@ -194,6 +194,10 @@ def patch_concurrence():
   import logging
   import sys
   from concurrence import core
+  try:
+    from concurrence import event  # In repo at Sat May  8 03:06:41 CEST 2010
+  except ImportError:
+    event = type(sys)('unused_event')
   from concurrence import _event
   from syncless import coio
   stackless = coio.stackless
@@ -254,18 +258,38 @@ def patch_concurrence():
       main_tasklets.remove(stackless.current)
 
   for name in dir(_event):
-    delattr(_event, name)
-  _event.method = coio.method
-  _event.version = coio.version
-  _event.event = coio.concurrence_event
-  _event.EV_TIMEOUT = coio.EV_TIMEOUT
-  _event.EV_READ = coio.EV_READ
-  _event.EV_WRITE = coio.EV_WRITE
-  _event.EV_SIGNAL = coio.EV_SIGNAL
-  _event.EV_PERSIST = coio.EV_PERSIST
+    if name != '__builtins__' and name != '__name__':
+      delattr(_event, name)
+  for name in dir(event):
+    if name != '__builtins__' and name != '__name__':
+      delattr(event, name)
+  assert core.event is event
+  _event.method = event.method = coio.method
+  _event.version = event.version = coio.version
+  _event.event = event.event = coio.concurrence_event
+  _event.EV_TIMEOUT = event.EV_TIMEOUT = coio.EV_TIMEOUT
+  _event.EV_READ = event.EV_READ = coio.EV_READ
+  _event.EV_WRITE = event.EV_WRITE = coio.EV_WRITE
+  _event.EV_SIGNAL = event.EV_SIGNAL = coio.EV_SIGNAL
+  _event.EV_PERSIST = event.EV_PERSIST = coio.EV_PERSIST
   core.quit = Quit
   core._dispatch = Dispatch
   sys.exit = Exit
+
+  # Replace the broken Stackless emulation in concurrence.core with the
+  # better emulation in Stackless.
+  core.stackless = stackless
+  if core.Tasklet.__bases__[0] is not stackless.tasklet:
+    # It's time for some Python class model black magic.
+    dict_obj = dict(core.Tasklet.__dict__)
+    assert '__slots__' not in dict_obj
+    # Changing the __new__ method here would create new objects even if
+    # someone has a reference to the old class, e.g. from an earlier
+    # `from concurrence.core import Tasklet'.
+    core.Tasklet.__new__ = classmethod(lambda *args: core.Tasklet())
+    core.Tasklet = type(core.Tasklet.__name__,
+                        (stackless.tasklet,) + core.Tasklet.__bases__[1:],
+                        dict_obj)
 
 
 def ExceptHook(orig_excepthook, *args):

@@ -5,8 +5,10 @@
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
-# This doesn't work in Python 2.5, the handler doesn't get called. Please
-# note that it works with Python 2.6 + greenlet and Stackless Python 2.6.
+# It would work even with and without these imports, regardless of the import
+# order.
+#from syncless.best_stackless import stackless
+#from syncless import coio
 
 import sys
 import socket
@@ -90,8 +92,12 @@ def ProgressReporter(delta_sec):
     coio.sleep(delta_sec)
 
 if __name__ == '__main__':
-  #from syncless import coio
-  #from syncless import patch
-  #patch.patch_concurrence()
-  #coio.stackless.tasklet(ProgressReporter)(0.2)
+  #from concurrence import _event
+  #assert 0, _event.method()
+  from syncless import coio
+  from syncless import patch
+  patch.patch_concurrence()
+  coio.stackless.tasklet(ProgressReporter)(0.2)
+  # !! Disable the Syncless main loop here if Concurrence is unpatched.
+  #    Both call if/while stackless.getruncount() > 1: stackless.schedule()
   dispatch(server)

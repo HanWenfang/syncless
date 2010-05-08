@@ -7,7 +7,7 @@ include "evdns.pxi"
 assert not coio_loaded(), 'syncless.coio loaded multiple times'
 
 if coio_event_init() != 0:
-    raise OSError(EIO, 'event_init failed')
+  raise OSError(EIO, 'event_init failed')
 
 _setup_sigint()
 

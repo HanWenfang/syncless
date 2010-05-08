@@ -350,13 +350,6 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
 
 # ---
 
-# Example code:
-#def Sayer(object name):
-#    while 1:
-#        print name
-#        PyStackless_Schedule(None, 0)  # remove
-
-# TODO(pts): Experiment calling these from Python instead of C.
 def MainLoop():
     #cdef PyTaskletObject *pprev
     #cdef PyTaskletObject *pnext
@@ -2746,6 +2739,10 @@ cdef class concurrence_event:
     cdef timeval tv
 
     def __init__(self, callback, short evtype=0, handle=-1):
+        if callable(handle):
+            # Concurrence repo has this at Sat May  8 03:16:07 CEST 2010:
+            # event.event(fd, event_type, self._on_event)
+            handle, callback = callback, handle
         self.callback = callback
         self.evtype = evtype
         if evtype == 0 and not handle:  # Timeout.

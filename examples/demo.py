@@ -4,7 +4,9 @@
 # by pts@fazekas.hu at Sun Dec 20 21:49:16 CET 2009
 #
 
-from syncless import coio  # Load it early, before `import stackless'.
+# This import is not necessary, we just demonstrate that we can load stackless
+# earlier than coio.
+from syncless.best_stackless import stackless
 
 import cgi
 import logging
