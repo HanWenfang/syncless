@@ -33,7 +33,7 @@
  */
 
 
-struct timeval;
+#include <sys/time.h> /*struct timeval;*/
 struct event_base;
 
 #define EVLIST_TIMEOUT  0x01

@@ -60,9 +60,7 @@ class SynclessReactor(PosixReactorBase):
     implements(IReactorFDSet)
 
     def __init__(self):
-        """
-        Initialize reactor and local fd storage.
-        """
+        """Initialize reactor and local fd storage."""
         # These inits really ought to be before
         # L{PosixReactorBase.__init__} call, because it adds the
         # waker in the process
@@ -77,9 +75,7 @@ class SynclessReactor(PosixReactorBase):
 
 
     def _add(self, xer, mode, mdict):
-        """
-        Create the event for reader/writer.
-        """
+        """Create the event for reader/writer."""
         fd = xer.fileno()
         if fd not in mdict:
             mdict[fd] = self._wakeup_info.create_event(fd, mode)
@@ -87,23 +83,17 @@ class SynclessReactor(PosixReactorBase):
 
 
     def addReader(self, reader):
-        """
-        Add a FileDescriptor for notification of data available to read.
-        """
+        """Add a FileDescriptor for notification of data available to read."""
         self._add(reader, 1, self._reads)
 
 
     def addWriter(self, writer):
-        """
-        Add a FileDescriptor for notification of data available to write.
-        """
+        """Add a FileDescriptor for notification of data available to write."""
         self._add(writer, 2, self._writes)
 
 
     def _remove(self, selectable, mdict, other):
-        """
-        Remove an event if found.
-        """
+        """Remove an event if found."""
         fd = selectable.fileno()
         if fd == -1:
             for fd, fdes in self._selectables.items():
@@ -119,23 +109,17 @@ class SynclessReactor(PosixReactorBase):
 
 
     def removeReader(self, reader):
-        """
-        Remove a selectable for notification of data available to read.
-        """
+        """Remove a selectable for notification of data available to read."""
         return self._remove(reader, self._reads, self._writes)
 
 
     def removeWriter(self, writer):
-        """
-        Remove a selectable for notification of data available to write.
-        """
+        """Remove a selectable for notification of data available to write."""
         return self._remove(writer, self._writes, self._reads)
 
 
     def removeAll(self):
-        """
-        Remove all selectables, and return a list of them.
-        """
+        """Remove all selectables, and return a list of them."""
         if self.waker is not None:
             self.removeReader(self.waker)
         result = self._selectables.values()
@@ -164,39 +148,20 @@ class SynclessReactor(PosixReactorBase):
     def _handleSignals(self):
         import signal
         from syncless import coio
-
-        # !!! fix this reactor (there is no coio.event anymore)
-        coio.sigint_event.delete()
-        coio.sigint_event = evt = coio.event(
-            callback=self.sigInt, handle=signal.SIGINT,
-            evtype=coio.EV_SIGNAL | coio.EV_PERSIST, is_internal=1)
-        evt.add()
-        self._signal_handlers.append(evt)
-
-        evt = coio.event(
-            callback=self.sigTerm, handle=signal.SIGTERM,
-            evtype=coio.EV_SIGNAL | coio.EV_PERSIST, is_internal=1)
-        evt.add()
-        self._signal_handlers.append(evt)
+        self._signal_handlers.append(coio.signal(signal.SIGINT,  self.sigInt))
+        self._signal_handlers.append(coio.signal(signal.SIGTERM, self.sigTerm))
 
         # Catch Ctrl-Break in windows
-        if hasattr(signal, "SIGBREAK"):
-            evt = coio.event(
-                callback=self.sigBreak, handle=signal.SIGBREAK,
-                evtype=coio.EV_SIGNAL | coio.EV_PERSIST, is_internal=1)
-            evt.add()
-            self._signal_handlers.append(evt)
-        if platformType == "posix":
+        if hasattr(signal, 'SIGBREAK'):
+            self._signal_handlers.append(
+                coio.signal(signal.SIGBREAK, self.sigBreak))
+        if platformType == 'posix':
             # Install a dummy SIGCHLD handler, to shut up warning. We could
             # install the normal handler, but it would lead to unnecessary reap
             # calls
             signal.signal(signal.SIGCHLD, lambda *args: None)
-            evt = coio.event(
-                callback=self._handleSigchld, handle=signal.SIGCHLD,
-                evtype=coio.EV_SIGNAL | coio.EV_PERSIST, is_internal=1)
-            evt.add()
-            self._signal_handlers.append(evt)
-
+            self._signal_handlers.append(
+                coio.signal(signal.SIGCHLD, self._handleSigchld))
 
     def _doReadOrWrite(self, fd, mode, selectable):
         """
@@ -231,9 +196,7 @@ class SynclessReactor(PosixReactorBase):
                         self._doReadOrWrite, fd, mode, selectable)
 
     def doIteration(self, timeout):
-        """
-        Call one iteration of the Syncless loop.
-        """
+        """Call one iteration of the Syncless loop."""
         self._runPendingEvents(self._wakeup_info.tick(timeout))
 
     def crash(self):

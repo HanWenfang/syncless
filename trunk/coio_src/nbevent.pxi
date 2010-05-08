@@ -153,6 +153,7 @@ cdef extern from "./coio_c_include_libevent.h":
         int   ev_fd
         int   ev_flags
         void *ev_arg
+        #short ev_events  # c_EV_READ | c_EV_WRITE etc.
 
     int coio_event_init()
     int coio_event_reinit(int do_recreate)
@@ -282,10 +283,12 @@ def reinit(int do_recreate=0):
     cdef int got
     if do_recreate:
         if sigint_ev.ev_flags:
-          event_del(&sigint_ev)
-          got = coio_event_reinit(1)
-          if got >= 0:
-              _setup_sigint()
+            event_del(&sigint_ev)
+            got = coio_event_reinit(1)
+            if got >= 0:
+                _setup_sigint()
+        else:
+            got = 0
     else:
         got = coio_event_reinit(0)
     if got < 0:
@@ -445,9 +448,6 @@ cdef void _setup_sigint():
     # This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
     # gets control) a KeyboardInterrupt in the main tasklet.
     event_add(&sigint_ev, NULL)
-
-#def unregister_sigint():
-#   """Un
 
 cdef void set_fd_nonblocking(int fd):
     # This call works on Unix, but it's not portable (to e.g. Windows).
@@ -1029,10 +1029,10 @@ cdef class nbfile:
             return self.write_eb.off
 
     property write_buffer_limit:
+        """Setting the write_buffer_limit doesn't call flush()."""
         def __get__(nbfile self):
             return self.c_write_buffer_limit
         def __set__(nbfile self, int new_limit):
-            """Setting the write_buffer_limit doesn't call flush()."""
             if new_limit < 0:
                 self.c_write_buffer_limit = DEFAULT_WRITE_BUFFER_LIMIT
             else:
@@ -2494,7 +2494,7 @@ def select(rlist, wlist, xlist, timeout=None):
     # TODO(pts): Simplify if len(rlist) == 1 and wlist is empty (etc.).
     return selecter().do_select(rlist, wlist, timeout)
 
-# --- syncless.reactor support classes
+# --- Twisted 10.0.0 syncless.reactor and Tornado support classes
 
 cdef class wakeup_info
 
@@ -2618,6 +2618,79 @@ cdef class wakeup_info:
         list_obj = list(self.tick(timeout))
         del self.c_pending_events[:]
         return list_obj
+
+# --- Signal support for Twisted 10.0.0
+
+# Map signal signums to signal_event objects.
+cdef dict signal_events
+signal_events = {}
+
+cdef void HandleCSignal(int signum, short evtype, void *arg) with gil:
+    (<object>arg)(signum)  # Call with the signal number.
+    # Since this functions returns `void', Pyrex prints and ignores
+    # exceptions.
+
+cdef class signal_event:
+    cdef event_t ev
+
+    def __cinit__(signal_event self, int signum, object handler):
+        if not callable(handler):
+            raise TypeError('signal handler not callable')
+        if signum == SIGINT and sigint_ev.ev_flags != 0:
+            event_del(&sigint_ev)
+            sigint_ev.ev_flags = 0
+        # Prevent automatic __dealloc__. So we don't have to def __dealloc__.
+        Py_INCREF(self)
+        Py_INCREF(handler)
+        event_set(&self.ev, signum, c_EV_SIGNAL | c_EV_PERSIST,
+                  HandleCSignal, <void*>handler)
+        # Make loop() exit immediately of only EVLIST_INTERNAL events
+        # were added. Add EVLIST_INTERNAL after event_set.
+        self.ev.ev_flags |= EVLIST_INTERNAL
+        event_add(&self.ev, NULL)
+
+    def delete(signal_event self):
+        cdef int signum
+        if self.ev.ev_flags != 0:
+            signum = self.ev.ev_fd
+            Py_DECREF(<object>self.ev.ev_arg)
+            event_del(&self.ev)
+            self.ev.ev_flags = 0
+            Py_DECREF(self)  # Corresponding to __cinit__.
+            signal_events.pop(self, None)
+            if signum == SIGINT and sigint_ev.ev_flags == 0:
+                _setup_sigint()
+
+def signal(int signum, object handler):
+    """Register or unregister a signal handler.
+
+    Args:
+      signum: Positive signal number (e.g. signal.SIGINT). Unchecked.
+      handler: Callable or None. handler(signum) will be called in the event
+        loop as soon as the signal numbered signum gets received, and as many
+        times as it gets received. Exceptions raised by the handler are printed
+        briefly (without a traceback), and get ignored.
+    Returns:
+      The resulting signal_event object or None if unregistered.
+    """
+    cdef event_t *ev
+    signum_obj = signum
+    # TODO(pts): Make Pyrex call `get' as a PyDictObject.
+    signal_event_obj = signal_events.get(signum_obj)
+    if signal_event_obj is None:
+        if handler is not None:
+            signal_event_obj = signal_event(signum, handler)
+            signal_events[signum_obj] = signal_event_obj
+            return signal_event_obj
+    elif handler is None:
+        (<signal_event>signal_event_obj).delete()
+        del signal_events[signum_obj]
+    else:
+        ev = &(<signal_event>signal_event_obj).ev
+        Py_DECREF(<object>ev.ev_arg)
+        Py_INCREF(handler)
+        ev.ev_arg = <void*>handler
+        return signal_event_obj
 
 # --- Concurrence 0.3.1 support
 #
