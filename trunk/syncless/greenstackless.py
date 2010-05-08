@@ -54,7 +54,7 @@ class TaskletExit(SystemExit):
 __import__('__builtin__').TaskletExit = TaskletExit
 
 
-def ImportTooLateError(object):
+def ImportTooLateError(Exception):
   """Raised when syncless.coio is imported too late.
 
   To solve this problem, either import syncless.greenstackless (or
@@ -63,7 +63,7 @@ def ImportTooLateError(object):
   """
 
 
-class NewTooLateError(object):
+class NewTooLateError(Exception):
   """Raised when an old-class tasklet or bomb instance is created.
 
   To solve this problem, create all your tasklets and bombs after importing
@@ -92,7 +92,6 @@ def _process_slots(slots, superclass, dict_obj=None):
   return list(slots)
 
 
-# !! TODO(pts): Rebase the `bomb' and `tasklet' classes later.
 greenstackless_helper = sys.modules.get('syncless.coio_greenstackless_helper')
 if greenstackless_helper:
   bomb = greenstackless_helper.bomb
@@ -681,14 +680,18 @@ def _coio_rebase(helper_module):
   if _tasklets_created != 1:
     raise ImportTooLateError
   if not is_tasklet_ok:
+    # This would be easier: tasklet.__bases__ = (helper_module.tasklet,)
+    # But it doesn't work: TypeError("__bases__ assignment: 'tasklet' deallocator differs from 'object'")
     dict_obj = dict(tasklet.__dict__)
     dict_obj['__slots__'] = _process_slots(
         dict_obj['__slots__'], helper_module.tasklet, dict_obj)
+    #old_tasklet = tasklet
     tasklet.__new__ = classmethod(_new_too_late)
     tasklet = type(tasklet.__name__, (helper_module.tasklet,), dict_obj)
     current = main = _get_new_main()
     _tasklets_created = 1
     assert type(main) is tasklet
+    #del old_tasklet
   if bomb is not helper_module.bomb:
     bomb.__new__ = classmethod(_new_too_late)
     bomb = helper_module.bomb

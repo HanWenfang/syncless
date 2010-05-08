@@ -217,6 +217,8 @@ class MyBuildExtDirs(Command):
         ext.library_dirs = []
         ext.include_dirs = []
         for key in sorted(update_dict):
+          if key == 'python_version':
+            continue
           value = update_dict[key]
           assert isinstance(value, list) or isinstance(value, tuple)
           assert hasattr(ext, key), key
@@ -399,7 +401,8 @@ def FindLib(retval, compiler, prefixes, includes, library, symbols,
       if library_dir != os.path.dirname(library):
         library_dirs.append(library_dir)
       include_dirs = [include_dir]
-      if [1 for include in includes if include.startswith('./')]:
+      if [1 for include in includes if include is not () and
+          include.startswith('./')]:
         include_dirs[:0] = ['.']
       if HasSymbols(compiler=compiler, symbols=symbols,
                     includes=includes, include_dirs=include_dirs,
@@ -504,6 +507,7 @@ def AutoDetect(command_obj):
     raise LinkError('libevent/libev not found, '
                     'see the Installation section of README.txt')
 
+  retval['python_version'] = sys.version
   repr_retval = repr(retval)
   log.info('using C env %s' % repr_retval)
   try:
