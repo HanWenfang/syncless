@@ -152,7 +152,7 @@ else:
   # Python2.5
   IOError_all = (IOError, socket.error)
 if getattr(socket, '_ssl', None) and getattr(socket._ssl, 'SSLError', None):
-  assert issubclass(socket._ssl.sslerror, IOError)
+  assert issubclass(socket._ssl.SSLError, IOError)
 
 # ---
 

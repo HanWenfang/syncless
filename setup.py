@@ -382,8 +382,9 @@ def FindLib(retval, compiler, prefixes, includes, library, symbols,
   for prefix in prefixes:
     if (prefix and
         (() in includes or includes ==
-         [idir for idir in includes if
-          os.path.isfile(prefix + '/include/' + idir)]) and
+         [include for include in includes if
+          include.startswith('./') or
+          os.path.isfile(prefix + '/include/' + include)]) and
         ('/' in library or 
          glob.glob(prefix + '/lib/lib' + library + '.*'))):
       include_dir = '%s/include' % prefix
@@ -397,8 +398,11 @@ def FindLib(retval, compiler, prefixes, includes, library, symbols,
         library_dirs = []
       if library_dir != os.path.dirname(library):
         library_dirs.append(library_dir)
+      include_dirs = [include_dir]
+      if [1 for include in includes if include.startswith('./')]:
+        include_dirs[:0] = ['.']
       if HasSymbols(compiler=compiler, symbols=symbols,
-                    includes=includes, include_dirs=[include_dir],
+                    includes=includes, include_dirs=include_dirs,
                     libraries=libraries, library_dirs=[library_dir]):
         if '/' in library:
           log.info('found %s as %s' % (os.path.basename(library), library))
@@ -483,10 +487,10 @@ def AutoDetect(command_obj):
       lib_file = os.path.join(prefix, 'lib', 'libevent-1.4.so.2')
       if os.path.isfile(lib_file):
         lib_event = lib_file
-        prefixes = [prefix]
+        prefixes2 = [prefix]
         break
     if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes2,
-            includes=['event.h'], library=lib_event,
+            includes=['./coio_src/coio_event1_event.h'], library=lib_event,
             symbols=['event_init', 'event_loop', 'event_reinit']) and
         FindLib(retval=retval, compiler=compiler, prefixes=prefixes2,
             includes=['evdns.h'], library=lib_event,

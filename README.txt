@@ -730,6 +730,24 @@ Q20. Should I use stackless.schedule() or stackless.schedule(None)?
          assert t is t.tempval  # Circular reference: t --> t.tempval --> t
          t.remove()
 
+Q21. Can I register my signal handlers?
+
+A21. Yes, use coio.signal. Example:
+
+       import signal
+       from syncless import coio
+       def MyHandler(signum): print 'signal %d received' % signum
+       h = coio.signal(signal.SIGINT, MyHandler)
+       coio.signal(signal.SIGHUP, MyHandler)
+       ...
+       coio.signal(signal.SIGHUP, None)   # Delete it.
+       h.delete()   # Delete SIGINT.
+
+     All signal handlers are persistent.
+
+     Uncaught exceptions raised in signal handlers are reported (without a
+     traceback), and then they get ignored.
+
 Links
 ~~~~~
 * doc: related: eventlet vs gevent:
