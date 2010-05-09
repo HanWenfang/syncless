@@ -292,6 +292,16 @@ def patch_concurrence():
                         dict_obj)
 
 
+def _check_both_native():
+  assert not (
+      sys.modules.get('stackless') and
+      sys.modules.get('greenlet') and
+      type(sys.modules['stackless'].getcurrent) is not types.FunctionType and
+      type(sys.modules['greenlet'].getcurrent) is not types.FunctionType), (
+      'This Python supports both stackless and greenlet natively. '
+      'syncless.patch.patch_gevent() needs one of them emulated.')
+
+
 def gevent_hub_main():
   """Run the gevent hub (+ Syncless) main loop forever.
 
@@ -303,6 +313,7 @@ def gevent_hub_main():
   from syncless import best_greenlet
   if 'syncless.coio' not in sys.modules:
     return best_greenlet.gevent_hub_main()
+  _check_both_native()
   from gevent import hub
   if not getattr(hub, 'is_syncless_fake_hub', None):
     patch_gevent()
@@ -316,43 +327,133 @@ def gevent_hub_main():
   assert hub_obj._tasklet is main_loop_tasklet
   import stackless
   assert stackless.current is not main_loop_tasklet
-  best_greenlet.current = hub_obj
-  best_greenlet._insert_after_current_tasklet(main_loop_tasklet)
-  coio.stackless.schedule_remove()
+  if hasattr(best_greenlet, 'current'):  # Emulated greenlet.
+    best_greenlet.current = hub_obj
+    best_greenlet._insert_after_current_tasklet(main_loop_tasklet)
+  else:
+    # Implement _insert_after_current_tasklet(main_loop_tasklet).
+    if stackless.current.next is stackless.current:
+      main_loop_tasklet.insert()
+    elif stackless.current.next is not main_loop_tasklet:
+      # This is tricky, see the details in best_greenlet.py.
+      # TODO(pts): Present this on the conference.
+      main_loop_tasklet.remove()
+      helper_tasklet = stackless.tasklet(
+          lambda: stackless.current.next.next.remove().run())()
+      helper_tasklet.insert()
+      main_loop_tasklet.insert()
+      helper_tasklet.run()
+      helper_tasklet.remove()
+
+    if best_greenlet.greenlet.getcurrent() is hub.MAIN:
+      try:
+        return stackless.schedule_remove()
+      except best_greenlet.greenlet.GreenletExit:
+        raise SystemExit
+  return stackless.schedule_remove()
+
 
 def patch_gevent():
   """Patch gevent so it works with Syncless in the same process.
 
   Tested with gevent-0.12.2, please upgrade your gevent if it's older.
 
-  Please note that there are many limitations, most of them are easy to
-  avoid:
+  Ctrl-<C> (KeyboardInterrupt) works as intended: it aborts the process by
+  default with the KeyboardInterrupt exception in the main tasklet/greenlet.
 
-  !! properly document these
-  !! limitation: needs same libevent version linked to Syncless and gevent
-                 (libevent1 or libevent2, but not libev)
-                 (otherwise 1. events would be registered to the wrong
-                 event_base; 2. evhttp wouldn't be implemented with libev)
-  !! limitation: only greenlet (works with stackless??)
-  !! limitation: initialization must be done in hub.span_raw
-  !! limitation: gevent greenlets should not switch to other tasklets and
-                 vice versa
-  !! limitation: gevent.hub.get_hub().shutdown() is not supported
-  !! limitation: don't do Syncless non-blocking I/O before importing gevent
-                 (because the event_init() called when importing gevent.core
-                 makes all registered Syncless events vanish)
-  !! on sys.exit, handle the automatic TaskletExit called for all tasklets
-     (and ignored by gevent)
+  Since gevent is based on greenlet, and Syncless is based on Stackless, one
+  of those has to be emulated. patch_gevent() takes care of this by using
+  syncless.best_greenlet and syncless.best_stackess.
 
-  TODO(pts): Measure performance. 
+  Please note that if you just want to use grevent without the Syncless
+  non-blocking functionality, just do this:
+
+    import syncless.best_greenlet  # To emulate greenlet with Stackless.
+    #from syncless.best_greenlet.greenlet import greenlet  # If used.
+    ...
+    import gevent.hub ...
+    ...
+    if __name__ == '__main__':
+      ...  # Create the server sockets, but don't accept() yet.
+      gevent.hub.spawn_raw(Listener, ...)  # accept() in Listener().
+      syncless.best_greenlet.gevent_hub_main()
+
+   If you want to use gevent and Syncless together, import like this:
+   
+    #from syncless.best_greenlet.greenlet import greenlet  # If used.
+    ...
+    import gevent.hub ...
+    from syncless import coio
+    from syncless import patch
+    ...
+    if __name__ == '__main__':
+      ...  # Create the server sockets, but don't accept() yet.
+      gevent.hub.spawn_raw(Listener, ...)  # accept() in Listener().
+      ...  # Create and start non-blocking Syncless tasklets.
+      syncless.best_greenlet.gevent_hub_main()
+      # Alternatively, instead of gevent_hub_main() you can do a any Syncless
+      # non-blocking I/O (forever) -- but no gevent non-blocking I/O.
+
+  See examples/demo_gevent.py for a comprehensive example program.
+
+  Please note the following simple limitations of the gevent + Syncless
+  cooperation:
+
+  * You have to compile gevent and Syncless with the same version of libevent
+    (e.g. libevent1 >= 1.4.13 or libevent2 >= 2.0.4). libev won't work, because
+    gevent doesn't support libev. The same-version limitation is there because
+    the Syncless main loop must be able to wait (poll) for events registered
+    by gevent.
+    
+    Here is how to compile Syncless with libevent1:
+
+      $ SYNCLESS_USE_LIBEVENT1=1 python setup.py build    
+      $ sudo python setup.py install
+
+    patch.patch_gevent() verifies that both the version and the notification
+    method (e.g. select or epoll) used by Syncless and gevent match.
+    Furthermore, the library file must be the same (e.g. it's not OK to
+    compile Syncless with libevent.so in /usr/lib, and gevent with
+    libevent.so in /usr/local/lib). This is not checked.
+
+  * All non-blocking gevent I/O operations must be initiated from a greenlet
+    created by the gevent hub. So you may create a server socket (and bind
+    to it) in the main greenlet, but you may only accept() it in another
+    greenlet, created by the gevent hub. So put your accept() to a function
+    named Listener, and do a gevent.hub.spawn_raw(Listener) or
+    gevent.swawn(Listener). There is no such restriction for Syncless I/O
+    operations: you can do them anywhere.
+
+  * Communication and synchronization between gevent greenlets and
+    Syncless/Stackless tasklets in the same process is not possible, i.e. a
+    tasklet cannot wait for data generated by a greenlet or vice versa.
+    (Please note that data sharing in the process memory works as intended,
+    because both greenlets and tasklets are coroutine-based.) If you need
+    that, currently your only option is to create a pipe or a socket, and
+    send notification bytes through it. Please note that you don't have to
+    serialize the actual data, since you can store them in a variable
+    accessible to both the tasklet and the greenlet.
+
+  * Don't do Syncless non-blocking I/O before importing gevent (because the
+    event_init() called when importing gevent.core makes all
+    registered Syncless events vanish, without ever triggering).
+
+  * The gevent.hub.get_hub().shutdown() function is not supported. Please
+    use sys.exit() from your main greenlet, and gevent.hub.MAIN.throw()
+    (or gevent.hub.MAIN.throw(SystemExit)) form all non-blocking greenlets
+    started by the gevent hub.
+
+  TODO(pts): Measure performance (will be slower than pure Syncless or pure
+  gevent, because either Stackless or gevent is emulated).
 
   Note: It was very tricky to get exception handling right, especially
   making the exception handler in gevent.core.__event_handler ignore the
   TaskletExit exceptions at exit time.
   """
   from syncless import best_greenlet
-  if not best_greenlet.greenlet.greenlet.is_pts_greenlet_emulated:
-    raise NotImplementedError('non-native greenlet required')
+  is_greenlet_emulated = bool(getattr(
+      best_greenlet.greenlet.greenlet, 'is_pts_greenlet_emulated', None))
+  assert is_greenlet_emulated == hasattr(best_greenlet, 'current')
   greenlet = best_greenlet.greenlet.greenlet
   import traceback
   from gevent import core
@@ -362,6 +463,7 @@ def patch_gevent():
   assert greenlet.getcurrent() is hub.MAIN
   from syncless import coio
   stackless = coio.stackless
+  _check_both_native()
   gevent_info = (core.get_method(), core.get_version())
   syncless_info = (coio.method(), coio.version())
   assert gevent_info == syncless_info, (
@@ -376,34 +478,64 @@ def patch_gevent():
     assert not hub_obj, 'too late, gevent hub already running'
   hub.__dict__.pop('thread', None)
   hub.is_syncless_fake_hub = True
+  def RaiseInvalidHubSwitch():
+    xtra = ''
+    if stackless.current is stackless.main:
+      xtra = ('; define a Main function, and call us from '
+              'gevent.hub.spawn_raw(Main)')
+      raise AssertionError(
+        'gevent.hub.get_hub().switch() called from the wrong tasklet (%r), '
+        'expected main_loop_tasklet %r%s' %
+        (stackless.current, coio.get_main_loop_tasklet(), xtra))
   class SynclessFakeHub(greenlet):
-    # This is needed so late TaskletExits in best_greenlet will be properly
-    # ignored.
-    is_gevent_hub = True
-    def switch(self):
-      if self._tasklet.scheduled:
-        xtra = ''
-        if stackless.current is stackless.main:
-          xtra = ('; define a Main function, and call us from '
-                  'gevent.hub.spawn_raw(Main)')
-          raise AssertionError(
-            'gevent.hub.get_hub().switch() called from the wrong tasklet (%r), '
-            'expected main_loop_tasklet %r%s' %
-            (stackless.current, coio.get_main_loop_tasklet(), xtra))
-      cur = greenlet.getcurrent()
-      assert cur is not self, (
-          'Cannot switch to MAINLOOP from MAINLOOP')
-      switch_out = getattr(cur, 'switch_out', None)
-      if switch_out is not None: 
-        try:
-          switch_out()
-        except:
-          traceback.print_exc()  
-      return greenlet.switch(self)
-    @property
-    def run(self):
-      assert 0, 'internal logic error: FakeHub().run requested'
+    if is_greenlet_emulated:
+      # This is needed so late TaskletExit exceptions in best_greenlet will be
+      # properly ignored.
+      is_gevent_hub = True
+      def switch(self):
+        if self._tasklet.scheduled:
+          RaiseInvalidHubSwitch()
+        cur = best_greenlet.current  # greenlet.getcurrent()
+        assert cur is not self, (
+            'Cannot switch to MAINLOOP from MAINLOOP')
+        switch_out = getattr(cur, 'switch_out', None)
+        if switch_out is not None: 
+          try:
+            switch_out()
+          except:
+            traceback.print_exc()  
+        return greenlet.switch(self)
+      @property
+      def run(self):
+        assert 0, 'internal logic error: FakeHub().run requested'
+    else:  # With real (non-emulated) greenlet.
+      def switch(self):
+        main_loop_tasklet = coio.get_main_loop_tasklet()
+        if stackless.current is not main_loop_tasklet:
+          RaiseInvalidHubSwitch()
+        cur = greenlet.getcurrent()
+        assert cur is not main_loop_tasklet._greenlet, (
+            'Cannot switch to MAINLOOP from MAINLOOP')
+        switch_out = getattr(cur, 'switch_out', None)
+        if switch_out is not None:
+          try:
+            switch_out()
+          except:
+            traceback.print_exc()
+        # `return main_loop_tasklet._greenlet.switch()' would be straightforward
+        # here, but greenlet seems to call self.run anyway after accept (proably
+        # because it's C code ignoring the override of self.switch).
+        return greenlet.switch(self)
+      def run(self):
+        self.parent.switch()  # Resume to patch_gevent() after first startup.
+        main_loop_tasklet = coio.get_main_loop_tasklet()
+        assert self is not main_loop_tasklet._greenlet
+        while True:
+          assert stackless.current is main_loop_tasklet
+          main_loop_tasklet._greenlet.switch()
   fake_hub = SynclessFakeHub()
+  if not is_greenlet_emulated:
+    greenlet.switch(fake_hub)  # Start the hub for the first time.
   fake_hub._tasklet = coio.get_main_loop_tasklet()
   hub._threadlocal = type(hub)('fake_threadlocal')
   # Make existing references to the old get_hub() work.
@@ -417,7 +549,8 @@ def patch_gevent():
   gevent_hub_main.__doc__ = best_greenlet.gevent_hub_main.__doc__
   best_greenlet.gevent_hub_main = gevent_hub_main
   best_greenlet.greenlet.gevent_hub_main = gevent_hub_main
-  best_greenlet.greenlet.greenlet.gevent_hub_main = gevent_hub_main
+  # Can't set best_greenlet.greenlet.greenlet.gevent_hub_main, because
+  # greenlet.greenlet is an extension type (class).
 
 
 def ExceptHook(orig_excepthook, *args):

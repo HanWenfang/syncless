@@ -1,6 +1,9 @@
 #! /usr/local/bin/stackless2.6
 # by pts@fazekas.hu at Sat May  8 18:47:38 CEST 2010
-#
+
+"""Demo for hosting a gevent application within a Syncless process."""
+
+__author__ = 'pts@fazekas.hu (Peter Szabo)'
 
 import sys
 
@@ -57,9 +60,13 @@ def Worker(client_socket, addr):
   #   AssertionError
   #   <Greenlet at 0xb71acbecL: Worker(<socket at 0xb747668cL fileno=10 sock=127.0.0.1:80, ('127.0.0.1', 55196))> failed with AssertionError
   assert 'bad' not in items[1]
+  if 'sysexit' in items[1]:
+    print >>sys.stderr, 'info: exiting with SystemExit'
+    #sys.exit()  # Doesn't work, gevent.core.__event_handler catches it.
+    gevent.hub.MAIN.throw(SystemExit)
   if 'exit' in items[1]:
-    print >>sys.stderr, 'info: exiting'
-    gevent.hub.MAIN.throw()  # !! document this (aborts all greenlets and tasklets)
+    print >>sys.stderr, 'info: exiting with throw'
+    gevent.hub.MAIN.throw()
   try:
     num = int(items[1][1:])
   except ValueError:

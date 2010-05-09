@@ -44,8 +44,8 @@ Features
   BaseHTTPRequestHandler + BaseHTTPServer applications, CherryPy
   applications, web.py applications, and Google webapp applications (not
   supporting most other Google AppEngine technologies) as well
-* combination of Syncless and (Twisted, Tornado (fast), Concurrence and/or
-  asyncore) in the same process
+* combination of Syncless and (Twisted, Tornado (fast), Concurrence, gevent
+  and/or asyncore) in the same process
 
 Requirements
 ~~~~~~~~~~~~
@@ -593,12 +593,26 @@ A13. Concurrence works with patch.patch_concurrence(). See also
      note that native Syncless is faster than native Concurrence, because
      Syncless provides sockets and buffered files as a C (Pyrex) extension.
 
-     The others don't work yet, but it might be fun to add support for one
-     of them. gevent, Eventlet and Concurrence use libevent, so techincally
-     it wouldn't be too much work to unify the event loops. For Eventlet and
-     gevent, one would have to emulate greenlet using Stackless Python.
-     There is emulation code in the Syncless codebase, but it's 20% or even
-     more slower than greenlet.
+     gevent works with patch.patch_gevent() with some limitations, see the
+     docstring of patch_gevent() for more details. See also
+     examples/demo_gevent.py . Please expect low performance, because gevent
+     uses greenlet, so either greenlet or Stackless has to be emulated (with
+     syncless.best_greenlet or syncless.best_syncless) so that Syncless and
+     gevent can work in the same process. The emulation is at least 20%
+     slower, but it can be much slower. (Speed measurements needed.)
+
+     Eventlet doesn't work yet, but it might be fun to add support for it.
+     It has low priority though, because it's not as popular as gevent or
+     Concurrence.
+
+     Please note that Syncless, gevent, Eventlet and Concurrence use
+     libevent (with Syncless being able to use libev as well), so
+     techincally it's possible to unify the event loops. This has been done
+     with Syncless + gevent (where the Syncless main loop processes both
+     Syncless and gevent notifications). For Concurrence this was not
+     needed, because the libevent abstraction (event notification) design of
+     Concurrence was so clean that it could be efficiently emulated by
+     Syncless (no matter libev or libevent).
 
 Q14. Is it possible to use select(2) (select.select) with Syncless?
 
