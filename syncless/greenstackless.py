@@ -48,6 +48,7 @@ assert hasattr(greenlet, 'throw'), (
 import sys
 import weakref
 
+# Unrelated to GreenletExit, SystemExit just like in real stackless.
 class TaskletExit(SystemExit):
   pass
 
@@ -132,6 +133,7 @@ class channel(object):
     for item in iterable:
       self.send(item)
 
+  # TODO(pts): Emulate .close() and .closed.
 
 def _remove(tasklet_obj):
   """Remove the tasklet from the runnables list.

@@ -12,7 +12,7 @@ import lprng
 import gevent
 import gevent.socket
 
-def Handle(client_socket):
+def Handle(client_socket, addr):
   print >>sys.stderr, 'connection from %r' % (addr,)
   f = client_socket.makefile()
 
@@ -56,5 +56,5 @@ if __name__ == '__main__':
   print >>sys.stderr, 'listening on %r' % (server_socket.getsockname(),)
   while True:
     client_socket, addr = server_socket.accept()
-    gevent.spawn(Handle, client_socket)
-    client_socket = None  # Save memory.
+    gevent.spawn(Handle, client_socket, addr)
+    client_socket = addr =None  # Save memory.

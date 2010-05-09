@@ -6,7 +6,14 @@ include "evdns.pxi"
 
 assert not coio_loaded(), 'syncless.coio loaded multiple times'
 
-if coio_event_init() != 0:
+import sys
+if ('gevent.core' in sys.modules and
+    sys.modules['gevent.core'].get_version() == version()):
+  # gevent.core.init() has already called event_init(), so we won't call it
+  # here again. If we did, then the events registered by gevent would get
+  # lost.
+  pass
+elif coio_event_init() != 0:
   raise OSError(EIO, 'event_init failed')
 
 _setup_sigint()
