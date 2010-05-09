@@ -31,6 +31,10 @@ gevent and Syncless, see patch_gevent() in the syncless.patch module.
 
 In addition to the regular symbols in the Greenlet module, 
 
+This emulation is at least 20% slower than real greenlet, but it can be much
+slower. (Speed measurements needed.) The emphasis was on the correctness of
+the emulation (as backed by test/greenlet_test.py) rather than its speed.
+
 TODO(pts): Do speed measurements.
 """
 
@@ -49,6 +53,8 @@ try:
   greenlet_class = greenlet.greenlet
   __import__('sys').modules[__name__ + '.greenlet'] = greenlet
   greenlet.gevent_hub_main = gevent_hub_main
+  # Not setting greenlet.greenlet.gevent_hub_main, because greenlet.greenlet
+  # is an extension type (class), so it wouldn't work.
 except ImportError:
   try:
     import stackless
@@ -288,7 +294,6 @@ except ImportError:
 
     getcurrent = staticmethod(globals()['getcurrent'])
     GreenletExit = staticmethod(globals()['GreenletExit'])
-    gevent_hub_main = staticmethod(globals()['gevent_hub_main'])
     is_pts_greenlet_emulated = True
 
   greenlet_class = greenlet
