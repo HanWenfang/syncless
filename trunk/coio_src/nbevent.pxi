@@ -375,7 +375,7 @@ def MainLoop():
         #
         # We compare against 2 because of stackless.current
         # (main_loop_tasklet) and link_helper_tasklet.
-        if PyStackless_GetRunCount() > 1:
+        if m.next != m:  # PyStackless_GetRunCount() > 1:
             p = m.prev
             # We must and do make sure that there are no non-local exits
             # (e.g. exceptions) until the corresponding Py_DECREF.
