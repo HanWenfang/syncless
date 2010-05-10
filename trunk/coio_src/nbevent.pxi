@@ -1114,9 +1114,13 @@ cdef class nbfile:
             timeout_double = timeout
             if timeout_double < 0.0:
                 raise ValueError('Timeout value out of range')
-            tv.tv_sec = <long>timeout_double
-            tv.tv_usec = <unsigned int>(
-                (timeout_double - <double>tv.tv_sec) * 1000000.0)
+            if timeout_double == 0.0:
+                tv.tv_sec = 0
+                tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
+            else:
+                tv.tv_sec = <long>timeout_double
+                tv.tv_usec = <unsigned int>(
+                    (timeout_double - <double>tv.tv_sec) * 1000000.0)
             return coio_c_wait_for(
                 self.read_fd, c_EV_READ, HandleCTimeoutWakeup, &tv
                 ) is event_happened_token
@@ -1548,7 +1552,8 @@ cdef class nbsocket:
             self.swi.timeout_value = None
         else:
             self.swi.timeout_value = 0.0
-            self.swi.tv.tv_sec = self.swi.tv.tv_usec = 0
+            self.swi.tv.tv_sec = 0
+            self.swi.tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
 
     def settimeout(nbsocket self, timeout):
         cdef double timeout_double
@@ -1561,9 +1566,13 @@ cdef class nbsocket:
             if timeout_double < 0.0:
                 raise ValueError('Timeout value out of range')
             self.swi.timeout_value = timeout_double
-            self.swi.tv.tv_sec = <long>timeout_double
-            self.swi.tv.tv_usec = <unsigned int>(
-                (timeout_double - <double>self.swi.tv.tv_sec) * 1000000.0)
+            if timeout_double == 0.0:
+                self.swi.tv.tv_sec = 0
+                self.swi.tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
+            else:
+                self.swi.tv.tv_sec = <long>timeout_double
+                self.swi.tv.tv_usec = <unsigned int>(
+                    (timeout_double - <double>self.swi.tv.tv_sec) * 1000000.0)
 
     def accept(nbsocket self):
         asock, addr = coio_c_socket_call(self.realsock.accept, (),
@@ -1974,7 +1983,8 @@ cdef class nbsslsocket:
             self.swi.timeout_value = None
         else:
             self.swi.timeout_value = 0.0
-            self.swi.tv.tv_sec = self.swi.tv.tv_usec = 0
+            self.swi.tv.tv_sec = 0
+            self.swi.tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
 
     def settimeout(nbsslsocket self, timeout):
         cdef double timeout_double
@@ -1985,9 +1995,13 @@ cdef class nbsslsocket:
             if timeout_double < 0.0:
                 raise ValueError('Timeout value out of range')
             self.swi.timeout_value = timeout_double
-            self.swi.tv.tv_sec = <long>timeout_double
-            self.swi.tv.tv_usec = <unsigned int>(
-                (timeout_double - <double>self.swi.tv.tv_sec) * 1000000.0)
+            if timeout_double == 0.0:
+                self.swi.tv.tv_sec = 0
+                self.swi.tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
+            else:
+                self.swi.tv.tv_sec = <long>timeout_double
+                self.swi.tv.tv_usec = <unsigned int>(
+                    (timeout_double - <double>self.swi.tv.tv_sec) * 1000000.0)
 
     def read(nbsslsocket self, len=1024):
         """Emulate ssl.SSLSocket.read, doesn't make much sense."""
@@ -2403,14 +2417,17 @@ cdef class selecter:
         fd_to_fh = {}
         c = len(rlist) + len(wlist)
         if timeout is not None:
-            c += 1
             duration = timeout
             if duration <= 0:
-                tv.tv_sec = tv.tv_usec = 0
+                if c == 0:
+                    return [], [], []
+                tv.tv_sec = 0
+                tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
             else:
                 tv.tv_sec = <long>duration
                 tv.tv_usec = <unsigned int>(
                     (duration - <double>tv.tv_sec) * 1000000.0)
+            c += 1
         if self.wakeup_evs != NULL:
             PyMem_Free(self.wakeup_evs)
         self.wakeup_evs = <event_t*>PyMem_Malloc(sizeof(event_t) * c)
@@ -2527,9 +2544,13 @@ cdef class wakeup_info_event:
             event_add(&self.ev, NULL)
         else:
             timeout_double = timeout
-            tv.tv_sec = <long>timeout_double
-            tv.tv_usec = <unsigned int>(
-                (timeout_double - <double>tv.tv_sec) * 1000000.0)
+            if timeout_double <= 0:
+                tv.tv_sec = 0
+                tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
+            else:
+                tv.tv_sec = <long>timeout_double
+                tv.tv_usec = <unsigned int>(
+                    (timeout_double - <double>tv.tv_sec) * 1000000.0)
             event_add(&self.ev, &tv)
         Py_INCREF(self)
 
@@ -2767,7 +2788,8 @@ cdef class concurrence_event:
             if event_add(&self.ev, &self.tv) == -1:
                 raise EventError('could not add event')
         else:
-            self.tv.tv_sec = self.tv.tv_usec = 0
+            self.tv.tv_sec = 0
+            self.tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
             if event_add(&self.ev, NULL) == -1:
                 raise EventError('could not add event')
 
