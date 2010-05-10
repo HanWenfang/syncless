@@ -783,6 +783,7 @@ Asynchronous DNS for Python:
 Info: In interactive stackless, repeated invocations of stackless.current may
   return different objects.
 
+Info: LIBEV_FLAGS=1 use select(); LIBEV_FLAGS=2 use poll()
 
 Release procedure
 ~~~~~~~~~~~~~~~~~
