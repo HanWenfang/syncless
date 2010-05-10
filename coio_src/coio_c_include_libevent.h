@@ -27,25 +27,37 @@
 #include "./coio_ev_event.h"
 #define FEATURE_MAY_EVENT_LOOP_RETURN_1    0
 #define FEATURE_MULTIPLE_EVENTS_ON_SAME_FD 1
-static int coio_event_reinit_low(void) {
-  ev_default_fork();
-  return event_loop(EVLOOP_ONCE | EVLOOP_NONBLOCK);
-}
-#endif
-
 static struct event_base *coio_default_base = NULL;
+static inline void coio_event_set(struct event *ev, int fd, short events,
+                                  void (*cb)(int, short, void*), void *arg) {
+  event_set(ev, fd, events, cb, arg);
+  (ev)->ev_base = (void*)coio_default_base;
+}
+#define event_set coio_event_set  
+#define event_loop(flags) event_base_loop(coio_default_base, flags)
 static int coio_event_init(void) {
   if (coio_default_base == NULL) {
-    if (NULL == (coio_default_base = (struct event_base*)event_init()))
+    /* We use ev_loop_new(EVFLAG_AUTO) instead of event_init() here because
+     * the event_init() in libev-3.9 would install a SIGCHLD signal handler,
+     * os os.wait() and os.waitpid() would cease to work.
+     */
+    if (NULL == (coio_default_base =
+                 (struct event_base*)ev_loop_new(EVFLAG_AUTO)))
       return -1;
   }
   return 0;
 }
+static int coio_event_reinit_low(void) {
+  ev_loop_fork((struct ev_loop*)coio_default_base);
+  return event_loop(EVLOOP_ONCE | EVLOOP_NONBLOCK);
+}
 static int coio_event_reinit(int do_recreate) {
   if (do_recreate) {
     if (coio_default_base != NULL) event_base_free(coio_default_base);
-    return -(NULL == (coio_default_base = (struct event_base*)event_init()));
+    return -(NULL == (coio_default_base =
+                      (struct event_base*)ev_loop_new(EVFLAG_AUTO)));
   } else {
     return coio_event_reinit_low();
   }
 }
+#endif  /*  COIO_USE_LIBEV */

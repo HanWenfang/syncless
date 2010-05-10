@@ -662,6 +662,10 @@ A17. Yes, by monkey-patching any of these methds: subprocess, popen2,
      os.popen. There is no support yet for more sophisticated mechanisms
      (such as the multiprocessing module).
 
+     There is an important limitation so far: waiting for a subprocess to exit
+     (e.g. with os.wait and os.waitpid without WNOHANG) is a blocking
+     operation: all tasklets in the process would get blocked.
+
      Code examples:
 
        # See longer example in examples/demo_subprocess.py.
@@ -852,5 +856,6 @@ Planned features
 * TODO(pts): Consider alternative implementation with eventlet.
 * TODO(pts): Implement an SSL-capable HTTP proxy as a reference.
 * TODO(pts): doc: signal.alarm doesn't work (the SIGALRM will get ignored?)
+* TODO(pts): Make os.waitpid non-blocking by installing a SIGCHLD handler.
 
 __EOF__

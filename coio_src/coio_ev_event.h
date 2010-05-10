@@ -102,8 +102,8 @@ struct event
 /*int event_once (int fd, short events, void (*cb)(int, short, void *), void *arg, struct timeval *tv);*/
 /*int event_dispatch(void);*/  /* not crucial for Syncless */
 
-void *event_init(void);
-int event_loop(int);
+/*void *event_init(void);*/
+/*int event_loop(int);*/
 void event_set(struct event *ev, int fd, short events, void (*cb)(int, short, void *), void *arg);
 int event_add(struct event *ev, const struct timeval *tv);
 int event_del(struct event *ev);
@@ -112,7 +112,10 @@ int event_pending(struct event *ev, short, struct timeval *tv);
 const char *event_get_version(void);
 const char *event_get_method(void);
 
-void ev_default_fork(void);
+struct ev_loop;  /* same as struct event_base */
+struct ev_loop *ev_loop_new(unsigned int flags);  /* EVFLAG_AUTO */
+void ev_loop_fork(struct ev_loop *loop);
 void event_base_free(struct event_base *base);
+int event_base_loop(struct event_base *base, int);
 
 #endif
