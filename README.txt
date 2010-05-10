@@ -770,6 +770,7 @@ Links
 * doc: http://wiki.netbsd.se/kqueue_tutorial
 * doc: http://stackoverflow.com/questions/554805/stackless-python-network-performance-degrading-over-time
 * doc: speed benchmark: http://muharem.wordpress.com/2007/07/31/erlang-vs-stackless-python-a-first-benchmark/
+* doc: gevent and gtk: http://groups.google.com/group/gevent/browse_thread/thread/36f8dd594b5e2c06
 
 Asynchronous DNS for Python:
 
@@ -806,7 +807,9 @@ Syncless. The intended audience is Syncless developers.
 
 Planned features
 ~~~~~~~~~~~~~~~~
-* TODO(pts): Wrap the multiprocessing module.
+* TODO(pts): Wrap / monkey-patch the multiprocessing module (and its C code in
+  _multiprocessing). The _multiprocessing module implemented in C doesn't
+  seem to support non-blocking operation.
 * TODO(pts): Report libevent bug that evdns events are not EVLIST_INTERNAL.
 * TODO(pts): Document the side effect of import syncless.coio on Ctrl-<C>.
 * TODO(pts): HTTP client library (making urllib non-blocking?)
@@ -824,7 +827,6 @@ Planned features
   is delayed) This is hard to achieve (but the main tasklet can be given
   priority on Ctrl-<C>, so it would be the next to be scheduled).
 # TODO(pts): Evaluate how fast stack copying (Stackless hard switching) is.
-* TODO(pts): Monkey-patch os.fork() with event_reinit().
 * TODO(pts): Monkey-patch signal.signal(...).
 * TODO(pts): Automatic install script for Linux.
 * TODO(pts): Add SSL support for Python2.5 (it already has socket._ssl.ssl).
@@ -839,7 +841,6 @@ Planned features
   (This will demonstrate asynchronous socket creation.)
 * TODO(pts): Document that scheduling is not fair if there are multiple readers
   on the same fd.
-* TODO(pts): Implement broadcasting chatbot.
 * TODO(pts): Close connection on 413 Request Entity Too Large.
 * TODO(pts): Prove that there is no memory leak over a long running time.
 * TODO(pts): Use socket.recv_into() for buffering.
@@ -848,6 +849,7 @@ Planned features
 * TODO(pts): Handle errno.EINTR. (Do we need this in Python?)
 * TODO(pts): /infinite 100K buffer on localhost is much faster than 10K.
 * TODO(pts): Consider alternative implementation with eventlet.
-* TODO(pts): Implement an SSL-capable HTTP proxy as a referenc
+* TODO(pts): Implement an SSL-capable HTTP proxy as a reference.
+* TODO(pts): doc: signal.alarm doesn't work (the SIGALRM will get ignored?)
 
 __EOF__

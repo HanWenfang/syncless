@@ -636,11 +636,25 @@ def get_closerange():
   return closerange
 
 
+def _get_patched_fork(unpatched_fork):
+  from syncless import coio
+  def fork():
+    pid = unpatched_fork()
+    if not pid:  # Child.
+      coio.reinit()
+    return pid
+  fork.is_syncless_patched = True
+  return fork
+
+
 def patch_os():
   import os
   from syncless import coio
   os.fdopen = coio.fdopen
   os.popen = coio.popen
+  if not getattr(os.fork, 'is_syncless_patched', None):
+    os.fork = _get_patched_fork(os.fork)
+    assert os.fork.is_syncless_patched
 
 
 def patch_subprocess():
