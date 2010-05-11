@@ -427,7 +427,8 @@ def AutoDetect(command_obj):
   # TODO(pts): Issue a fatal error if libev or libevhdns was not found.
   # TODO(pts): Find libevhdns separately.
   retval = {'include_dirs': [], 'library_dirs': [], 'libraries': [],
-            'define_macros': [], 'is_found': False}
+            'define_macros': [], 'is_found': False, 'sources': [],
+            'depends': []}
 
   if have_stackless:
     retval['define_macros'].append(('COIO_USE_CO_STACKLESS', None))
@@ -459,19 +460,32 @@ def AutoDetect(command_obj):
   if os.getenv('SYNCLESS_USE_MINIEVENT', ''):
     assert event_driver is None
     event_driver = 'minievent'
+  asked_for_libevhdns = bool(os.getenv('SYNCLESS_USE_LIBEVHDNS', ''))
+  allowed_minievent = bool(os.getenv('SYNCLESS_ALLOW_MINIEVENT', '1'))
 
   if event_driver in (None, 'libev'):
-    if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
-            includes=['ev.h'], library='ev', symbols=['ev_once']) and
-        FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+    if FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+               includes=['ev.h'], library='ev', symbols=['ev_once']):
+      if asked_for_libevhdns:
+        if not FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
             includes=[()], library='evhdns', symbols=['evdns_resolve_ipv4'],
-            link_with_prev_libraries=['ev'])):
+            link_with_prev_libraries=['ev']):
+          raise LinkError('evhdns not found')
+        retval['define_macros'].append(('COIO_USE_LIBEVHDNS', None))
+        retval['libraries'].append('evhdns')
+      else:
+        retval['define_macros'].append(('COIO_USE_MINIHDNS', None))
+        retval['sources'].append('coio_src/coio_minihdns.c')
       event_driver = 'libev'
       retval['is_found'] = True
-      retval['libraries'].extend(['evhdns', 'ev'])
+      retval['libraries'].append('ev')
       retval['define_macros'].append(('COIO_USE_LIBEV', None))
 
+  # TODO(pts): Add support for evhdns here.
   if event_driver in (None, 'libevent2'):
+    if asked_for_libevhdns:
+      # TODO(pts): Add support for evhdns here.
+      raise LinkError('evhdns does not work yet with libevent2')
     if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
             includes=['event2/event_compat.h'], library='event',
             symbols=['event_init', 'event_loop', 'event_reinit']) and
@@ -486,6 +500,9 @@ def AutoDetect(command_obj):
       retval['define_macros'].append(('COIO_USE_LIBEVENT2', None))
 
   if event_driver in (None, 'libevent1'):
+    if asked_for_libevhdns:
+      # TODO(pts): Add support for evhdns here.
+      raise LinkError('evhdns does not work yet with libevent1')
     lib_event = 'event'
     prefixes2 = list(prefixes)
     for prefix in prefixes:
@@ -506,10 +523,22 @@ def AutoDetect(command_obj):
       retval['libraries'].append(lib_event)
       retval['define_macros'].append(('COIO_USE_LIBEVENT1', None))
 
-  if event_driver in ('minievent'):  # Don't allow None (not by default).
+  if event_driver in ('minievent', None) and allowed_minievent:
     event_driver = 'minievent'
     retval['is_found'] = True
     retval['define_macros'].append(('COIO_USE_MINIEVENT', None))
+    if asked_for_libevhdns:
+      if not FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
+          includes=[()], library='evhdns', symbols=['evdns_resolve_ipv4'],
+          link_with_prev_libraries=['ev']):
+        raise LinkError('evhdns not found')
+      retval['define_macros'].append(('COIO_USE_LIBEVHDNS', None))
+      retval['libraries'].append('evhdns')
+    else:
+      retval['define_macros'].append(('COIO_USE_MINIHDNS', None))
+      retval['sources'].append('coio_src/coio_minihdns.c')
+    retval['sources'].append('coio_src/coio_minievent.c')
+    retval['depends'].append('coio_src/coio_minievent.h')
 
   if not retval.pop('is_found'):
     raise LinkError('libevent/libev not found, '
