@@ -456,6 +456,9 @@ def AutoDetect(command_obj):
   if os.getenv('SYNCLESS_USE_LIBEVENT2', ''):
     assert event_driver is None
     event_driver = 'libevent2'
+  if os.getenv('SYNCLESS_USE_MINIEVENT', ''):
+    assert event_driver is None
+    event_driver = 'minievent'
 
   if event_driver in (None, 'libev'):
     if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
@@ -503,6 +506,11 @@ def AutoDetect(command_obj):
       retval['libraries'].append(lib_event)
       retval['define_macros'].append(('COIO_USE_LIBEVENT1', None))
 
+  if event_driver in ('minievent'):  # Don't allow None (not by default).
+    event_driver = 'minievent'
+    retval['is_found'] = True
+    retval['define_macros'].append(('COIO_USE_MINIEVENT', None))
+
   if not retval.pop('is_found'):
     raise LinkError('libevent/libev not found, '
                     'see the Installation section of README.txt')
@@ -527,6 +535,7 @@ event = Extension(name='syncless.coio',
                            'coio_src/coio_c_include_libevent.h',
                            'coio_src/coio_ev_event.h',
                            'coio_src/coio_event1_event.h',
+                           'coio_src/coio_minievent.h',
                            'setup.cenv',
                           ],
                   # Using a function for library_dirs here is a nonstandard

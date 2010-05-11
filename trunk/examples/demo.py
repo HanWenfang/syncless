@@ -26,7 +26,10 @@ def ChatWorker(nbf, nbf_to_close):
   try:
     nbf.write('resolving\n')
     nbf.flush()
-    rdata = coio.gethostbyname_ex('www.yahoo.com')
+    try:
+      rdata = coio.gethostbyname_ex('www.yahoo.com')
+    except socket.gaierror, e:
+      rdata = e
     nbf.write('resolved to %r\n' % (rdata,))
     nbf.write('Type something!\n')  # TODO(pts): Handle EPIPE.
     while True:
@@ -84,7 +87,10 @@ if __name__ == '__main__':
   else:
     logging.info('not using psyco')
 
-  rdata = coio.gethostbyname_ex('en.wikipedia.org')
+  try:
+    rdata = coio.gethostbyname_ex('en.wikipedia.org')
+  except socket.gaierror, e:
+    rdata = e
   logging.info(repr(rdata))
   logging.info('Query2 done.')
   listener_nbs = coio.new_realsocket(socket.AF_INET, socket.SOCK_STREAM)
