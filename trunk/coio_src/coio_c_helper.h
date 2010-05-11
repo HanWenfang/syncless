@@ -232,7 +232,10 @@ static inline PyObject *coio_c_socket_call(PyObject *function, PyObject *args,
     if (!PyErr_ExceptionMatches(coio_socket_error)) return NULL;
     PyErr_Fetch(&ptype, &pvalue, &ptraceback);
     assert(pvalue != NULL);
-    retval = PyTuple_GetItem(pvalue, 0);
+    /* AnyException('foo', ...)[0] yields 'foo', no need for exc.args[0]
+     * in Python 2.x (but needed in 3.x).
+     */
+    retval = PySequence_GetItem(pvalue, 0);
     if (retval == NULL) {
       PyErr_Restore(ptype, pvalue, ptraceback);
       return NULL;
