@@ -310,11 +310,15 @@ def nonblocking_loop_for_tests():
 cdef int connect_tv_magic_usec
 connect_magic_usec = 120
 
-def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
+def _schedule_helper():
+  return stackless.current.next.next.remove().run()
+
+def SendExceptionAndScheduleNext(tasklet tasklet_obj, exc_info):
     """Send exception to tasklet, even if it's blocked on a channel.
 
     To get the tasklet is activated (to handle the exception) after
-    SendException, call tasklet.run() after calling SendException.
+    SendExceptionAndScheduleNext, just fall through to stackless.schedule()
+    and stackless.schedule_remove().
 
     tasklet.insert() is called automatically to ensure that it eventually gets
     scheduled.
@@ -346,7 +350,19 @@ def SendExceptionAndRun(tasklet tasklet_obj, exc_info):
         tasklet_obj.tempval = bomb_obj
     tasklet_obj.remove()
     tasklet_obj.insert()
-    tasklet_obj.run()
+    # Implement _insert_after_current_tasklet(tasklet_obj).
+    # TODO(pts): use PyStackless*.
+    if stackless.current.next is stackless.current:
+      tasklet_obj.insert()
+    elif stackless.current.next is not tasklet_obj:
+      # This is tricky, see the details in best_greenlet.py.
+      # TODO(pts): Present this on the conference.
+      tasklet_obj.remove()
+      helper_tasklet = stackless.tasklet(_schedule_helper)()
+      helper_tasklet.insert()
+      main_loop_tasklet.insert()
+      helper_tasklet.run()
+      helper_tasklet.remove()
 
 # ---
 
@@ -420,7 +436,7 @@ def MainLoop():
 # cooperative scheduling.
 # TODO(pts): Rename all capitalized methods, e.g. to _sigint_handler.
 def SigIntHandler():
-    SendExceptionAndRun(stackless.main, (KeyboardInterrupt,))
+    SendExceptionAndScheduleNext(stackless.main, (KeyboardInterrupt,))
 
 cdef void HandleCSigInt(int fd, short evtype, void *arg) with gil:
     # Should an exception occur, Pyrex will print it to stderr, and ignore it.

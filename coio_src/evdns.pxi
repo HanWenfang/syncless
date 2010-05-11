@@ -34,7 +34,7 @@ ctypedef void (*evdns_callback_type)(
 
 # Add th `extern' declarations. to the generated .c file.
 cdef extern int evdns_init()
-cdef extern char *evdns_err_to_string(int err)
+cdef extern char_constp evdns_err_to_string(int err)
 cdef extern int evdns_resolve_ipv4(char_constp name, int flags,
                                    evdns_callback_type callback, void *arg)
 cdef extern int evdns_resolve_ipv6(char_constp name, int flags,
@@ -162,7 +162,8 @@ cdef void _dns_callback(int resultcode, char t, int count, int ttl,
     if resultcode:  # not c_DNS_ERR_NONE:
         # Make it negative to prevent confusion with errno objects,
         # just like socket.gaierror (gethostbyname).
-        exc = DnsLookupError(-resultcode, evdns_err_to_string(resultcode))
+        exc = DnsLookupError(-resultcode,
+                             <char*>evdns_err_to_string(resultcode))
         (<tasklet>arg).tempval = bomb(type(exc), exc, None)
         PyTasklet_Insert(<tasklet>arg)
         return
@@ -258,7 +259,7 @@ cdef dnsresult dns_call(_evdns_call_t call, char_constp name, int flags):
     wakeup_tasklet.tempval = None
     result = call(name, flags, _dns_callback, <void*>wakeup_tasklet)
     if result:
-        raise DnsLookupError(-result, evdns_err_to_string(result))
+        raise DnsLookupError(-result, <char*>evdns_err_to_string(result))
     if wakeup_tasklet.tempval is None:
         tempval = PyStackless_Schedule(None, 1)  # remove=1
     else:  # Not a single wait was needed. 
