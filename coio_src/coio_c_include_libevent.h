@@ -45,6 +45,10 @@ static inline void coio_event_set(struct event *ev, int fd, short events,
   event_set(ev, fd, events, cb, arg);
   (ev)->ev_base = (void*)coio_default_base;
 }
+extern void (*coio_minihdns_event_set)(struct event *ev, int fd, short events,
+    void (*cb)(int, short, void*), void *arg);
+extern void (*evhdns_event_set)(struct event *ev, int fd, short events,
+    void (*cb)(int, short, void*), void *arg);
 #define event_set coio_event_set  
 #define event_loop(flags) event_base_loop(coio_default_base, flags)
 /* We use ev_loop_new(EVFLAG_AUTO) instead of event_init() here because
@@ -59,6 +63,14 @@ static int coio_event_reinit_low(void) {
 #endif  /*  COIO_USE_LIBEV */
 
 static int coio_event_init(void) {
+#ifdef COIO_USE_LIBEV
+#ifdef COIO_USE_MINIHDNS
+  coio_minihdns_event_set = &coio_event_set;
+#endif
+#ifdef COIO_USE_LIBEVHDNS
+  evhdns_event_set = &coio_event_set;
+#endif
+#endif
   if (coio_default_base == NULL) {
     if (NULL == (coio_default_base =
                  (struct event_base*)coio_event_init_low()))
@@ -75,3 +87,7 @@ static int coio_event_reinit(int do_recreate) {
     return coio_event_reinit_low();
   }
 }
+
+/* We don't #include "./coio_minihdns.h" for  COIO_USE_LIBEVHDNS or
+ * COIO_USE_MINIHDNS here, because evdns.pxi works without the #include.
+ */
