@@ -40,12 +40,19 @@ import re
 import sys
 import stat
 
+install_requires = []
 if 'bdist_egg' in sys.argv:
   # This is when we're executed by easy_install.
   # Example sys.argv: ['.../setup.py', '-q', 'bdist_egg', '--dist-dir', '.../egg-dist-tmp-AEgKbo']
   import setuptools
   i = sys.argv.index('bdist_egg')
   sys.argv[i : i] = ['build_ext_dirs']
+  # We don't do anything if setuptools is loaded (i.e. setup.py is started
+  # by easy_install), because install_requires=[...] below will take care
+  # of installing greenlet.
+  if not have_stackless and not have_good_greenlet:
+    have_greenlet = have_good_greenlet = True
+    install_requires.append('greenlet>=0.3.1')
 
 from distutils import log
 from distutils.ccompiler import CCompiler
@@ -77,6 +84,7 @@ class MyBuild(build):
     return self.has_pure_modules or self.has_ext_modules
 
   sub_commands = [
+      ('build_install_greenlet', lambda *args: True),
       ('build_ext_dirs', build.has_ext_modules),
       ] + build.sub_commands + [
       ('build_ext_symlinks', build.has_ext_modules),
@@ -219,6 +227,91 @@ class MyUpload(Command):
     sys.stdout.write('Uploaded %s\n' % (file_url,))
 
 
+class MyBuildInstallGreenlet(Command):
+  """Command to install greenlet, a non-.egg version."""
+
+  def run(self):
+    global have_greenlet
+    global have_good_greenlet
+    if not have_stackless and not have_good_greenlet:
+      if have_greenlet:
+        log.info('no stackless found, but found old (unusable) greenlet')
+      else:
+        log.info('no stackless or greenlet found')
+      log.info('attempting to download and compile greenlet with easy_install')
+      install_purelib = self.get_finalized_command(
+          'install').install_purelib
+      # Not created yet:
+      #so_ext = command_obj.get_finalized_command(
+      #    'build_ext').compiler.shared_lib_extension
+      from distutils.ccompiler import new_compiler
+      so_ext = new_compiler().shared_lib_extension  # '.so'
+      from distutils.file_util import copy_file
+      from distutils.dir_util import remove_tree
+      from distutils.dir_util import copy_tree
+
+      # TODO(pts): Auto-detect pip (is it calling us, setup.py?) and try pip.
+      try:
+        from setuptools.command import easy_install
+      except ImportError:
+        easy_install = None
+      if not easy_install:
+        raise LinkError('neither stackless or greenlet found, '
+                        'and easy_install was not found either to install them, '
+                        'see the Installation section of README.txt')
+
+
+      old_log_level = log._global_log.threshold
+      mkpath('tmp')
+      greenlet_file_pattern =  'tmp/greenlet-*.egg'
+      for filename in glob.glob(greenlet_file_pattern):
+        remove_tree(filename)
+      if easy_install.main(['-dtmp', '-m', '-U', '-Z', 'greenlet>=0.3.1']):
+        # We usually won't reach this, easy_install calls sys.exit.
+        raise DistutilsError('installation of greenlet failed')
+
+      # Restore values overridden by easy_install.main.
+      # See also setuptools.dist for overriding Distribution.
+      log.set_threshold(old_log_level)
+      for module in ('distutils.dist', 'distutils.core', 'distutils.cmd'):
+        __import__(module, {}, {}, ('',)).Distribution = Distribution
+      for module in ('distutils.core', 'distutils.extension',
+                     'distutils.command.build_ext'):
+        __import__(module, {}, {}, ('',)).Extension = Extension
+
+      # Now extract greenlet.so from tmp/greenlet-*.egg
+      log.info('extracting greenlet from its egg and installing it')
+      greenlet_file_names = glob.glob(greenlet_file_pattern)
+      if (len(greenlet_file_names) != 1 or
+          not os.path.isdir(greenlet_file_names[0])):
+        raise DistutilsError('could not find any of: %s' % greenlet_file_pattern)
+      greenlet_so = 'greenlet' + so_ext
+      copy_file(os.path.join(greenlet_file_names[0], greenlet_so),
+                install_purelib)
+      egg_info_dir = (os.path.join(
+          install_purelib,
+          '-'.join(os.path.basename(greenlet_file_names[0]).split('-')[:-2])) +
+          '.egg-info')
+      if os.path.isfile(os.path.join(egg_info_dir, 'PKG-INFO')):
+        remove_tree(egg_info_dir)
+      copy_tree(os.path.join(greenlet_file_names[0], 'EGG-INFO'), egg_info_dir)
+
+      sys.modules.pop('greenlet', None)
+      try:
+        import greenlet
+        have_greenlet = True
+        have_good_greenlet = IsGoodGreenlet(greenlet)
+      except ImportError:
+        raise LinkError('neither stackless or greenlet found, '
+                        'and could not import greenlet after easy_install, '
+                        'see the Installation section of README.txt')
+
+  def initialize_options(self):
+    pass
+
+  def finalize_options(self):
+    pass
+
 
 class MyBuildExtDirs(Command):
   """Autodetect the C extension compiler environment. """
@@ -304,8 +397,10 @@ class MyBuildSrcSymlinks(Command):
   def finalize_options(self):
     pass
 
-# Make self.distribution.symlink_script_src_dirs visible.
+# Make self.distribution.symlink_script_src_dirs visible in Command objects.
 Distribution.symlink_script_src_dirs = None
+Distribution.install_requires = None
+Distribution.zip_safe = None
 
 def symlink(link_to, link_from):
   log.info('symlinking %s -> %s' % (link_from, link_to))
@@ -397,33 +492,6 @@ def HasSymbols(compiler, symbols=(),
   return True
 
 
-def UpdateSysPathFromEasyInstallPth(packages):
-  """Update sys.path from .../sitepackages/easy-install.pth."""
-  log.info('updating sys.path')
-  pth_name = None
-  for dir_name in sys.path:
-    try_pth_name = os.path.join(dir_name, 'easy-install.pth')
-    if os.path.isfile(try_pth_name):
-      pth_name = try_pth_name
-      break
-  if pth_name is None:
-    return 0
-  log.info('reading pth %s' % pth_name)
-  count = 0
-  for line in open(pth_name):
-    match = re.match(r'[.]/(([^-/]+)-.*[.]egg)\n\Z', line)
-    if match:
-      package = match.group(2)
-      if package in packages:
-        egg_name = os.path.join(dir_name, match.group(1))
-        while egg_name in sys.path:
-          sys.path.remove(egg_name)
-        log.info('prepending to sys.path: %s' % egg_name)
-        sys.path[:0] = [egg_name]
-        count += 1
-  return count
-
-
 def FindLib(retval, compiler, prefixes, includes, library, symbols,
             link_with_prev_libraries=None):
   for prefix in prefixes:
@@ -479,50 +547,6 @@ def AutoDetect(command_obj):
   retval = {'include_dirs': [], 'library_dirs': [], 'libraries': [],
             'define_macros': [], 'is_found': False, 'sources': [],
             'depends': []}
-
-  global have_greenlet
-  global have_good_greenlet
-  if not have_stackless and not have_good_greenlet:
-    if have_greenlet:
-      log.info('no stackless found, but found old (unusable) greenlet')
-    else:
-      log.info('no stackless or greenlet found')
-    log.info('attempting to install greenlet with easy_install')
-    # SUXX: stuck in this state if run from easy_install: SandboxViolation: chmod('/home/pts/.python-eggs/greenlet-0.3.1-py2.5-linux-x86_64.egg-tmp/tmpbSqqA4.$extract', 493) {}
-    # SUXX: error: SandboxViolation: chmod('/home/pts/.python-eggs/greenlet-0.3.1-py2.5-linux-x86_64.egg-tmp/tmpiCYPLw.$extract', 493) {}
-    # TODO(pts): Auto-detect pip (is it calling us, setup.py?) and try pip.
-    try:
-      from setuptools.command import easy_install
-    except ImportError:
-      easy_install = None
-    if not easy_install:
-      raise LinkError('neither stackless or greenlet found, '
-                      'and easy_install was not found either to install them, '
-                      'see the Installation section of README.txt')
-    old_log_level = log._global_log.threshold
-    if easy_install.main(['greenlet>=0.3.1']):
-      # We usually won't reach this, easy_install calls sys.exit.
-      raise DistutilsError('installation of greenlet failed')
-
-    # Restore values overridden by easy_install.main.
-    # See also setuptools.dist for overriding Distribution.
-    log.set_threshold(old_log_level)
-    for module in ('distutils.dist', 'distutils.core', 'distutils.cmd'):
-      __import__(module, {}, {}, ('',)).Distribution = Distribution
-    for module in ('distutils.core', 'distutils.extension',
-                   'distutils.command.build_ext'):
-      __import__(module, {}, {}, ('',)).Extension = Extension
-
-    sys.modules.pop('greenlet', None)
-    UpdateSysPathFromEasyInstallPth(['greenlet'])
-    try:
-      import greenlet
-      have_greenlet = True
-      have_good_greenlet = IsGoodGreenlet(greenlet)
-    except ImportError:
-      raise LinkError('neither stackless or greenlet found, '
-                      'and could not import greenlet after easy_install, '
-                      'see the Installation section of README.txt')
 
   if have_stackless:
     retval['define_macros'].append(('COIO_USE_CO_STACKLESS', None))
@@ -726,10 +750,14 @@ setup(name='syncless',
           "Topic :: Software Development :: Libraries :: Application Frameworks",
           "Topic :: Software Development :: Libraries :: Python Modules",
       ],
-      # TODO(pts): Make this useful with distutils.versionpredicate.
-      #requires=['stackless or greenlet'],
+      # Only one of stackless or greenlet is required, but it's impossible to
+      # specify that here.
+      requires=['stackless', 'greenlet (>=0.3.1)'],
+      install_requires=[install_requires],  # for setuptools
+      zip_safe=True,  # for setuptools
       ext_modules=[event],
       cmdclass = {'build': MyBuild,
+                  'build_install_greenlet': MyBuildInstallGreenlet,
                   'build_ext_dirs': MyBuildExtDirs,
                   'build_ext_symlinks': MyBuildExtSymlinks,
                   'build_src_symlinks': MyBuildSrcSymlinks,
