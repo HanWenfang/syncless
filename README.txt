@@ -65,24 +65,30 @@ Installation (the fast and easy way)
 You need a Unix system with Python 2.5 or 2.6. Stackless Python is
 recommended, but not necessary.
 
-To install syncless, run this (without the $ sign):
+To install syncless, run this as root (without the # sign):
 
-  $ easy_install greenlet  # Only for non-Stackless Python.
-  $ easy_install syncless
+  # easy_install syncless
+
+Be patient, compilation may take up to 60 seconds.
+
+To verify that Syncless got properly installed, run this command (without
+the leading $):
+
+  $ python -c 'from syncless.coio import sleep; sleep(1e-5); print "OK"'
+  OK
+
+If you want to install syncless to a specific Pyton version on your system,
+run the following instead (without python substituted properly):
+
+  # python -c'from setuptools.command.easy_install import main;main()' syncless
 
 If you don't have the easy_install command installed, do this:
 
   $ wget http://peak.telecommunity.com/dist/ez_setup.py
-  $ python ez_setup.py greenlet
   $ python ez_setup.py syncless
 
 If installation fails, or you want to reinstall syncless to get the highest
 performance, please follow the next Installation section.
-
-To try if Syncless is properly installed, run this command:
-
-  $ python2.5 -c 'from syncless.coio import sleep; sleep(1e-5); print "OK"'
-  OK
 
 Installation (the hard way)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -172,7 +178,7 @@ Remember your picks above.
    Most probably your Linux distribution doesn't have libevent2, so you should
    install libevent2 from source.
 
-7. Download the newest version of Syncless. Get the .tar.gz file from here:
+8. Download the newest version of Syncless. Get the .tar.gz file from here:
    http://pypi.python.org/pypi/syncless  or from here:
    http://code.google.com/p/syncless/ . Extract the .tar.gz file and cd into
    the directory.
@@ -181,7 +187,7 @@ Remember your picks above.
 
      svn checkout http://syncless.googlecode.com/svn/trunk/ syncless-read-only
 
-8. Compile and install Syncless. Make sure you are in the directory
+9. Compile and install Syncless. Make sure you are in the directory
    containing setup.py and syncless/patch.py . Then run
 
      $ $PYTHON setup.py build
