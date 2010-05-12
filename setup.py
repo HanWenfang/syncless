@@ -39,6 +39,14 @@ import os.path
 import re
 import sys
 import stat
+
+if 'bdist_egg' in sys.argv:
+  # This is when we're executed by easy_install.
+  # Example sys.argv: ['.../setup.py', '-q', 'bdist_egg', '--dist-dir', '.../egg-dist-tmp-AEgKbo']
+  import setuptools
+  i = sys.argv.index('bdist_egg')
+  sys.argv[i : i] = ['build_ext_dirs']
+
 from distutils import log
 from distutils.ccompiler import CCompiler
 from distutils.ccompiler import new_compiler
@@ -211,18 +219,18 @@ class MyUpload(Command):
     sys.stdout.write('Uploaded %s\n' % (file_url,))
 
 
+
 class MyBuildExtDirs(Command):
-  """Create symlinks to .so files.
-  
-  Create symlinks so scripts in the source dir can be run with PYTHONPATH=.
-  without install.
-  """
+  """Autodetect the C extension compiler environment. """
+
+  user_options = []  # Required by setuptools.
 
   def run(self):
-    for ext in self.distribution.ext_modules:
+    command_obj = self
+    for ext in command_obj.distribution.ext_modules:
       #assert ext.include_dirs == []
       if callable(ext.library_dirs):
-        update_dict = ext.library_dirs(self)
+        update_dict = ext.library_dirs(command_obj)
         assert isinstance(update_dict, dict)
         ext.library_dirs = []
         ext.include_dirs = []
@@ -459,6 +467,11 @@ def FindLib(retval, compiler, prefixes, includes, library, symbols,
   return False
 
 def AutoDetect(command_obj):
+  """Auto detect compilation information for a C extension.
+
+  Args:
+    command_obj: Any distutils.command object.
+  """
   # We could add more directories (e.g. those in /etc/ld.so.conf), but that's
   # system-specific, see http://stackoverflow.com/questions/2230467 .
   # TODO(pts): Issue a fatal error if libev or libevhdns was not found.
@@ -625,7 +638,10 @@ def AutoDetect(command_obj):
 
   retval['python_version'] = sys.version
   repr_retval = repr(retval)
-  log.info('using C env %s' % repr_retval)
+  if 'setuptools' in sys.modules and '-q' in sys.argv:
+    log.error('using C env %s' % repr_retval)
+  else:
+    log.info('using C env %s' % repr_retval)
   try:
     old_repr_retval = open('setup.cenv').read()
   except IOError:
