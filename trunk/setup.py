@@ -16,13 +16,22 @@ GNU General Public License for more details.
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
+def IsGoodGreenlet(greenlet):
+  return bool(
+      getattr(getattr(greenlet, 'greenlet', None), 'throw', None) and
+      getattr(greenlet, '__version__', '') >= '0.3.1')
+
 import sys
+# We don't try to `import stackless' here delibaretely, because we are not
+# interested in emulations, but we're interested in the `stackless' module
+# available by default in Stackless Python.
 have_stackless = 'stackless' in sys.modules
 try:
-  from greenlet import greenlet
+  import greenlet
   have_greenlet = True
+  have_good_greenlet = IsGoodGreenlet(greenlet)
 except ImportError:
-  have_greenlet = False
+  have_greenlet = have_good_greenlet = False
 
 import glob
 import os
@@ -55,6 +64,7 @@ def FindLibraryFile(self, dirs, lib, *args, **kwargs):
 UnixCCompiler.find_library_file = classmethod(FindLibraryFile)
 
 class MyBuild(build):
+  # Non-standard, extra method.
   def has_sources(self):
     return self.has_pure_modules or self.has_ext_modules
 
@@ -379,6 +389,33 @@ def HasSymbols(compiler, symbols=(),
   return True
 
 
+def UpdateSysPathFromEasyInstallPth(packages):
+  """Update sys.path from .../sitepackages/easy-install.pth."""
+  log.info('updating sys.path')
+  pth_name = None
+  for dir_name in sys.path:
+    try_pth_name = os.path.join(dir_name, 'easy-install.pth')
+    if os.path.isfile(try_pth_name):
+      pth_name = try_pth_name
+      break
+  if pth_name is None:
+    return 0
+  log.info('reading pth %s' % pth_name)
+  count = 0
+  for line in open(pth_name):
+    match = re.match(r'[.]/(([^-/]+)-.*[.]egg)\n\Z', line)
+    if match:
+      package = match.group(2)
+      if package in packages:
+        egg_name = os.path.join(dir_name, match.group(1))
+        while egg_name in sys.path:
+          sys.path.remove(egg_name)
+        log.info('prepending to sys.path: %s' % egg_name)
+        sys.path[:0] = [egg_name]
+        count += 1
+  return count
+
+
 def FindLib(retval, compiler, prefixes, includes, library, symbols,
             link_with_prev_libraries=None):
   for prefix in prefixes:
@@ -430,10 +467,52 @@ def AutoDetect(command_obj):
             'define_macros': [], 'is_found': False, 'sources': [],
             'depends': []}
 
+  global have_greenlet
+  global have_good_greenlet
+  if not have_stackless and not have_good_greenlet:
+    if have_greenlet:
+      log.info('no stackless found, but found old (unusable) greenlet')
+    else:
+      log.info('no stackless or greenlet found')
+    log.info('attempting to install greenlet with easy_install')
+    # TODO(pts): Auto-detect pip (is it calling us, setup.py?) and try pip.
+    try:
+      from setuptools.command import easy_install
+    except ImportError:
+      easy_install = None
+    if not easy_install:
+      raise LinkError('neither stackless or greenlet found, '
+                      'and easy_install was not found either to install them, '
+                      'see the Installation section of README.txt')
+    old_log_level = log._global_log.threshold
+    if easy_install.main(['greenlet>=0.3.1']):
+      # We usually won't reach this, easy_install calls sys.exit.
+      raise DistutilsError('installation of greenlet failed')
+
+    # Restore values overridden by easy_install.main.
+    # See also setuptools.dist for overriding Distribution.
+    log.set_threshold(old_log_level)
+    for module in ('distutils.dist', 'distutils.core', 'distutils.cmd'):
+      __import__(module, {}, {}, ('',)).Distribution = Distribution
+    for module in ('distutils.core', 'distutils.extension',
+                   'distutils.command.build_ext'):
+      __import__(module, {}, {}, ('',)).Extension = Extension
+
+    sys.modules.pop('greenlet', None)
+    UpdateSysPathFromEasyInstallPth(['greenlet'])
+    try:
+      import greenlet
+      have_greenlet = True
+      have_good_greenlet = IsGoodGreenlet(greenlet)
+    except ImportError:
+      raise LinkError('neither stackless or greenlet found, '
+                      'and could not import greenlet after easy_install, '
+                      'see the Installation section of README.txt')
+
   if have_stackless:
     retval['define_macros'].append(('COIO_USE_CO_STACKLESS', None))
   elif have_greenlet:
-    if not hasattr(greenlet, 'throw'):
+    if not have_good_greenlet:
       raise LinkError('detected old (unusable) version of greenlet, '
                       'see the Installation section of README.txt')
     retval['define_macros'].append(('COIO_USE_CO_GREENLET', None))
@@ -619,6 +698,7 @@ setup(name='syncless',
           "License :: OSI Approved :: GNU General Public License (GPL)",
           "Operating System :: POSIX :: Linux",
           "Operating System :: Unix",
+          "Programming Language :: Python :: 2.5",
           "Programming Language :: Python :: 2.6",
           "Topic :: Internet",
           "Topic :: Internet :: WWW/HTTP :: Dynamic Content :: CGI Tools/Libraries",
@@ -628,8 +708,9 @@ setup(name='syncless',
           "Topic :: Software Development :: Libraries :: Application Frameworks",
           "Topic :: Software Development :: Libraries :: Python Modules",
       ],
-      requires=['stackless'],
-      ext_modules = [ event ],
+      # TODO(pts): Make this useful with distutils.versionpredicate.
+      #requires=['stackless or greenlet'],
+      ext_modules=[event],
       cmdclass = {'build': MyBuild,
                   'build_ext_dirs': MyBuildExtDirs,
                   'build_ext_symlinks': MyBuildExtSymlinks,

@@ -18,7 +18,7 @@ web applications. Example use:
 
   from syncless import wsgi
   def WsgiApp(env, start_response):
-    start_response('200 OK', [('Content-Type: text/html')])
+    start_response('200 OK', [('Content-Type', 'text/html')])
     return ['Hello, World!']
   wsgi.RunHttpServer(WsgiApp)
 
@@ -1384,6 +1384,8 @@ def RunHttpServer(app, server_address=None, listen_queue_size=100):
       assert isinstance(func, types.UnboundMethodType)
       func = func.im_func
       has_self = True
+    elif isinstance(app, types.FunctionType):
+      func = app
     elif isinstance(app, object) or isinstance(app, types.InstanceType):
       func = getattr(app, '__call__', None)
       assert isinstance(func, types.MethodType)
@@ -1413,5 +1415,33 @@ def RunHttpServer(app, server_address=None, listen_queue_size=100):
   server_socket.listen(listen_queue_size)
   logging.info('listening on %r' % (server_socket.getsockname(),))
   # From http://webpy.org/install (using with mod_wsgi).
-  stackless.tasklet(WsgiListener)(server_socket, wsgi_application)
-  stackless.schedule_remove(None)
+  WsgiListener(server_socket, wsgi_application)
+
+
+def simple(server_port=8080, function=None, server_host='0.0.0.0'):
+  """A simple (non-WSGI) HTTP server for demonstration purposes."""
+  default_start_response_args = ('200 OK', [('Content-Type', 'text/html')])
+
+  def WsgiApplication(env, start_response):
+    is_called_ary = [False]
+    def StartResponseWrapper(*args, **kwargs):
+      is_called_ary[0] = True
+      start_response(*args, **kwargs)
+    items = function(env, StartResponseWrapper)
+    if is_called_ary[0]:
+      return items
+    elif (isinstance(items, str) or isinstance(items, list) or
+        isinstance(items, tuple)):
+      start_response(*default_start_response_args)
+      return items
+    else:
+      items = iter(items)
+      for item in items:
+        start_response(*default_start_response_args)
+        return items
+
+  stackless.tasklet(RunHttpServer)(
+      WsgiApplication, (server_host, server_port))
+  #return lambda: coio.sleep(100)
+  return stackless.schedule_remove
+  #RunHttpServer(WsgiApplication, (server_host, server_port))
