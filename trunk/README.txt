@@ -67,11 +67,13 @@ recommended, but not necessary.
 
 To install syncless, run this (without the $ sign):
 
+  $ easy_install greenlet  # Only for non-Stackless Python.
   $ easy_install syncless
 
 If you don't have the easy_install command installed, do this:
 
   $ wget http://peak.telecommunity.com/dist/ez_setup.py
+  $ python ez_setup.py greenlet
   $ python ez_setup.py syncless
 
 If installation fails, or you want to reinstall syncless to get the highest

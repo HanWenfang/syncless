@@ -488,6 +488,8 @@ def AutoDetect(command_obj):
     else:
       log.info('no stackless or greenlet found')
     log.info('attempting to install greenlet with easy_install')
+    # SUXX: stuck in this state if run from easy_install: SandboxViolation: chmod('/home/pts/.python-eggs/greenlet-0.3.1-py2.5-linux-x86_64.egg-tmp/tmpbSqqA4.$extract', 493) {}
+    # SUXX: error: SandboxViolation: chmod('/home/pts/.python-eggs/greenlet-0.3.1-py2.5-linux-x86_64.egg-tmp/tmpiCYPLw.$extract', 493) {}
     # TODO(pts): Auto-detect pip (is it calling us, setup.py?) and try pip.
     try:
       from setuptools.command import easy_install
