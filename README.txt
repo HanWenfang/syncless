@@ -60,8 +60,30 @@ Requirements
 * Various development packages such as python2.5-dev and libssl-dev already
   installed.
 
-Installation
-~~~~~~~~~~~~
+Installation (the fast and easy way)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+You need a Unix system with Python 2.5 or 2.6. Stackless Python is
+recommended, but not necessary.
+
+To install syncless, run this (without the $ sign):
+
+  $ easy_install syncless
+
+If you don't have the easy_install command installed, do this:
+
+  $ wget http://peak.telecommunity.com/dist/ez_setup.py
+  $ python ez_setup.py syncless
+
+If installation fails, or you want to reinstall syncless to get the highest
+performance, please follow the next Installation section.
+
+To try if Syncless is properly installed, run this command:
+
+  $ python2.5 -c 'from syncless.coio import sleep; sleep(1e-5); print "OK"'
+  OK
+
+Installation (the hard way)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 For a Python with coroutine support, you have these options (pick one):
 
 * Python 2.6 with greenlet  (easy to install, slow, may leak memory, not
@@ -149,6 +171,7 @@ Remember your picks above.
    install libevent2 from source.
 
 7. Download the newest version of Syncless. Get the .tar.gz file from here:
+   http://pypi.python.org/pypi/syncless  or from here:
    http://code.google.com/p/syncless/ . Extract the .tar.gz file and cd into
    the directory.
 
@@ -786,8 +809,9 @@ Asynchronous DNS for Python:
 
 Info: In interactive stackless, repeated invocations of stackless.current may
   return different objects.
-
 Info: LIBEV_FLAGS=1 use select(); LIBEV_FLAGS=2 use poll()
+Info: gevent.backdoor doesn't support line editing with libreadline
+      python2.5 -m gevent.backdoor 1234
 
 Release procedure
 ~~~~~~~~~~~~~~~~~
@@ -857,5 +881,8 @@ Planned features
 * TODO(pts): Implement an SSL-capable HTTP proxy as a reference.
 * TODO(pts): doc: signal.alarm doesn't work (the SIGALRM will get ignored?)
 * TODO(pts): Make os.waitpid non-blocking by installing a SIGCHLD handler.
+* TODO(pts): Add interactive console like gevent.backdoor with line editing
+  and history.
+* TODO(pts): Fix very small float sleep value for libev.
 
 __EOF__
