@@ -892,5 +892,6 @@ Planned features
 * TODO(pts): Add interactive console like gevent.backdoor with line editing
   and history.
 * TODO(pts): Fix very small float sleep value for libev.
+* TODO(pts): Add proper nbfile buffering (with read_upto) for nbsslsocket.
 
 __EOF__
