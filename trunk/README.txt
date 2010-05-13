@@ -797,6 +797,24 @@ A21. Yes, use coio.signal. Example:
      Uncaught exceptions raised in signal handlers are reported (without a
      traceback), and then they get ignored.
 
+Q22. Does Syncles provide a way to parse the bytes read from a socket?
+
+A22. You should call nbsocket.makefile('r') to create nbfile, which has a
+     read buffer. The basic idea for parsing is that nbfile.read_upto and
+     nbfile.read_more can be used to read more bytes from the file
+     descriptor to the read buffer, the methods nbfile.get_string,
+     nbfile.get_read_buffer, nbfile.find and nbfile.rfind can be used to
+     find out if enough data is available, and whether it is parseable, and
+     finally nbfile.discard can be used the remove the parsed message from
+     the beginning of the read buffer. nbfile.read_buffer_len contains the
+     current byte size of the read buffer.
+
+     You can also parse with regular expressions, e.g.
+     re.search(r'...', nbfile_obj.get_read_buffer()), but you should make
+     your regexp aware that the read buffer may contain only a prefix of the
+     full message you want to parse. In that case, you should call
+     nbfile.read_more to read more bytes, and then retry the re.search.
+
 Links
 ~~~~~
 * doc: related: eventlet vs gevent:
@@ -893,5 +911,6 @@ Planned features
   and history.
 * TODO(pts): Fix very small float sleep value for libev.
 * TODO(pts): Add proper nbfile buffering (with read_upto) for nbsslsocket.
+* TODO(pts): Add more protocol parsing examples.
 
 __EOF__
