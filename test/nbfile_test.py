@@ -11,6 +11,7 @@ class NbfileTest(unittest.TestCase):
   # TODO(pts): Write more tests.
 
   def setUp(self):
+    self.assertEqual(2, coio.stackless.getruncount())
     try:
       read_fd, write_fd = os.pipe()
       self.f = coio.nbfile(read_fd, write_fd, write_buffer_limit=0,
@@ -23,6 +24,7 @@ class NbfileTest(unittest.TestCase):
 
   def tearDown(self):
     self.f.close()
+    self.assertEqual(2, coio.stackless.getruncount())
 
   def testReadLine(self):
     # This doesn't test blocking reads.
@@ -190,6 +192,59 @@ class NbfileTest(unittest.TestCase):
     self.assertEqual(1, self.f.rfind('O', 0, 2))
     self.assertEqual(1, self.f.rfind('O', -8, -7))
     self.assertEqual(2, self.f.rfind('O', -8, -6))
+
+  def testLongReadAll(self):
+    # 200K, most Unix systems don't buffer that much on a pipe, so sending
+    # this forces EAGAIN and back-and-forth switching between the writer and
+    # the reader.
+    data = 'FooBarBaz' * 22222
+
+    def Writer():
+      self.f.write(data)
+      os.close(self.f.forget_write_fd())  # Send EOF.
+
+    coio.stackless.tasklet(Writer)()
+    self.assertEqual(data, self.f.read())
+    coio.stackless.schedule()  # Make sure the reader exits.
+
+  def testReadMoreAndReadUpto(self):
+    self.f.write('foobar')
+    # Reading more than requested.
+    self.assertEqual(6, self.f.read_upto(2))
+    self.assertEqual('foobar', self.f.get_string())
+    self.assertEqual(6, self.f.read_upto(-1))
+    self.assertEqual('foobar', self.f.get_string())
+    self.f.write('baz')
+    self.assertEqual(6, self.f.read_upto(5))
+    self.assertEqual('foobar', self.f.get_string())
+    self.assertEqual(6, self.f.read_upto(6))
+    self.assertEqual('foobar', self.f.get_string())
+    self.assertEqual(9, self.f.read_upto(7))
+    self.assertEqual('foobarbaz', self.f.get_string())
+    self.f.write('hi')
+    self.assertEqual(0, self.f.read_more(-1))
+    self.assertEqual('foobarbaz', self.f.get_string())
+    self.assertEqual(2, self.f.read_more(1))
+    self.assertEqual('foobarbazhi', self.f.get_string())
+
+    def Writer():
+      self.f.write('HEL')
+      # This forces the loop in nbfile.read_more to run twice.
+      coio.stackless.schedule()
+      self.f.write('LO!')
+
+    coio.stackless.tasklet(Writer)()
+    self.assertEqual(6, self.f.read_more(5))
+    self.assertEqual('foobarbazhiHELLO!', self.f.get_string())
+
+    def EofWriter():
+      self.f.write('end')
+      os.close(self.f.forget_write_fd())  # Send EOF.
+
+    coio.stackless.tasklet(EofWriter)()
+    self.assertEqual(3, self.f.read_more(5))
+    self.assertEqual('foobarbazhiHELLO!end', self.f.get_string())
+
 
 class NbfileSocketPairTest(NbfileTest):
   def setUp(self):

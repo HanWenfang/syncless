@@ -189,9 +189,9 @@ cdef extern from "./coio_c_evbuffer.h":
     struct evbuffer_s "coio_evbuffer":
         uchar_p buf "buffer"
         uchar_p orig_buffer
-        int misalign
-        int totallen
-        int off
+        size_t misalign
+        size_t totallen
+        size_t off
         void *cbarg
         void (*cb)(evbuffer_s*, int, int, void*)
 
@@ -790,6 +790,13 @@ cdef class nbfile:
     def __dealloc__(nbfile self):
         self.close()
 
+    def forget_write_fd(nbfile self):
+       """Return and forget the write file descriptor."""
+       cdef int retval
+       retval = self.write_fd
+       self.write_fd = -1
+       return retval
+
     def close(nbfile self):
         cdef int got
         try:
@@ -1163,11 +1170,12 @@ cdef class nbfile:
                 self.read_fd, c_EV_READ, HandleCTimeoutWakeup, &tv
                 ) is event_happened_token
 
-    def read(nbfile self, int n):
+    def read(nbfile self, int n=-1):
         """Read exactly n bytes (or less on EOF), and return string
 
         Args:
-          n: Number of bytes to read. Negative values are not allowed.
+          n: Number of bytes to read. Negative values mean: read up to EOF
+            (or up to self.read_limit).
         Returns:
           String containing the bytes read; an empty string on EOF.
         Raises:
@@ -1177,8 +1185,28 @@ cdef class nbfile:
         cdef object buf
 
         if n < 0:
-            raise NotImplementedError  # TODO(pts): Read up to EOF.
-
+            if self.c_read_limit < 0:  # Read up to EOF.
+                if self.read_eb.totallen == 0:
+                    evbuffer_expand(&self.read_eb,
+                                    self.c_min_read_buffer_size)
+                while 1:
+                    # TODO(pts): Check out-of-memory error everywhere.
+                    evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
+                    got = nbevent_read(
+                        &self.read_eb, self.read_fd,
+                        self.read_eb.totallen - self.read_eb.off -
+                        self.read_eb.misalign)
+                    if got < 0:
+                        if errno != EAGAIN:
+                            raise self.c_read_exc_class(errno, strerror(errno))
+                        coio_c_wait(&self.read_wakeup_ev, NULL)
+                    elif got == 0:  # EOF
+                        break
+                buf = PyString_FromStringAndSize(
+                    <char_constp>self.read_eb.buf, self.read_eb.off)
+                evbuffer_drain(&self.read_eb, self.read_eb.off)
+                return buf
+            n = self.c_read_limit
         if self.read_eb.off >= n:  # Satisfy read from read_eb.
             if n <= 0:
                 return ''
@@ -1234,7 +1262,7 @@ cdef class nbfile:
         cdef int got
         if n <= 0:
             if n < 0:
-                raise NotImplementedError  # TODO(pts): Read up to EOF.
+                raise ValueError
             return ''
         if self.read_eb.off > 0:
             if self.read_eb.off < n:
@@ -1270,10 +1298,40 @@ cdef class nbfile:
 
         There is no such Python `file' method (file.read_upto).
 
+        Args:
+          n: The minimum number of bytes the read buffer should contain when
+            this method returns. Negative values are treated as zero.
+        Returns:
+          The resulting number of bytes in the read buffer. It can be less
+          than n iff EOF was reached.
         """
         cdef Py_ssize_t c_n
+        cdef Py_ssize_t got
         c_n = n
-        raise NotImplementedError  # !!
+        if (self.c_read_limit >= 0 and
+            c_n > self.read_eb.off + self.c_read_limit):
+            c_n = self.read_eb.off + self.c_read_limit
+        while c_n > <Py_ssize_t>self.read_eb.off:  # Works also for negative values of n.
+            if self.read_eb.totallen == 0:
+                evbuffer_expand(&self.read_eb,
+                                self.c_min_read_buffer_size)
+            else:
+                # This expands by at least read_eb.totallen if the buffer is
+                # full (because evbuffer doubles its size at minimum).
+                evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
+            got = nbevent_read(
+                &self.read_eb, self.read_fd,
+                self.read_eb.totallen - self.read_eb.off -
+                self.read_eb.misalign)
+            if got < 0:
+                if errno != EAGAIN:
+                    raise self.c_read_exc_class(errno, strerror(errno))
+                coio_c_wait(&self.read_wakeup_ev, NULL)
+            elif got == 0:  # EOF
+                break
+            elif self.c_read_limit >= 0:
+                self.c_read_limit -= got
+        return self.read_eb.off
 
     def read_more(nbfile self, n):
         """Read to buffer at least n more bytes, return number of bytes read.
@@ -1282,8 +1340,35 @@ cdef class nbfile:
 
         """
         cdef Py_ssize_t c_n
+        cdef Py_ssize_t got
+        cdef Py_ssize_t c_n0
         c_n = n
-        raise NotImplementedError  # !!
+        if (self.c_read_limit >= 0 and c_n > self.c_read_limit):
+            c_n = self.c_read_limit
+        c_n0 = c_n
+        while c_n > 0:  # Works also for negative values of n.
+            if self.read_eb.totallen == 0:
+                evbuffer_expand(&self.read_eb,
+                                self.c_min_read_buffer_size)
+            else:
+                # This expands by at least read_eb.totallen if the buffer is
+                # full (because evbuffer doubles its size at minimum).
+                evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
+            got = nbevent_read(
+                &self.read_eb, self.read_fd,
+                self.read_eb.totallen - self.read_eb.off -
+                self.read_eb.misalign)
+            if got < 0:
+                if errno != EAGAIN:
+                    raise self.c_read_exc_class(errno, strerror(errno))
+                coio_c_wait(&self.read_wakeup_ev, NULL)
+            elif got == 0:  # EOF
+                break
+            else:
+                if self.c_read_limit >= 0:
+                    self.c_read_limit -= got
+                c_n -= got
+        return c_n0 - c_n
 
     def find(nbfile self, substring, start_idx=0, end_idx=None):
         """Find the first occurrence of substring in read buffer.
