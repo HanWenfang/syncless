@@ -1375,7 +1375,6 @@ cdef class nbfile:
 
         There is no such Python `file' method (file.find).
 
-
         For a regular expression search, please use
         re.search(r'...', nbfile_obj.get_read_buffer()).
         """
@@ -1470,6 +1469,12 @@ cdef class nbfile:
         """Get read-write buffer object pointing to our read buffer.
 
         There is no such Python `file' method (file.get_read_buffer).
+
+        Please note that the returned buffer points to a valid memory
+        location until this nbfile gets closed or a read or discard
+        operation is performed on it. If you attempt to use returned buffer
+        after that, you may find garbage inside, or you may get a Segmentation
+        fault for an invalid read.
         """
         cdef Py_ssize_t c_start_idx
         cdef Py_ssize_t c_end_idx
