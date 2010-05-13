@@ -210,12 +210,23 @@ cdef extern from "Python.h":
     object PyString_FromFormat(char_constp fmt, ...)
     object PyString_FromStringAndSize(char_constp v, Py_ssize_t len)
     object PyString_FromString(char_constp v)
-    int    PyObject_AsCharBuffer(object obj, char_constp *buffer, Py_ssize_t *buffer_len)
+    int    PyObject_AsCharBuffer(object obj, char_constp *buffer, Py_ssize_t *buffer_len) except -1
     object PyInt_FromString(char*, char**, int)
 cdef extern from "pymem.h":
     void *PyMem_Malloc(size_t)
     void *PyMem_Realloc(void*, size_t)
     void PyMem_Free(void*)
+cdef extern from "bufferobject.h":
+    object PyBuffer_FromMemory(void *ptr, Py_ssize_t size)
+    object PyBuffer_FromReadWriteMemory(void *ptr, Py_ssize_t size)
+cdef extern from "./coio_c_fastsearch.h":  # Needed by stringlib/find.h
+    # Similar to Objects/stringlib/find.h in the Python source.
+    Py_ssize_t coio_stringlib_find(char_constp str, Py_ssize_t str_len,
+                                   char_constp sub, Py_ssize_t sub_len,
+                                   Py_ssize_t offset)
+    Py_ssize_t coio_stringlib_rfind(char_constp str, Py_ssize_t str_len,
+                                    char_constp sub, Py_ssize_t sub_len,
+                                    Py_ssize_t offset)
 cdef extern from "./coio_c_stackless.h":
     # cdef extern from "frameobject.h":  # Needed by core/stackless_structs.h
     # cdef extern from "core/stackless_structs.h":
@@ -887,8 +898,7 @@ cdef class nbfile:
         cdef char_constp p
         cdef Py_ssize_t n
         cdef evbuffer_s *read_eb
-        if PyObject_AsCharBuffer(buf, &p, &n) < 0:
-            raise TypeError
+        PyObject_AsCharBuffer(buf, &p, &n)
         if n <= 0:
             return
         read_eb = &self.read_eb
@@ -908,6 +918,19 @@ cdef class nbfile:
             read_eb.off += n
             # We don't call callbacks.
 
+    def unread_append(nbfile self, object buf):
+        """Push back some data to end of the read buffer.
+
+        There is no such Python `file' method (file.unread_buffer).
+
+        Please note that this call is always linear.
+        """
+        cdef char_constp p
+        cdef Py_ssize_t n
+        PyObject_AsCharBuffer(buf, &p, &n)
+        if n > 0:
+            evbuffer_add(&self.read_eb, <void_constp>p, n)
+
     def write(nbfile self, object buf):
         # TODO(pts): Flush the buffer eventually automatically.
         cdef char_constp p
@@ -915,8 +938,7 @@ cdef class nbfile:
         cdef Py_ssize_t n
         cdef int wlimit
         cdef int keepc
-        if PyObject_AsCharBuffer(buf, &p, &n) < 0:
-            raise TypeError
+        PyObject_AsCharBuffer(buf, &p, &n)
         if n <= 0:
             return
         wlimit = self.c_write_buffer_limit
@@ -1242,6 +1264,150 @@ cdef class nbfile:
                 if self.c_read_limit >= 0:
                     self.c_read_limit -= got
                 return buf
+
+    def read_upto(nbfile self, n):
+        """Read so that read buffer is >= n bytes long, return new size.
+
+        There is no such Python `file' method (file.read_upto).
+
+        """
+        cdef Py_ssize_t c_n
+        c_n = n
+        raise NotImplementedError  # !!
+
+    def read_more(nbfile self, n):
+        """Read to buffer at least n more bytes, return number of bytes read.
+
+        There is no such Python `file' method (file.read_more).
+
+        """
+        cdef Py_ssize_t c_n
+        c_n = n
+        raise NotImplementedError  # !!
+
+    def find(nbfile self, substring, start_idx=0, end_idx=None):
+        """Find the first occurrence of substring in read buffer.
+
+        There is no such Python `file' method (file.find).
+
+
+        For a regular expression search, please use
+        re.search(r'...', nbfile_obj.get_read_buffer()).
+        """
+        cdef Py_ssize_t c_start_idx
+        cdef Py_ssize_t c_end_idx
+        cdef char_constp sbuf
+        cdef Py_ssize_t slen
+        PyObject_AsCharBuffer(substring, &sbuf, &slen)
+        if end_idx is None:
+            c_end_idx = self.read_eb.off
+        else:
+            c_end_idx = end_idx
+            if c_end_idx < 0:
+                c_end_idx += self.read_eb.off
+                if c_end_idx < 0:
+                    c_end_idx = 0
+            elif c_end_idx > self.read_eb.off:
+                c_end_idx = self.read_eb.off
+        c_start_idx = start_idx
+        if c_start_idx < 0:
+            c_start_idx += self.read_eb.off
+            if c_start_idx < 0:
+                c_start_idx = 0
+        if c_start_idx > c_end_idx:
+            return -1
+        return coio_stringlib_find(
+            <char_constp>self.read_eb.buf + c_start_idx,
+            c_end_idx - c_start_idx, sbuf, slen, c_start_idx)
+
+    def rfind(nbfile self, substring, start_idx=0, end_idx=None):
+        """Find the last occurrence of substring in read buffer.
+
+        There is no such Python `file' method (file.rfind).
+
+        """
+        cdef Py_ssize_t c_start_idx
+        cdef Py_ssize_t c_end_idx
+        cdef char_constp sbuf
+        cdef Py_ssize_t slen
+        PyObject_AsCharBuffer(substring, &sbuf, &slen)
+        if end_idx is None:
+            c_end_idx = self.read_eb.off
+        else:
+            c_end_idx = end_idx
+            if c_end_idx < 0:
+                c_end_idx += self.read_eb.off
+                if c_end_idx < 0:
+                    c_end_idx = 0
+            elif c_end_idx > self.read_eb.off:
+                c_end_idx = self.read_eb.off
+        c_start_idx = start_idx
+        if c_start_idx < 0:
+            c_start_idx += self.read_eb.off
+            if c_start_idx < 0:
+                c_start_idx = 0
+        if c_start_idx > c_end_idx:
+            return -1
+        return coio_stringlib_rfind(
+            <char_constp>self.read_eb.buf + c_start_idx,
+            c_end_idx - c_start_idx, sbuf, slen, c_start_idx)
+
+    def get_string(nbfile self, start_idx=0, end_idx=None):
+        """Get string from read buffer.
+
+        There is no such Python `file' method (file.get_string).
+
+        """
+        cdef Py_ssize_t c_start_idx
+        cdef Py_ssize_t c_end_idx
+        if end_idx is None:
+            c_end_idx = self.read_eb.off
+        else:
+            c_end_idx = end_idx
+            if c_end_idx < 0:
+                c_end_idx += self.read_eb.off
+                if c_end_idx < 0:
+                    c_end_idx = 0
+            elif c_end_idx > self.read_eb.off:
+                c_end_idx = self.read_eb.off
+        c_start_idx = start_idx
+        if c_start_idx < 0:
+            c_start_idx += self.read_eb.off
+            if c_start_idx < 0:
+                c_start_idx = 0
+        if c_start_idx >= c_end_idx:
+            return ''
+        return PyString_FromStringAndSize(
+            <char_constp>self.read_eb.buf + c_start_idx,
+            c_end_idx - c_start_idx)
+
+    def get_read_buffer(nbfile self, start_idx=0, end_idx=None):
+        """Get read-write buffer object pointing to our read buffer.
+
+        There is no such Python `file' method (file.get_read_buffer).
+        """
+        cdef Py_ssize_t c_start_idx
+        cdef Py_ssize_t c_end_idx
+        if end_idx is None:
+            c_end_idx = self.read_eb.off
+        else:
+            c_end_idx = end_idx
+            if c_end_idx < 0:
+                c_end_idx += self.read_eb.off
+                if c_end_idx < 0:
+                    c_end_idx = 0
+            elif c_end_idx > self.read_eb.off:
+                c_end_idx = self.read_eb.off
+        c_start_idx = start_idx
+        if c_start_idx < 0:
+            c_start_idx += self.read_eb.off
+            if c_start_idx < 0:
+                c_start_idx = 0
+        if c_start_idx >= c_end_idx:
+            return PyBuffer_FromReadWriteMemory(NULL, 0)
+        return PyBuffer_FromReadWriteMemory(
+             <void*>(self.read_eb.buf + c_start_idx),
+             c_end_idx - c_start_idx)
 
     def readline(nbfile self, int limit=-1):
         # TODO(pts): Add a read limit for the line length.
