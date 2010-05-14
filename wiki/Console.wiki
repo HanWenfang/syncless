@@ -1,5 +1,7 @@
 #summary syncless.console, the interactive Python console for Syncless applications.
 
+You can use syncless.console as an interactive Python interpreter (similar to `python -i`), which makes it easy to start and work with other coroutines (tasklets) in the background.
+
 = How to use it =
 
 {{{
