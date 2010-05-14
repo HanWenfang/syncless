@@ -85,7 +85,9 @@ def NewReadLine(in_fd, out_fd):
   xin = coio.fdopen(in_fd, 'r', do_close=False)
   packed_i = struct.pack('i', 0)
 
-  def NonTerminalReadLine():
+  def NonTerminalReadLine(prompt=''):
+    xout.write(prompt)
+    xout.flush()
     # Coroutines are scheduled while xin.readline() is reading the rest of
     # its line.
     line = xin.readline()
@@ -184,6 +186,7 @@ def NewReadLine(in_fd, out_fd):
   if os.isatty(in_fd):
     return TerminalReadLine
   else:
+    xout = coio.fdopen(out_fd, 'w', do_close=False)
     return NonTerminalReadLine
 
 class _Ticker(object):
