@@ -61,9 +61,10 @@ static struct event* coio_event_pool_malloc_event(void) {
     if (ev == NULL)
       return NULL;
     coio_event_pool_first_free = &ev[1];
-    for (i = 1; i < COIO_EVENT_POOL_BLOCK_COUNT; --i) {
+    for (i = 1; i < COIO_EVENT_POOL_BLOCK_COUNT - 1; ++i) {
       *(struct event**)&ev[i] = &ev[i + 1];
     }
+    *(struct event**)&ev[COIO_EVENT_POOL_BLOCK_COUNT - 1] = NULL;
     return ev;
   }
 }
