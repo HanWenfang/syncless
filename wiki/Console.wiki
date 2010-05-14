@@ -1,0 +1,23 @@
+#summary syncless.console, the interactive Python console for Syncless applications.
+
+= How to use it =
+
+{{{
+"
+$ python -m syncless.console
+Python 2.6.5 Stackless 3.1b3 060516 (python-2.65:81084M, May 11 2010, 16:52:04) 
+[GCC 4.2.4 (Ubuntu 4.2.4-1ubuntu4)] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+(SynclessInteractiveConsole)
+>>> help                                                                        
+Type help() for interactive help, or help(object) for help about object.
+See more about Syncless on http://code.google.com/p/syncless/
+Example commands on syncless.console:
++ticker
+-ticker
+wsgi.simple(8080, lambda *args: ['Hello, <b>World!</b>']) or None
+>>> +ticker                                                                     
+>>> ..............
+>>> (Ctrl-<D>)
+$ _
+}}}
