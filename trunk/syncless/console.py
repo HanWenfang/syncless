@@ -76,6 +76,11 @@ def WritePromptToNextLine(out_fd, prompt, prompt_width):
     # Move cursor to the beginning of the line.
     BlockingWriteAll(out_fd, '\r' + prompt)
 
+just_after_prompt = False
+"""False or (out_fd, prompt).
+
+Boolean value indicates if a prompt was displayed but nothing typed.
+"""
 
 def NewReadLine(in_fd, out_fd):
   """Terminal-enhanced readline function generator.
@@ -105,11 +110,13 @@ def NewReadLine(in_fd, out_fd):
     #new[6][termios.VMIN] = '\0'  # !! VMIN -- no effect below, affects only blocking / nonblocking reads
     termios.tcsetattr(0, termios.TCSANOW, new)
     BlockingWriteAll(out_fd, prompt)
-    prompt_width = GetPromptWidth(prompt)
-    
-    # TODO(pts): Catch top-level exceptions in other tasklets.
-    while not xin.wait_for_readable():
-      pass
+    global just_after_prompt
+    just_after_prompt = (out_fd, prompt)
+    try:
+      while not xin.wait_for_readable():
+        pass
+    finally:
+      just_after_prompt = False
     # Is this the correct way to disable new input while we're examining the
     # existing input?
     termios.tcflow(in_fd, termios.TCIOFF)
@@ -129,6 +136,7 @@ def NewReadLine(in_fd, out_fd):
         fcntl.ioctl(in_fd, termios.TIOCSTI, c)
       termios.tcflow(in_fd, termios.TCION)
       raise EOFError
+    prompt_width = GetPromptWidth(prompt)
     if 'readline' in sys.modules:  # raw_input() is GNU libreadline.
       WritePromptToNextLine(out_fd, '', prompt_width)
       new[3] |= termios.ICANON  # [2] is c_lflag; superfluous
@@ -215,16 +223,44 @@ class _Ticker(object):
       self.ticker_worker.kill()
       self.ticker_worker = None
 
+console_tasklet = None
+
+def wrap_tasklet(function):
+  """Create tasklet like stackless.tasklet(function), handle exceptions."""
+  import traceback
+
+  def TaskletWrapper(*args, **kwargs):
+    try:
+      function(*args, **kwargs)
+    except TaskletExit:
+      pass
+    except:
+      newlines = '\n\n'
+      if just_after_prompt:
+        newlines = '\n'
+      BlockingWriteAll(
+          2, '\n%sException terminated tasklet, resuming syncless.console.%s'
+          % (''.join(traceback.format_exc()), newlines))
+      if just_after_prompt:  # Display the prompt again.
+        out_fd, prompt = just_after_prompt
+        BlockingWriteAll(out_fd, prompt)
+      coio.insert_after_current(console_tasklet)
+
+  return coio.stackless.tasklet(TaskletWrapper)
+
+
 # Create a class just to display its name.
 class SynclessInteractiveConsole(code.InteractiveConsole):
   pass
+
 
 SYNCLESS_CONSOLE_HELP = (
     'See more on http://code.google.com/p/syncless/wiki/Console\n'
     'Example commands on syncless.console:\n'
     '+ticker\n'
     '-ticker\n'
-    'wsgi.simple(8080, lambda *args: [\'Hello, <b>World!</b>\']) or None')
+    'wsgi.simple(8080, lambda *args: [\'Hello, <b>World!</b>\']) or None\n'
+    'wrap_tasklet(lambda: 1 / 0)()')
 
 class _Helper(site._Helper):
   def __repr__(self):
@@ -241,9 +277,10 @@ console_module.wsgi = wsgi
 console_module.stackless = coio.stackless
 console_module.help = _Helper()
 console_module.ticker = _Ticker()
+console_module.wrap_tasklet = wrap_tasklet
 sys.modules['__console__'] = console_module
 
-if __name__ == '__main__':
+def main(argv=None):
   console = SynclessInteractiveConsole(console_module.__dict__)
   if os.isatty(0):
     try:
@@ -251,4 +288,12 @@ if __name__ == '__main__':
     except ImportError:
       pass
   console.raw_input = NewReadLine(0, 1)
-  console.interact(None)
+  global console_tasklet
+  console_tasklet = coio.stackless.current
+  try:
+    console.interact(None)
+  finally:
+    console_tasklet = None
+
+if __name__ == '__main__':
+  sys.exit(main(sys.argv) or 0)
