@@ -141,6 +141,10 @@ cdef extern from "sys/select.h":
     ctypedef fd_set_s fd_set
     int os_select "select"(int nfds, fd_set *rset, fd_set *wset, fd_set *xset,
                            timeval *timeout)
+cdef extern from "stdio.h":
+    ctypedef struct FILE
+    int fileno(FILE*)
+    int fprintf(FILE*, char_constp fmt, ...)
 
 ctypedef void (*event_handler)(int fd, short evtype, void *arg)
 
@@ -253,6 +257,8 @@ cdef extern from "./coio_c_stackless.h":
     tasklet PyStackless_GetCurrent()
     #tasklet PyTasklet_New(type type_type, object func);
     int PyTasklet_GetBlocked(tasklet task)
+cdef extern from *:
+    char *(*PyOS_ReadlineFunctionPointer)(FILE *, FILE *, char *)
 cdef extern from "./coio_c_helper.h":
     struct socket_wakeup_info_s "coio_socket_wakeup_info":
         event_t read_ev
@@ -375,7 +381,93 @@ def SendExceptionAndScheduleNext(tasklet tasklet_obj, exc_info):
       helper_tasklet.run()
       helper_tasklet.remove()
 
-# ---
+cdef void set_fd_nonblocking(int fd):
+    # This call works on Unix, but it's not portable (to e.g. Windows).
+    # See also the #ifdefs in socketmodule.c:internal_setblocking().
+    cdef int old
+    # TODO(pts): Don't silently ignore the errors.
+    old = fcntl2(fd, F_GETFL)
+    if old >= 0 and not (old & O_NONBLOCK):
+        fcntl3(fd, F_SETFL, old | O_NONBLOCK)
+
+def set_fd_blocking(int fd, is_blocking):
+    """Set a file descriptor blocking or non-blocking.
+
+    Please note that this may affect more than expected, for example it may
+    affect sys.stderr when called for sys.stdout.
+
+    Returns:
+      The old blocking value (True or False).
+    """
+    cdef int old
+    cdef int value
+    # TODO(pts): Don't silently ignore the errors.
+    old = fcntl2(fd, F_GETFL)
+    if old < 0:
+        return
+    if is_blocking:
+        value = old & ~O_NONBLOCK
+    else:
+        value = old | O_NONBLOCK
+    if old != value:
+        fcntl3(fd, F_SETFL, value)
+    return bool(old & O_NONBLOCK)
+
+cdef int nbevent_read(evbuffer_s *read_eb, int fd, int n):
+    """Read at most n bytes to read_eb from file fd.
+
+    This function is similar to evbuffer_read, but it doesn't do an
+    ioctl(FIONREAD), and it doesn't do weird magic on allocating a buffer 4
+    times as large as needed.
+
+    Args:
+      read_eb: evbuffer to read to. It must not be empty, i.e. read_eb.totallen
+        must be positive; this can be achieved with evbuffer_expand.
+      fd: File descriptor to read from.
+      n: Number of bytes to read. Negative values mean: read everything up to
+        the available buffer size.
+    Returns:
+      Number of bytes read, or -1 on error. Error code is in errno.
+    """
+    cdef int got
+    if n > 0:
+        evbuffer_expand(read_eb, n)
+    elif n == 0:
+        return 0
+    else:
+        assert read_eb.totallen
+        n = read_eb.totallen - read_eb.off - read_eb.misalign
+        if n == 0:
+            return 0
+    got = os_read(fd, <char*>read_eb.buf + read_eb.off, n)
+    if got > 0:
+        read_eb.off += got
+        # We don't use callbacks, so we don't call them.
+        #if read_eb.cb != NULL:
+        #    read_eb.cb(read_eb, read_eb.off - got, read_eb.off, read_eb.cbarg)
+    return got
+
+cdef object write_all_to_fd(int fd, event_t *write_wakeup_ev, char_constp p,
+                            Py_ssize_t n, object write_exc_class):
+    """Write all n bytes at p to fd, waking up based on write_wakeup_ev.
+
+    Returns:
+      None
+    """
+    cdef int got
+    while n > 0:
+        got = os_write(fd, p, n)
+        while got < 0:
+            if errno != EAGAIN:
+                # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
+                raise write_exc_class(errno, strerror(errno))
+            # Assuming caller has called event_set(...).
+            coio_c_wait(write_wakeup_ev, NULL)
+            got = os_write(fd, p, n)
+        p += got
+        n -= got
+
+# --- The main loop
 
 def MainLoop():
     #cdef PyTaskletObject *pprev
@@ -469,73 +561,6 @@ cdef void _setup_sigint():
     # gets control) a KeyboardInterrupt in the main tasklet.
     event_add(&sigint_ev, NULL)
 
-cdef void set_fd_nonblocking(int fd):
-    # This call works on Unix, but it's not portable (to e.g. Windows).
-    # See also the #ifdefs in socketmodule.c:internal_setblocking().
-    cdef int old
-    # TODO(pts): Don't silently ignore the errors.
-    old = fcntl2(fd, F_GETFL)
-    if old >= 0 and not (old & O_NONBLOCK):
-        fcntl3(fd, F_SETFL, old | O_NONBLOCK)
-
-def set_fd_blocking(int fd, is_blocking):
-    """Set a file descriptor blocking or non-blocking.
-
-    Please note that this may affect more than expected, for example it may
-    affect sys.stderr when called for sys.stdout.
-
-    Returns:
-      The old blocking value (True or False).
-    """
-    cdef int old
-    cdef int value
-    # TODO(pts): Don't silently ignore the errors.
-    old = fcntl2(fd, F_GETFL)
-    if old < 0:
-        return
-    if is_blocking:
-        value = old & ~O_NONBLOCK
-    else:
-        value = old | O_NONBLOCK
-    if old != value:
-        fcntl3(fd, F_SETFL, value)
-    return bool(old & O_NONBLOCK)
-
-
-cdef int nbevent_read(evbuffer_s *read_eb, int fd, int n):
-    """Read at most n bytes to read_eb from file fd.
-
-    This function is similar to evbuffer_read, but it doesn't do an
-    ioctl(FIONREAD), and it doesn't do weird magic on allocating a buffer 4
-    times as large as needed.
-
-    Args:
-      read_eb: evbuffer to read to. It must not be empty, i.e. read_eb.totallen
-        must be positive; this can be achieved with evbuffer_expand.
-      fd: File descriptor to read from.
-      n: Number of bytes to read. Negative values mean: read everything up to
-        the available buffer size.
-    Returns:
-      Number of bytes read, or -1 on error. Error code is in errno.
-    """
-    cdef int got
-    if n > 0:
-        evbuffer_expand(read_eb, n)
-    elif n == 0:
-        return 0
-    else:
-        assert read_eb.totallen
-        n = read_eb.totallen - read_eb.off - read_eb.misalign
-        if n == 0:
-            return 0
-    got = os_read(fd, <char*>read_eb.buf + read_eb.off, n)
-    if got > 0:
-        read_eb.off += got
-        # We don't use callbacks, so we don't call them.
-        #if read_eb.cb != NULL:
-        #    read_eb.cb(read_eb, read_eb.off - got, read_eb.off, read_eb.cbarg)
-    return got
-
 # The token in waiting_tasklet.tempval to signify that the event-waiting is
 # pending. This token is intentionally not exported to Python code, so they
 # can't easily mess with it. (But they can still get it from a
@@ -578,32 +603,32 @@ cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
             (<tasklet>arg).tempval = event_happened_token
     PyTasklet_Insert(<tasklet>arg)
 
+#cdef char *(*_orig_readline_pointer)(FILE *, FILE *, char *)
+#
+## Load readline in case we'll be running interactively. (Importing readline
+## overrides PyOS_ReadlineFunctionPointer. Save the original
+## readline pointer only after that.
+#try:
+#  __import__('readline')
+#except ImportError, e:
+#  pass
+#_orig_readline_pointer = PyOS_ReadlineFunctionPointer
+#
+#cdef char *_interactive_readline(FILE *fin, FILE *fout, char *prompt):
+#  fprintf(fout, <char_constp>"PROMPT(%s)\n", prompt)
+#  # SUXX: this segfaults in PyStackless_GetCurrent() (not always properly
+#  # initialized)
+#  coio_c_wait_for(fileno(fin), c_EV_READ, HandleCWakeup, NULL)
+#  # TODO(pts): Verify that fileno(fin) is actually readable now.
+#  return _orig_readline_pointer(fin, fout, prompt)
+#
+#PyOS_ReadlineFunctionPointer = _interactive_readline
 
-cdef object write_all_to_fd(int fd, event_t *write_wakeup_ev, char_constp p,
-                            Py_ssize_t n, object write_exc_class):
-    """Write all n bytes at p to fd, waking up based on write_wakeup_ev.
-
-    Returns:
-      None
-    """
-    cdef int got
-    while n > 0:
-        got = os_write(fd, p, n)
-        while got < 0:
-            if errno != EAGAIN:
-                # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
-                raise write_exc_class(errno, strerror(errno))
-            # Assuming caller has called event_set(...).
-            coio_c_wait(write_wakeup_ev, NULL)
-            got = os_write(fd, p, n)
-        p += got
-        n -= got
+# --- nbfile
 
 cdef enum dummy:
     DEFAULT_MIN_READ_BUFFER_SIZE  = 8192  # TODO(pts): Do speed tests.
     DEFAULT_WRITE_BUFFER_LIMIT = 8192  # TODO(pts): Do speed tests.
-
-# --- nbfile
 
 cdef class nbfile
 
@@ -1153,8 +1178,8 @@ cdef class nbfile:
         cdef double timeout_double
         # !! TODO(pts): Speed: return early if already readable.
         if timeout is None:
-            coio_c_wait(&self.read_wakeup_ev, NULL)
-            return True
+            return (coio_c_wait(&self.read_wakeup_ev, NULL)
+                    is event_happened_token)
         else:
             timeout_double = timeout
             if timeout_double < 0.0:
