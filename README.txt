@@ -71,11 +71,22 @@ To install syncless, run this as root (without the # sign):
 
 Be patient, compilation may take up to 60 seconds.
 
+As an alterative, if you have already downloaded and extracted Syncless, you
+can install it with:
+
+  # python setup.py install
+
 To verify that Syncless got properly installed, run this command (without
 the leading $):
 
   $ python -c 'from syncless.coio import sleep; sleep(1e-5); print "OK"'
   OK
+
+You can also try if your Syncless works using the interactive console. See
+http://code.google.com/p/syncless/wiki/Console for details . Example
+invocation:
+
+  $ python -m syncless.console
 
 If you want to install syncless to a specific Pyton version on your system,
 run the following instead (without python substituted properly):
@@ -103,10 +114,15 @@ For a Python with coroutine support, you have these options (pick one):
 For an asynchronous event notification library with DNS support, you have
 these options (pick one):
 
-* libev >= 3.9 + libevhdns  (recommended, fastest)
+* minievent  (very simple to install, bundled with Syncless, ideal for
+  trying and learning Syncless, but has poor performance with >10 TCP
+  connections)
+* libev >= 3.9 + minihdns  (recommended, fastest, minihdns bundled with
+  Syncless)
+* libev >= 3.9 + evhdns (like with minihdns, but more work to install)
 * libevent2 >= 2.0.4  (recommended if you don't like libev)
 * libevent1 >= 1.4.13  (not recommended, because it can register only a single
-  event on the same filehandle with the same purpose at a time
+  event on the same filehandle with the same purpose at a time)
 
 Remember your picks above.
 
@@ -187,19 +203,44 @@ Remember your picks above.
 
      svn checkout http://syncless.googlecode.com/svn/trunk/ syncless-read-only
 
-9. Compile and install Syncless. Make sure you are in the directory
+9. Compile Syncless. Make sure you are in the directory
    containing setup.py and syncless/patch.py . Then run
 
      $ $PYTHON setup.py build
-     $ sudo $PYTHON setup.py install
 
    , where $PYTHON is your choice of Python above: stackless2.6, python2.5,
    python2.6.
 
-   Please note that you don't have to run the `install' step to experiment
-   with syncless: after the `build' step, you can run the demos in the
-   `examples' directory, and you can also run the tests in the `test'
-   directory.
+   You may want to make sure that Syncless has picked up its right
+   dependencies. The `setup.py build' commands displays dependency and
+   configuration information before compilation, and it also saves that to
+   the setup.cenv file:
+
+   * COIO_USE_CO_STACKLESS: Stackless Python is used for coroutines.
+   * COIO_USE_CO_GREENLET: greenlet is used for coroutines.
+   * COIO_USE_LIBEVHDNS: libevhdns is used for DNS resolution.
+   * COIO_USE_MINIHDNS: minihdns is used for DNS resolution.
+   * COIO_USE_MINIEVENT: libev is used for notification.
+   * COIO_USE_LIBEV: libev is used for notification.
+   * COIO_USE_LIBEVENT1: libevent1 is used for DNS resolution and notification.
+   * COIO_USE_LIBEVENT2: libevent2 is used for DNS resolution and notification.
+
+   Before running `setup.py build', you can set one or more of the following
+   environment variables to force Syncless use a specific dependency instead
+   of autodetection:
+
+   * export SYNCLESS_USE_LIBEV=1
+   * export SYNCLESS_USE_LIBEVENT1=1
+   * export SYNCLESS_USE_LIBEVENT2=1
+   * export SYNCLESS_USE_MINIEVENT=1
+   * export SYNCLESS_USE_LIBEVHDNS=1
+   * export SYNCLESS_ALLOW_MINIEVENT=1 (is 1 by default, set to '' to disable)
+
+
+    Please note that you don't have to run the `install' step to experiment
+    with syncless: after the `build' step, you can run the demos in the
+    `examples' directory, and you can also run the tests in the `test'
+    directory.
 
 How to use (with example code)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -814,6 +855,60 @@ A22. You should call nbsocket.makefile('r') to create nbfile, which has a
      your regexp aware that the read buffer may contain only a prefix of the
      full message you want to parse. In that case, you should call
      nbfile.read_more to read more bytes, and then retry the re.search.
+
+Q23. Does Syncless work on Microsoft Windows?
+
+A23. As of now, Windows support is not implemented. Since that would be
+     a considerably large piece of work, and it has low priority for the
+     Syncless developers, Windows support probably never be implemented.
+
+     Currently you need a recent Unix system to run Syncless. It should work
+     on Linux, FreeBSD, NetBSD, OpenBSD, Mac OS X and Solaris. If you have a
+     desktop or server Unix system on which Syncless doesn't compile or work
+     properly, please let us know, so we can fix it.
+
+Q24. What are the dependencies of Syncless?
+
+A24. To run Syncless, you need a recent Unix system with Python 2.5 or 2.6.
+     You also need Stackless Python or the greenlet (>= 0.3.1) Python package.
+     Syncless is distributed in source form, so you should compile
+     it before you can run it. To compile Syncless, you need the Python headers
+     (the python-dev package) and GCC on your system.
+
+     There are many optional dependencies, including libevent1, libevent2,
+     libev and libevhdns. Syncless detects them at compilation time. Without
+     these, Syncless is fully functional, but it's less efficient,
+     especially at higher loads (>10 concurrent TCP connections). See the
+     Installation section in the README for more details.
+
+Q25. Does Syncless have an interactive Python console?
+
+A25. Yes, it's in the syncless.console module. You can start it using:
+
+       $ python -m syncless.console
+
+     Run the ``help'' command to find out some examples.
+
+     See http://code.google.com/p/syncless/wiki/Console for more details.
+
+     syncless.console is like the regular interactive Python interpreter
+     except that it has some useful global variables preloaded (such as
+     help, syncless and ticker), and it supports running coroutines
+     (tasklets) in the background while the user can issue Python commands.
+     It's an easy-to-use environment to learn Syncless and to experiment with
+     tasklets.
+
+     The interactive console displays a prompt. At this point all tasklets
+     are running and scheduled until you press the first key to type an
+     interactive command. While you are typing the command (after the 1st
+     key), other tasklets are suspended. They remain suspended until you
+     press <Enter> (to finish the command or to start a multiline command).
+
+     Please note that if an uncaught exception is raised in tasklet, the
+     whole process exits. You can prevent that in interactive sessions by
+     creating your tasklets with `wrap_tasklet(Function)' instead of
+     `stackless.tasklet(Function)'. If you do so, the exception will be
+     printed, but the interactive console resumes afterwards.
 
 Links
 ~~~~~

@@ -327,8 +327,35 @@ def nonblocking_loop_for_tests():
 cdef int connect_tv_magic_usec
 connect_magic_usec = 120
 
+
 def _schedule_helper():
-  return stackless.current.next.next.remove().run()
+  return PyStackless_GetCurrent().next.next.remove().run()
+
+
+_schedule_helper_tasklet = stackless.tasklet(_schedule_helper)().remove()
+
+
+def insert_after_current(next_tasklet):
+  """Insert next_tasklet after stackless.current if possible."""
+  # This is tricky, see the details in best_greenlet.py.
+  # TODO(pts): Present this on the conference.
+  if (next_tasklet and next_tasklet.alive and
+      not next_tasklet.blocked and
+      next_tasklet is not PyStackless_GetCurrent()):
+    next_now = PyStackless_GetCurrent().next
+    if next_now is next_tasklet:
+      pass
+    elif next_now is PyStackless_GetCurrent():
+      next_tasklet.insert()
+    else:
+      # Magic to make next_tasklet the next tasklet after this
+      # TaskletWrapper returns.
+      next_tasklet.remove()
+      _schedule_helper_tasklet.insert()
+      next_tasklet.insert()
+      _schedule_helper_tasklet.run()
+      _schedule_helper_tasklet.remove()
+
 
 def SendExceptionAndScheduleNext(tasklet tasklet_obj, exc_info):
     """Send exception to tasklet, even if it's blocked on a channel.
@@ -365,21 +392,7 @@ def SendExceptionAndScheduleNext(tasklet tasklet_obj, exc_info):
         assert not tasklet_obj.blocked
     else:
         tasklet_obj.tempval = bomb_obj
-    tasklet_obj.remove()
-    tasklet_obj.insert()
-    # Implement _insert_after_current_tasklet(tasklet_obj).
-    # TODO(pts): use PyStackless*.
-    if stackless.current.next is stackless.current:
-      tasklet_obj.insert()
-    elif stackless.current.next is not tasklet_obj:
-      # This is tricky, see the details in best_greenlet.py.
-      # TODO(pts): Present this on the conference.
-      tasklet_obj.remove()
-      helper_tasklet = stackless.tasklet(_schedule_helper)()
-      helper_tasklet.insert()
-      main_loop_tasklet.insert()
-      helper_tasklet.run()
-      helper_tasklet.remove()
+    insert_after_current(tasklet_obj)
 
 cdef void set_fd_nonblocking(int fd):
     # This call works on Unix, but it's not portable (to e.g. Windows).
