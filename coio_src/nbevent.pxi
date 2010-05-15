@@ -3,17 +3,6 @@
 # by pts@fazekas.hu at Sun Jan 31 12:07:36 CET 2010
 # ### pts #### This file has been entirely written by pts@fazekas.hu.
 #
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 2 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-#
 # This code is designed for Stackless Python 2.6. It has been tested with
 # Stackless Python 2.6.4 and 2.6.5. It also works (with reduced performance)
 # with Python 2.5 and greenlet.

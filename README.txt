@@ -265,9 +265,11 @@ without accents: Peter Szabo <pts@fazekas.hu>
 
 License
 ~~~~~~~
-Syncless is licensed under the GNU GPL v2.
+Syncless is licensed under the Apache License, Version 2.0.
 
 If you need other licensing options, please contact the author.
+
+See also http://www.petefreitag.com/item/533.cfm .
 
 Using Syncless with web frameworks
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
