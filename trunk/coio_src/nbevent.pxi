@@ -1413,8 +1413,14 @@ cdef class nbfile:
 
         There is no such Python `file' method (file.find).
 
+        start_idx is used just like in string.find. end_idx is to ignore
+        everything from that index in the read buffer.
+
         For a regular expression search, please use
         re.search(r'...', nbfile_obj.get_read_buffer()).
+
+        Returns:
+          -1 if not found, or the start offset where it was found.
         """
         cdef Py_ssize_t c_start_idx
         cdef Py_ssize_t c_end_idx
@@ -1447,6 +1453,11 @@ cdef class nbfile:
 
         There is no such Python `file' method (file.rfind).
 
+        start_idx is used just like in string.rfind. end_idx is to ignore
+        everything from that index in the read buffer.
+
+        Returns:
+          -1 if not found, or the start offset where it was found.
         """
         cdef Py_ssize_t c_start_idx
         cdef Py_ssize_t c_end_idx
