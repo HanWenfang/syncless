@@ -188,7 +188,7 @@ static inline PyObject *coio_c_handle_eagain(
   PyObject *retval;
   struct event *wakeup_ev;
   if (swi->timeout_value == 0.0)
-      return PyErr_SetFromErrno(coio_socket_error);
+    return PyErr_SetFromErrno(coio_socket_error);
   wakeup_ev =
       evtype == EV_READ ?  &swi->read_ev :
       evtype == EV_WRITE ? &swi->write_ev : 0;
@@ -249,4 +249,87 @@ static inline PyObject *coio_c_socket_call(PyObject *function, PyObject *args,
     if (retval == NULL) return NULL;
     Py_DECREF(retval);
   }
+}
+
+/* Read at most n bytes to read_eb from file fd.
+
+This function is similar to evbuffer_read, but it doesn't do an
+ioctl(FIONREAD), and it doesn't do weird magic on allocating a buffer 4
+times as large as needed.
+
+Args:
+  read_eb: evbuffer to read to. It must not be empty, i.e. read_eb.totallen
+    must be positive; this can be achieved with evbuffer_expand.
+  fd: File descriptor to read from.
+  n: Number of bytes to read. Negative values mean: read everything up to
+    the available buffer size.
+Returns:
+  Number of bytes read, or -1 on error. Error code is in errno.
+*/
+static inline int coio_c_evbuffer_read(
+    struct coio_evbuffer *read_eb,
+    int fd,
+    int n,
+    PyObject *read_exc_class,
+    struct event *read_wakeup_ev) {
+  int got;
+  if (n > 0) {
+    if (0 != coio_evbuffer_expand(read_eb, n)) {
+      PyErr_SetString(PyExc_MemoryError, "not enough memory for read buffer");
+      return -1;
+    }
+  } else if (n == 0) {
+    return 0;
+  } else {
+    /* assert read_eb.totallen */
+    n = read_eb->totallen - read_eb->off - read_eb->misalign;
+    if (n == 0)
+      return 0;
+  }
+  while (0 > (got = read(fd, (char*)read_eb->buffer + read_eb->off, n))) {
+    if (errno == EAGAIN) {
+      if (NULL == coio_c_wait(read_wakeup_ev, NULL))
+        return -1;
+    } else {
+      PyErr_SetFromErrno(read_exc_class);
+      return -1;
+    }
+  }
+  read_eb->off += got;
+  /* We don't use callbacks, so we don't call them here
+   * if read_eb.cb != NULL:
+   *  read_eb.cb(read_eb, read_eb.off - got, read_eb.off, read_eb.cbarg)
+   */
+  return got;
+}
+
+/* Write all n bytes at p to fd, waking up based on write_wakeup_ev.
+
+Returns:
+  None
+Raises:
+  write_exc_class:
+*/
+static inline int coio_c_writeall(
+    int fd,
+    struct event *write_wakeup_ev,
+    const char *p,
+    Py_ssize_t n,
+    PyObject *write_exc_class) {
+  int got;
+  while (n > 0) {
+    got = write(fd, p, n);
+    while (got < 0) {
+      if (errno != EAGAIN) {
+        PyErr_SetFromErrno(write_exc_class);
+        return -1;
+      }
+      /* Assuming caller has called event_set(...). */
+      coio_c_wait(write_wakeup_ev, NULL);
+      got = write(fd, p, n);
+    }
+    p += got;
+    n -= got;
+  }
+  return 0;
 }

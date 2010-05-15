@@ -268,6 +268,11 @@ cdef extern from "./coio_c_helper.h":
     object coio_c_handle_eagain(socket_wakeup_info_s *swi, short evtype) 
     object coio_c_socket_call(object function, object args,
                               socket_wakeup_info_s *swi, short evtype)
+    int coio_c_evbuffer_read(evbuffer_s *read_eb, int fd, int n,
+                             object read_exc_class,
+                             event_t *read_wakeup_ev) except -1
+    int coio_c_writeall(int fd, event_t *write_wakeup_ev, char_constp p,
+                        Py_ssize_t n, object write_exc_class) except -1
 
 # --- Low-level event functions
 
@@ -414,60 +419,6 @@ def set_fd_blocking(int fd, is_blocking):
     if old != value:
         fcntl3(fd, F_SETFL, value)
     return bool(old & O_NONBLOCK)
-
-cdef int nbevent_read(evbuffer_s *read_eb, int fd, int n):
-    """Read at most n bytes to read_eb from file fd.
-
-    This function is similar to evbuffer_read, but it doesn't do an
-    ioctl(FIONREAD), and it doesn't do weird magic on allocating a buffer 4
-    times as large as needed.
-
-    Args:
-      read_eb: evbuffer to read to. It must not be empty, i.e. read_eb.totallen
-        must be positive; this can be achieved with evbuffer_expand.
-      fd: File descriptor to read from.
-      n: Number of bytes to read. Negative values mean: read everything up to
-        the available buffer size.
-    Returns:
-      Number of bytes read, or -1 on error. Error code is in errno.
-    """
-    cdef int got
-    if n > 0:
-        evbuffer_expand(read_eb, n)
-    elif n == 0:
-        return 0
-    else:
-        assert read_eb.totallen
-        n = read_eb.totallen - read_eb.off - read_eb.misalign
-        if n == 0:
-            return 0
-    got = os_read(fd, <char*>read_eb.buf + read_eb.off, n)
-    if got > 0:
-        read_eb.off += got
-        # We don't use callbacks, so we don't call them.
-        #if read_eb.cb != NULL:
-        #    read_eb.cb(read_eb, read_eb.off - got, read_eb.off, read_eb.cbarg)
-    return got
-
-cdef object write_all_to_fd(int fd, event_t *write_wakeup_ev, char_constp p,
-                            Py_ssize_t n, object write_exc_class):
-    """Write all n bytes at p to fd, waking up based on write_wakeup_ev.
-
-    Returns:
-      None
-    """
-    cdef int got
-    while n > 0:
-        got = os_write(fd, p, n)
-        while got < 0:
-            if errno != EAGAIN:
-                # TODO(pts): Do it more efficiently with pyrex? Twisted does this.
-                raise write_exc_class(errno, strerror(errno))
-            # Assuming caller has called event_set(...).
-            coio_c_wait(write_wakeup_ev, NULL)
-            got = os_write(fd, p, n)
-        p += got
-        n -= got
 
 # --- The main loop
 
@@ -674,19 +625,12 @@ cdef object nbfile_readline_with_limit(nbfile self, int limit):
         if self.c_read_limit >= 0 and self.c_read_limit < n:
             n = self.c_read_limit
 
-        got = nbevent_read(read_eb, fd, n)
-        while got < 0:
-            if errno != EAGAIN:
-                # TODO(pts): Do it more efficiently with Pyrex?
-                # Twisted does exactly this.
-                raise self.c_read_exc_class(errno, strerror(errno))
-            coio_c_wait(&self.read_wakeup_ev, NULL)
-            got = nbevent_read(read_eb, fd, n)
-
+        got = coio_c_evbuffer_read(read_eb, fd, n, self.c_read_exc_class,
+                                   &self.read_wakeup_ev)
         if got == 0:  # EOF, return remaining bytes ('' or partial line)
             n = read_eb.off
             if limit < n:
-                # TODO(pts): Cache EOF, don't nbevent_read(...) again.
+                # TODO(pts): Cache EOF, don't coio_c_evbuffer_read(...) again.
                 if limit == 0:
                     return ''
                 n = limit
@@ -986,9 +930,9 @@ cdef class nbfile:
             # above so we wouldn't take this shortcut if the buffer wasn't
             # empty.
             # TODO(pts): Use the socket timeout.
-            return write_all_to_fd(self.write_fd, &self.write_wakeup_ev, p, n,
-                                   self.c_write_exc_class)
-
+            coio_c_writeall(self.write_fd, &self.write_wakeup_ev, p, n,
+                            self.c_write_exc_class)
+            return
         if wlimit == 1:  # Line buffering.
             k = n
             while k > 0 and (<char*>p)[k - 1] != c'\n':
@@ -1005,7 +949,7 @@ cdef class nbfile:
                 self.write_eb.off + self.write_eb.misalign)
             if k > n:  # Buffer not full yet.
                 evbuffer_add(&self.write_eb, <void_constp>p, n)
-                write_all_to_fd(self.write_fd, &self.write_wakeup_ev,
+                coio_c_writeall(self.write_fd, &self.write_wakeup_ev,
                                 <char_constp>self.write_eb.buf,
                                 self.write_eb.off,
                                 self.c_write_exc_class)
@@ -1015,7 +959,7 @@ cdef class nbfile:
             else:
                 if self.write_eb.off > 0:
                     # Flush self.write_eb.
-                    write_all_to_fd(self.write_fd, &self.write_wakeup_ev,
+                    coio_c_writeall(self.write_fd, &self.write_wakeup_ev,
                                     <char_constp>self.write_eb.buf,
                                     self.write_eb.off,
                                     self.c_write_exc_class)
@@ -1023,7 +967,7 @@ cdef class nbfile:
                     self.write_eb.misalign = 0
                     self.write_eb.off = 0
                 # Flush lines directly from the argument.
-                write_all_to_fd(self.write_fd, &self.write_wakeup_ev, p, n,
+                coio_c_writeall(self.write_fd, &self.write_wakeup_ev, p, n,
                                 self.c_write_exc_class)
             if keepc > 0:
                 p += n
@@ -1047,9 +991,9 @@ cdef class nbfile:
                 n -= k
 
                 # Flush self.write_eb.
-                # TODO(pts): Speed: return early even if write_all_to_fd
+                # TODO(pts): Speed: return early even if coio_c_writeall
                 # couldn't write everything yet (EAGAIN). Do this everywhere.
-                write_all_to_fd(self.write_fd, &self.write_wakeup_ev,
+                coio_c_writeall(self.write_fd, &self.write_wakeup_ev,
                                 <char_constp>self.write_eb.buf,
                                 self.write_eb.off,
                                 self.c_write_exc_class)
@@ -1059,7 +1003,7 @@ cdef class nbfile:
 
             if n >= wlimit:
                 # Flush directly from the argument.
-                write_all_to_fd(self.write_fd, &self.write_wakeup_ev, p, n,
+                coio_c_writeall(self.write_fd, &self.write_wakeup_ev, p, n,
                                 self.c_write_exc_class)
             else:
                 if self.write_eb.totallen == 0:
@@ -1070,7 +1014,7 @@ cdef class nbfile:
         # Please note that this method may raise an error even if parts of the
         # buffer has been flushed.
         if self.write_eb.off > 0:
-            write_all_to_fd(self.write_fd, &self.write_wakeup_ev,
+            coio_c_writeall(self.write_fd, &self.write_wakeup_ev,
                             <char_constp>self.write_eb.buf, self.write_eb.off,
                             self.c_write_exc_class)
             self.write_eb.buf = self.write_eb.orig_buffer
@@ -1139,12 +1083,10 @@ cdef class nbfile:
             if self.read_eb.totallen == 0:
                 # Expand to the next power of 2.
                 evbuffer_expand(&self.read_eb, self.c_min_read_buffer_size)
-            got = nbevent_read(&self.read_eb, self.read_fd, got)
-            if got < 0:
-                if errno != EAGAIN:
-                    raise self.c_read_exc_class(errno, strerror(errno))
-                coio_c_wait(&self.read_wakeup_ev, NULL)
-            elif got == 0:  # EOF
+            got = coio_c_evbuffer_read(&self.read_eb, self.read_fd, got,
+                                       self.c_read_exc_class,
+                                       &self.read_wakeup_ev)
+            if got == 0:  # EOF
                 return n
             else:
                 n -= got
@@ -1219,15 +1161,12 @@ cdef class nbfile:
                 while 1:
                     # TODO(pts): Check out-of-memory error everywhere.
                     evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
-                    got = nbevent_read(
+                    got = coio_c_evbuffer_read(
                         &self.read_eb, self.read_fd,
                         self.read_eb.totallen - self.read_eb.off -
-                        self.read_eb.misalign)
-                    if got < 0:
-                        if errno != EAGAIN:
-                            raise self.c_read_exc_class(errno, strerror(errno))
-                        coio_c_wait(&self.read_wakeup_ev, NULL)
-                    elif got == 0:  # EOF
+                        self.read_eb.misalign,
+                        self.c_read_exc_class, &self.read_wakeup_ev)
+                    if got == 0:  # EOF
                         break
                 buf = PyString_FromStringAndSize(
                     <char_constp>self.read_eb.buf, self.read_eb.off)
@@ -1263,12 +1202,10 @@ cdef class nbfile:
                 # EVBUFFER_MAX_READ == 4096.
                 # !! TODO(pts): Get rid of magic constant 65536.
                 got = self.read_eb.totallen
-            got = nbevent_read(&self.read_eb, self.read_fd, got)
-            if got < 0:
-                if errno != EAGAIN:
-                    raise self.c_read_exc_class(errno, strerror(errno))
-                coio_c_wait(&self.read_wakeup_ev, NULL)
-            elif got == 0:  # EOF
+            got = coio_c_evbuffer_read(&self.read_eb, self.read_fd, got,
+                                       self.c_read_exc_class,
+                                       &self.read_wakeup_ev)
+            if got == 0:  # EOF
                 n = self.read_eb.off
                 break
             else:
@@ -1305,12 +1242,10 @@ cdef class nbfile:
         while 1:
             # TODO(pts): Don't read it to the buffer, read without memcpy.
             #            We'd need the readinto method for that.
-            got = nbevent_read(&self.read_eb, self.read_fd, n)
-            if got < 0:
-                if errno != EAGAIN:
-                    raise self.c_read_exc_class(errno, strerror(errno))
-                coio_c_wait(&self.read_wakeup_ev, NULL)
-            elif got == 0:
+            got = coio_c_evbuffer_read(&self.read_eb, self.read_fd, n,
+                                       self.c_read_exc_class,
+                                       &self.read_wakeup_ev)
+            if got == 0:
                 return ''
             else:
                 buf = PyString_FromStringAndSize(
@@ -1346,15 +1281,12 @@ cdef class nbfile:
                 # This expands by at least read_eb.totallen if the buffer is
                 # full (because evbuffer doubles its size at minimum).
                 evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
-            got = nbevent_read(
+            got = coio_c_evbuffer_read(
                 &self.read_eb, self.read_fd,
                 self.read_eb.totallen - self.read_eb.off -
-                self.read_eb.misalign)
-            if got < 0:
-                if errno != EAGAIN:
-                    raise self.c_read_exc_class(errno, strerror(errno))
-                coio_c_wait(&self.read_wakeup_ev, NULL)
-            elif got == 0:  # EOF
+                self.read_eb.misalign,
+                self.c_read_exc_class, &self.read_wakeup_ev)
+            if got == 0:  # EOF
                 break
             elif self.c_read_limit >= 0:
                 self.c_read_limit -= got
@@ -1381,15 +1313,12 @@ cdef class nbfile:
                 # This expands by at least read_eb.totallen if the buffer is
                 # full (because evbuffer doubles its size at minimum).
                 evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
-            got = nbevent_read(
+            got = coio_c_evbuffer_read(
                 &self.read_eb, self.read_fd,
                 self.read_eb.totallen - self.read_eb.off -
-                self.read_eb.misalign)
-            if got < 0:
-                if errno != EAGAIN:
-                    raise self.c_read_exc_class(errno, strerror(errno))
-                coio_c_wait(&self.read_wakeup_ev, NULL)
-            elif got == 0:  # EOF
+                self.read_eb.misalign,
+                self.c_read_exc_class, &self.read_wakeup_ev)
+            if got == 0:  # EOF
                 break
             else:
                 if self.c_read_limit >= 0:
@@ -1581,15 +1510,9 @@ cdef class nbfile:
             # need = buf->off + datlen when reallocing.
             n = read_eb.totallen - read_eb.off - read_eb.misalign
 
-            got = nbevent_read(read_eb, fd, n)
-            while got < 0:
-                if errno != EAGAIN:
-                    # TODO(pts): Do it more efficiently with Pyrex?
-                    # Twisted does exactly this.
-                    raise self.c_read_exc_class(errno, strerror(errno))
-                coio_c_wait(&self.read_wakeup_ev, NULL)
-                got = nbevent_read(read_eb, fd, n)
-
+            got = coio_c_evbuffer_read(read_eb, fd, n,
+                                       self.c_read_exc_class,
+                                       &self.read_wakeup_ev)
             if got == 0:  # EOF, return remaining bytes ('' or partial line)
                 n = read_eb.off
                 buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, n)
