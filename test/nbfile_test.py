@@ -275,21 +275,53 @@ class NbfileSocketPairTest(NbfileTest):
                          write_buffer_limit=0, do_close=0,
                          close_ref=(sock1, sock2))
 
+  def testClose(self):
+    f = self.sock1.makefile('r')
+    self.assertNotEqual(self.sock1.fileno(), f.fileno())
+    f.close()
+    self.sock1.getsockname()  # Must not be closed for this.
+    f = self.sock1.makefile_samefd('r')
+    self.assertEqual(self.sock1.fileno(), f.fileno())
+    f.close()
+    del f
+    self.sock1.getsockname()  # Must not be closed for this.
+    self.sock1.makefile('r').close()
+    self.sock1.getsockname()  # Must not be closed for this.
+    self.sock1.makefile_samefd('r').close()
+    self.sock1.getsockname()  # Must not be closed for this.
+
   def testTimeout(self):
     self.sock1.settimeout(0.0)
     self.assertRaisesErrno(socket.error, errno.EAGAIN, self.sock1.recv, 1)
     self.sock1.settimeout(0.000002)
     self.assertRaisesStr(socket.timeout, 'timed out', self.sock1.recv, 1)
-    #sock1, sock2 = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM, 0)
-    #sock1.settimeout(2)
-    #f = sock1.makefile('r')
-    ##sock1.settimeout(0.0)
-    ##self.assertRaisesErrno(socket.error, errno.EAGAIN, self.sock1.recv, 1)
-    ## f = self.f
-    ## !!! make it work instead of time out
-    ## -- always EAGAIN
-    #self.assertRaisesStr(socket.timeout, 'timed out', f.read, 1)
-    ## !!! raise for timeout(0.0)
+    sock1, sock2 = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+    self.DoTestTimeout(sock1, sock1.makefile)
+    self.DoTestTimeout(sock1, sock1.makefile_samefd)
+
+  def DoTestTimeout(self, sock1, makefile_function):
+    sock1.settimeout(2.5)
+    f = makefile_function('r')
+    self.assertEqual(2.5, f.timeout)
+    f.settimeout(3.25)
+    self.assertEqual(3.25, f.timeout)
+    self.assertEqual(2.5, sock1.timeout)
+    sock1.settimeout(4.0)
+    self.assertEqual(3.25, f.timeout)
+    f.settimeout(None)
+    self.assertEqual(None, f.timeout)
+    sock1.settimeout(None)
+    self.assertEqual(None, sock1.timeout)
+    
+    sock1.settimeout(0.0)
+    self.assertRaisesErrno(socket.error, errno.EAGAIN, sock1.recv, 1)
+    f.settimeout(0)
+    self.assertRaisesErrno(IOError, errno.EAGAIN, f.read, 1)
+    sock1.settimeout(0.000002)
+    self.assertRaisesStr(socket.timeout, 'timed out', sock1.recv, 1)
+    f.settimeout(0.000002)
+    self.assertRaisesStr(socket.timeout, 'timed out', f.read, 1)
+
 
 if __name__ == '__main__':
   unittest.main()

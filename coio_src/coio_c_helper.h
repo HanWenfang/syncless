@@ -286,6 +286,7 @@ static inline int coio_c_evbuffer_read(
     struct coio_evbuffer *read_eb,
     int n) {
   int got;
+  PyObject *obj;
   if (n > 0) {
     if (0 != coio_evbuffer_expand(read_eb, n)) {
       PyErr_SetString(PyExc_MemoryError, "not enough memory for read buffer");
@@ -301,8 +302,25 @@ static inline int coio_c_evbuffer_read(
   }
   while (0 > (got = read(owi->fd, (char*)read_eb->buffer + read_eb->off, n))) {
     if (errno == EAGAIN) {
-      if (NULL == coio_c_wait(&owi->ev, NULL))
-        return -1;
+      if (owi->timeout_value < 0) {
+        if (NULL == coio_c_wait(&owi->ev, NULL))
+          return -1;
+      } else {
+        if (owi->timeout_value == 0.0) {
+          /* This is what methods of socket.socket raise, we just mimic that */
+          PyErr_SetFromErrno((PyObject*)owi->exc_class);  /* EAGAIN */
+          return -1;
+        }
+        obj = coio_c_wait(&owi->ev, &owi->tv);
+        if (obj != coio_event_happened_token && obj != NULL) {
+          Py_DECREF(obj);
+          PyErr_SetString(coio_socket_timeout, "timed out");
+          return -1;
+        }
+        if (obj == NULL)
+          return -1;
+        Py_DECREF(obj);
+      }
     } else {
       PyErr_SetFromErrno((PyObject*)owi->exc_class);
       return -1;
@@ -327,18 +345,35 @@ static inline int coio_c_writeall(
     struct coio_oneway_wakeup_info *owi,
     const char *p,
     Py_ssize_t n) {
+  PyObject *obj;
   int got;
   int fd = owi->fd;
   while (n > 0) {
-    got = write(fd, p, n);
-    while (got < 0) {
+    while (0 > (got = write(fd, p, n))) {
       if (errno != EAGAIN) {
         PyErr_SetFromErrno((PyObject*)owi->exc_class);
         return -1;
       }
       /* Assuming caller has called event_set(...). */
-      coio_c_wait(&owi->ev, NULL);
-      got = write(fd, p, n);
+      if (owi->timeout_value < 0) {
+        if (NULL == coio_c_wait(&owi->ev, NULL))
+          return -1;
+      } else {
+        if (owi->timeout_value == 0.0) {
+          /* This is what methods of socket.socket raise, we just mimic that */
+          PyErr_SetFromErrno((PyObject*)owi->exc_class);  /* EAGAIN */
+          return -1;
+        }
+        obj = coio_c_wait(&owi->ev, &owi->tv);
+        if (obj != coio_event_happened_token && obj != NULL) {
+          Py_DECREF(obj);
+          PyErr_SetString(coio_socket_timeout, "timed out");
+          return -1;
+        }
+        if (obj == NULL)
+          return -1;
+        Py_DECREF(obj);
+      }
     }
     p += got;
     n -= got;

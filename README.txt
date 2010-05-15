@@ -411,12 +411,12 @@ syncless.coio.DnsLookupError: [Errno -65] reply truncated or ill-formed
    approximates the answer of socket.gethostbyname_ex, because evdns doesn't
    support CNAME lookups.
 
-5. Socket timeouts are not enforced on file objects created by
+5. Socket timeouts are enforced on file objects created by
    nbsocket.makefile().
 
    The normal Python behavior is to raise IOError(errno.EAGAIN, ...) no
    matter what the timeout is, even if the file object was created before
-   setting the timeout.
+   setting the timeout. Thus it's pretty useless.
 
      sock1, sock2 = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM, 0)
      f = sock1.makefile('r')
@@ -424,6 +424,15 @@ syncless.coio.DnsLookupError: [Errno -65] reply truncated or ill-formed
      sock1.settimeout(42)
      f.read(1)  # raises IOError(errno.EAGAIN, ...)
 
+   The Syncless behavior is to copy the timeout value from the nbsocket to
+   the new nbfile when nbsocket.makefile() or nbsocket.makefile_samefd() is
+   called and use the copy for each read(2) and write(2) operation. There is
+   also the nbfile.settimeout() method which lets the user change the
+   timeout associated with the nbfile (but not with the original nbsocket).
+
+   Please see syncless.util.Timeout for the recommended timeout support: you
+   can guard a block of code with a timeout, not only individial I/O
+   operations.
 
 FAQ
 ~~~
