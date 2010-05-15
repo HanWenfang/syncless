@@ -6,17 +6,17 @@ by pts@fazekas.hu at Sun Dec 20 22:47:13 CET 2009
 -- Tue Feb  9 19:02:52 CET 2010
 -- Mon Apr 19 02:54:24 CEST 2010
 
-Syncless is an experimental, lightweight, non-blocking (asynchronous) client
-and server socket network communication library for Stackless Python 2.6
-(and also for regular Python with greenlet).
-For high speed, Syncless uses libev (and libevent), and parts of
-Syncless' code is implemented in C (Pyrex). Thus Syncless can be faster than
-many other non-blocking Python communication libraries. Syncless contains an
-asynchronous DNS resolver (using evdns) and a HTTP server capable of serving
-WSGI applications. Syncless aims to be a coroutine-based alternative of
-event-driven networking engines (such as Twisted and FriendFeed's Tornado),
-and it's a competitor of gevent, pyevent, python-libevent, Eventlet and
-Concurrence.
+Syncless is a non-blocking (asynchronous) concurrent client and server
+socket network communication library for Stackless Python 2.6 (and also for
+regular Python with greenlet). For high speed, Syncless uses libev (and
+libevent) for event notification, and parts of Syncless' code is implemented
+in Pyrex/Cython and C. This alone makes Syncless faster than many of its
+non-blocking network libraries for Python. Syncless contains an asynchronous
+DNS resolver (using evdns) and a HTTP server capable of serving WSGI
+applications. Syncless aims to be a coroutine-based alternative of
+event-driven networking engines (such as Twisted, asyncore, pyevent,
+python-libevent and FriendFeed's Tornado), and it's a competitor of gevent,
+Eventlet and Concurrence.
 
 Features
 ~~~~~~~~
@@ -628,7 +628,7 @@ A11. Not at the moment, since the main event loop of these GUI frameworks doesn'
      to make Syncless support these main event loops instead of libevent.
 
 Q12. Is it possible to use stacklessocket, asyncore, pyevent,
-     python-libevent, Tornado, Twisted or another event-driven communication
+     python-libevent, Tornado, Twisted or another event-driven network
      library with Syncless?
 
 A12. Tornado (with its own main loop) is already supported with
@@ -665,6 +665,18 @@ A13. Concurrence works with patch.patch_concurrence(). See also
      note that native Syncless is faster than native Concurrence, because
      Syncless provides sockets and buffered files as a C (Pyrex) extension.
 
+     Eventlet works with patch.patch_eventlet(). See also
+     examples/demo_eventlet.py . The speed should be the same as with
+     regular Eventlet (with any of its faster hubs like
+     eventlet.hubs.pyevent and eventlet.hubs.epoll), there is no
+     Syncless-specific overhead. Please note that native Syncless is faster
+     than native Eventlet, not only because Syncless provides sockets and
+     buffered files as a C (Pyrex) extension, but also because the overhead
+     of waiting for I/O is much smaller in Syncless. Please expect low
+     performance if you are using Stackless Python, because Eventlet uses
+     greenlet, so it has to be emulated with the syncless.best_greenlet
+     emulatior, which is slow.
+
      gevent works with patch.patch_gevent() with some limitations, see the
      docstring of patch_gevent() for more details. See also
      examples/demo_gevent.py . Please expect low performance, because gevent
@@ -673,18 +685,16 @@ A13. Concurrence works with patch.patch_concurrence(). See also
      gevent can work in the same process. The emulation is at least 20%
      slower, but it can be much slower. (Speed measurements needed.)
 
-     Eventlet doesn't work yet, but it might be fun to add support for it.
-     It has low priority though, because it's not as popular as gevent or
-     Concurrence.
-
      Please note that Syncless, gevent, Eventlet and Concurrence use
-     libevent (with Syncless being able to use libev as well), so
-     techincally it's possible to unify the event loops. This has been done
-     with Syncless + gevent (where the Syncless main loop processes both
-     Syncless and gevent notifications). For Concurrence this was not
-     needed, because the libevent abstraction (event notification) design of
-     Concurrence was so clean that it could be efficiently emulated by
-     Syncless (no matter libev or libevent).
+     libevent (with Syncless being able to use libev and minievent, and
+     Eventlet being able to support many other methods, including
+     pure-Python implementations in eventlet.hubs.*), so techincally it's
+     possible to unify the event loops. This has been done with Syncless +
+     gevent (where the Syncless main loop processes both Syncless and gevent
+     notifications). For Concurrence and Eventlet this was not needed,
+     because the event notification abstractions of Concurrence and Eventlet
+     were so clean that they could be efficiently emulated by Syncless (no
+     matter libev or libevent).
 
 Q14. Is it possible to use select(2) (select.select) with Syncless?
 
@@ -909,6 +919,27 @@ A25. Yes, it's in the syncless.console module. You can start it using:
      creating your tasklets with `wrap_tasklet(Function)' instead of
      `stackless.tasklet(Function)'. If you do so, the exception will be
      printed, but the interactive console resumes afterwards.
+
+Q26. Can I use other non-blocking network libraries in the same process
+     which runs Syncless?
+
+A26. Syncless supports the following libraries out-of-the-box with monkey
+     patching: gevent, Eventlet, Concurrence, Twisted, Tornado and asyncore.
+     See Q12 and Q13 for more details how to enable them. Please note that
+     there is no direct synchronization support between Syncless and the
+     other library, i.e. there is no way for a tasklet managed by a library
+     to notify a tasklet managed by another library that computation results
+     are available.
+
+     If you want to run a web framework supporting WSGI, run its WSGI
+     application function/class directly with syncless.wsgi instead.
+
+     If your pure Python network library uses select.select() for event
+     notification, then see Q14.
+
+     Otherwise, the library most probably won't work with Syncless in the
+     same process. Most probably either Syncless I/O will make progress, and
+     the other library's I/O will be stalled, or the other way round.
 
 Links
 ~~~~~

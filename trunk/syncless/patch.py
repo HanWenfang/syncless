@@ -553,6 +553,103 @@ def patch_gevent():
   # greenlet.greenlet is an extension type (class).
 
 
+def patch_eventlet():
+  """Patch Eventlet so it works with Syncless in the same process.
+
+  This has been tested with Eventlet 0.9.7.
+
+  Please note that multithreaded use of Eventlet is untested. (It could be
+  tested by creating a thread pool of database client connections.)
+  
+  The emulation works with both Stackless and greenlet.
+  """
+  # Make sure greenlet is loaded properly.
+  from syncless.best_greenlet.greenlet import greenlet
+  from syncless import coio
+  from eventlet import hubs
+  from eventlet.hubs import hub
+  from eventlet.common import clear_sys_exc_info
+  old_hub_class = str(getattr(hubs._threadlocal, 'Hub', None))
+  if (old_hub_class.startswith('<class \'') and
+      old_hub_class.endswith('.SynclessHub\'>')):
+    return  # Already patched.
+  assert hub.greenlet.greenlet is greenlet, (
+      'greenlet class implementation mismatch: syncless uses %r, '
+      'Eventlet uses %r; import syncless.best_greenlet first to resolve' %
+      (greenlet, hub.greenlet.greenlet))
+  assert not hasattr(hubs._threadlocal, 'hub'), (
+      'too late, Eventlet hub already created; '
+      'to resolve, call patch_eventlet() before doing blocking I/O')
+
+  EVTYPE_STR_TO_MODE = {
+      hub.READ: 1,
+      hub.WRITE: 2,
+  }
+
+  class SynclessHub(hub.BaseHub):
+    def __init__(self, *args, **kwargs):
+      hub.BaseHub.__init__(self, *args, **kwargs)
+      # Map file descriptors to coio.wakeup_info_event objects.
+      self.wakeup_info = coio.wakeup_info()
+      self.listeners_by_mode = [None, self.listeners[hub.READ],
+                                self.listeners[hub.WRITE]]
+      # The dict maps file descriptors to coio.wakeup_info_event objects.
+      self.events_by_mode = [None, {}, {}]
+
+    def add(self, evtype, fileno, cb):
+      # Eventlet is slow in general, because it creates an FdListener
+      # (self.class) for each non-ready read and write operation.
+      mode = EVTYPE_STR_TO_MODE[evtype]
+      listener = self.lclass(evtype, fileno, cb)
+      listener.mode = mode
+      listeners = self.listeners_by_mode[mode]
+      if fileno in listeners:
+        listeners[fileno].append(listener)
+      else:
+        # Eventlet is careful: it doesn't install multiple listeners for the
+        # same (fd, mode), so it would work with libevent.
+        self.events_by_mode[mode][fileno] = self.wakeup_info.create_event(
+            fileno, mode)
+        listeners[fileno] = [listener]
+      return listener
+
+    def remove(self, listener):
+      listeners = self.listeners_by_mode[listener.mode]
+      fileno = listener.fileno
+      try:
+        listeners[fileno].remove(listener)
+        if not listeners[fileno]:
+          del listeners[fileno]
+          self.events_by_mode[listener.mode].pop(fileno).delete()
+      except (KeyError, ValueError):
+        pass
+
+    def remove_descriptor(self, fileno):
+      if self.listeners_by_mode[1].pop(fileno, None):
+        self.events_by_mode[1].pop(fileno).delete()
+      if self.listeners_by_mode[2].pop(fileno, None):
+        self.events_by_mode[2].pop(fileno).delete()
+
+    def wait(self, timeout=None):
+      # This calls the Syncless main loop if needed.
+      events = self.wakeup_info.tick(timeout)
+      while events:
+        fileno, mode = events.pop()
+        listeners = self.listeners_by_mode[mode][fileno]
+        try:
+          if listeners:
+            # By design, Eventlet calls only the first registered listener.
+            listeners[0](fileno)
+        except self.SYSTEM_EXCEPTIONS:
+          raise
+        except:
+          self.squelch_exception(fileno, sys.exc_info())
+          clear_sys_exc_info()
+
+  hubs.use_hub(SynclessHub)
+  assert SynclessHub is hubs._threadlocal.Hub
+
+
 def ExceptHook(orig_excepthook, *args):
   from syncless import coio
   try:
