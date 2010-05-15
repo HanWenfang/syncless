@@ -1,7 +1,9 @@
 #! /usr/local/bin/stackless2.6
 # by pts@fazekas.hu at Sat Apr 24 00:25:31 CEST 2010
 
+import errno
 import os
+import socket
 import unittest
 
 from syncless import coio
@@ -25,6 +27,24 @@ class NbfileTest(unittest.TestCase):
   def tearDown(self):
     self.f.close()
     self.assertEqual(2, coio.stackless.getruncount())
+
+  def assertRaisesErrno(self, exc_type, exc_errno, function, *args, **kwargs):
+    try:
+      function(*args, **kwargs)
+      e = None
+    except exc_type, e:
+      self.assertEqual(exc_errno, e.args[0])
+    if e is None:
+      self.fail('not raised: %s(%r)' % (exc_type.__name__, exc_str))
+
+  def assertRaisesStr(self, exc_type, exc_str, function, *args, **kwargs):
+    try:
+      function(*args, **kwargs)
+      e = None
+    except exc_type, e:
+      self.assertEqual(exc_str, str(e))
+    if e is None:
+      self.fail('not raised: %s(%r)' % (exc_type.__name__, exc_str))
 
   def testReadLine(self):
     # This doesn't test blocking reads.
@@ -250,9 +270,26 @@ class NbfileSocketPairTest(NbfileTest):
   def setUp(self):
     import socket
     sock1, sock2 = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+    self.sock1 = sock1
     self.f = coio.nbfile(sock1.fileno(), sock2.fileno(),
                          write_buffer_limit=0, do_close=0,
                          close_ref=(sock1, sock2))
+
+  def testTimeout(self):
+    self.sock1.settimeout(0.0)
+    self.assertRaisesErrno(socket.error, errno.EAGAIN, self.sock1.recv, 1)
+    self.sock1.settimeout(0.000002)
+    self.assertRaisesStr(socket.timeout, 'timed out', self.sock1.recv, 1)
+    #sock1, sock2 = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+    #sock1.settimeout(2)
+    #f = sock1.makefile('r')
+    ##sock1.settimeout(0.0)
+    ##self.assertRaisesErrno(socket.error, errno.EAGAIN, self.sock1.recv, 1)
+    ## f = self.f
+    ## !!! make it work instead of time out
+    ## -- always EAGAIN
+    #self.assertRaisesStr(socket.timeout, 'timed out', f.read, 1)
+    ## !!! raise for timeout(0.0)
 
 if __name__ == '__main__':
   unittest.main()

@@ -91,8 +91,8 @@ cdef extern from "stdlib.h":
     ctypedef int size_t
 
 cdef extern from "unistd.h":
-    cdef int os_write "write"(int fd, char_constp p, int n)
-    cdef int os_read "read"(int fd, char *p, int n)
+    cdef int debug_write "write"(int fd, char_constp p, int n)
+    cdef int debug_read "read"(int fd, char *p, int n)
     cdef int dup(int fd)
     cdef int close(int fd)
     cdef int isatty(int fd)
@@ -249,6 +249,9 @@ cdef extern from "./coio_c_stackless.h":
 cdef extern from *:
     char *(*PyOS_ReadlineFunctionPointer)(FILE *, FILE *, char *)
 cdef extern from "./coio_c_helper.h":
+    struct _UncountedObject:
+        pass
+    ctypedef _UncountedObject UncountedObject
     struct socket_wakeup_info_s "coio_socket_wakeup_info":
         event_t read_ev
         event_t write_ev
@@ -257,6 +260,14 @@ cdef extern from "./coio_c_helper.h":
         int fd
         # Corresponds to timeout (if not None).
         timeval tv
+    struct oneway_wakeup_info_s "coio_oneway_wakeup_info":
+        event_t ev
+        # -1.0 if None (infinite timeout).  !! use this timeout
+        double timeout_value
+        int fd
+        timeval tv
+        # Exception class to raise on I/O error.
+        UncountedObject *exc_class
 
     # This involves a call to PyStackless_Schedule(None, 1).
     object coio_c_wait(event_t *ev, timeval *timeout)
@@ -268,11 +279,10 @@ cdef extern from "./coio_c_helper.h":
     object coio_c_handle_eagain(socket_wakeup_info_s *swi, short evtype) 
     object coio_c_socket_call(object function, object args,
                               socket_wakeup_info_s *swi, short evtype)
-    int coio_c_evbuffer_read(evbuffer_s *read_eb, int fd, int n,
-                             object read_exc_class,
-                             event_t *read_wakeup_ev) except -1
-    int coio_c_writeall(int fd, event_t *write_wakeup_ev, char_constp p,
-                        Py_ssize_t n, object write_exc_class) except -1
+    int coio_c_evbuffer_read(oneway_wakeup_info_s *owi, evbuffer_s *read_eb,
+                             int n) except -1
+    int coio_c_writeall(oneway_wakeup_info_s *owi, char_constp p,
+                        Py_ssize_t n) except -1
 
 # --- Low-level event functions
 
@@ -596,66 +606,63 @@ cdef object nbfile_readline_with_limit(nbfile self, int limit):
     cdef int min_off
     cdef char_constp q
     cdef int fd
-    cdef evbuffer_s *read_eb
     cdef int had_short_read
     #DEBUG assert limit > 0
     #DEBIG assert (self.c_read_limit < 0 ||
     #              limit <= self.read_eb.off + self.c_read_limit)
-    read_eb = &self.read_eb
-    fd = self.read_fd
+    fd = self.read_owi.fd
     had_short_read = 0
     min_off = 0
-    if limit <= read_eb.off:  # All data already in buffer.
-        q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n', limit)
+    if limit <= self.read_eb.off:  # All data already in buffer.
+        q = <char_constp>memchr(<void_constp>self.read_eb.buf, c'\n', limit)
         if q != NULL:
-            limit = q - <char_constp>read_eb.buf + 1
-        buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, limit)
-        evbuffer_drain(read_eb, limit)
+            limit = q - <char_constp>self.read_eb.buf + 1
+        buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, limit)
+        evbuffer_drain(&self.read_eb, limit)
         return buf
-    q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n',
-                            read_eb.off)
+    q = <char_constp>memchr(<void_constp>self.read_eb.buf, c'\n',
+                            self.read_eb.off)
     while q == NULL:
         if had_short_read:
-            evbuffer_expand(read_eb, 1)
-        elif read_eb.totallen == 0:
-            evbuffer_expand(read_eb, self.c_min_read_buffer_size)
+            evbuffer_expand(&self.read_eb, 1)
+        elif self.read_eb.totallen == 0:
+            evbuffer_expand(&self.read_eb, self.c_min_read_buffer_size)
         else:
-            evbuffer_expand(read_eb, read_eb.totallen >> 1)
-        n = read_eb.totallen - read_eb.off - read_eb.misalign
+            evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
+        n = self.read_eb.totallen - self.read_eb.off - self.read_eb.misalign
         if self.c_read_limit >= 0 and self.c_read_limit < n:
             n = self.c_read_limit
 
-        got = coio_c_evbuffer_read(read_eb, fd, n, self.c_read_exc_class,
-                                   &self.read_wakeup_ev)
+        got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, n)
         if got == 0:  # EOF, return remaining bytes ('' or partial line)
-            n = read_eb.off
+            n = self.read_eb.off
             if limit < n:
                 # TODO(pts): Cache EOF, don't coio_c_evbuffer_read(...) again.
                 if limit == 0:
                     return ''
                 n = limit
-            buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, n)
-            evbuffer_drain(read_eb, n)
+            buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
+            evbuffer_drain(&self.read_eb, n)
             return buf
         if self.c_read_limit >= 0:
             self.c_read_limit -= got
-        if limit <= read_eb.off:  # All data already in buffer.
-            q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n', limit)
+        if limit <= self.read_eb.off:  # All data already in buffer.
+            q = <char_constp>memchr(<void_constp>self.read_eb.buf, c'\n', limit)
             if q != NULL:
-                limit = q - <char_constp>read_eb.buf + 1
-            buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, limit)
-            evbuffer_drain(read_eb, limit)
+                limit = q - <char_constp>self.read_eb.buf + 1
+            buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, limit)
+            evbuffer_drain(&self.read_eb, limit)
             return buf
         if got < n:
             # Most proably we'll get an EOF next time, so we shouldn't
             # pre-increase our buffer.
             had_short_read = 1
-        q = <char_constp>memchr(<void_constp>(read_eb.buf + min_off),
-                                c'\n', read_eb.off - min_off)
-        min_off = read_eb.off
-    n = q - <char_constp>read_eb.buf + 1
-    buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, n)
-    evbuffer_drain(read_eb, n)
+        q = <char_constp>memchr(<void_constp>(self.read_eb.buf + min_off),
+                                c'\n', self.read_eb.off - min_off)
+        min_off = self.read_eb.off
+    n = q - <char_constp>self.read_eb.buf + 1
+    buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
+    evbuffer_drain(&self.read_eb, n)
     return buf
 
 # !! implement timeout (does socket._realsocket.makefile do that?)
@@ -674,13 +681,10 @@ cdef class nbfile:
     # We must keep self.wakeup_ev on the heap, because
     # Stackless scheduling swaps the C stack.
     cdef object close_ref
-    cdef event_t read_wakeup_ev
     # We have different event buffers for reads and writes, because one tasklet
     # might be waiting for read, and another one waiting for write.
-    # !! what if multiple tasklets waiting for read?
-    cdef event_t write_wakeup_ev
-    cdef int read_fd
-    cdef int write_fd
+    cdef oneway_wakeup_info_s read_owi
+    cdef oneway_wakeup_info_s write_owi
     # This must not be negative. Allowed values:
     # 0: (compatible with Python `file') no buffering, call write(2)
     #    immediately
@@ -691,8 +695,8 @@ cdef class nbfile:
     # >=3: use the value for the buffer size in bytes
     cdef int c_write_buffer_limit
     cdef int c_min_read_buffer_size
-    # Maximum number of bytes to be read from self.read_fd, or -1 if unlimited.
-    # Please note that the bytes already read to se.fread_eb are not counted in
+    # Maximum number of bytes to be read from self.read_owi.fd, or -1 if unlimited.
+    # Please note that the bytes already read to self.read_eb are not counted in
     # c_read_limit.
     cdef int c_read_limit
     cdef evbuffer_s read_eb
@@ -702,8 +706,6 @@ cdef class nbfile:
     cdef char c_softspace
     cdef object c_mode
     cdef object c_name
-    cdef object c_read_exc_class
-    cdef object c_write_exc_class
 
     def __init__(nbfile self, int read_fd, int write_fd,
                  int write_buffer_limit=-1, int min_read_buffer_size=-1,
@@ -716,10 +718,10 @@ cdef class nbfile:
         assert mode in ('r', 'w', 'r+')
         self.c_read_limit = -1
         self.c_do_close = do_close
-        self.c_read_exc_class = IOError
-        self.c_write_exc_class = IOError
-        self.read_fd = read_fd
-        self.write_fd = write_fd
+        self.read_owi.exc_class = <UncountedObject*>IOError
+        self.write_owi.exc_class = <UncountedObject*>IOError
+        self.read_owi.fd = read_fd
+        self.write_owi.fd = write_fd
         if do_set_fd_nonblocking:
             if read_fd >= 0:
                 set_fd_nonblocking(read_fd)
@@ -740,21 +742,21 @@ cdef class nbfile:
         # but Pyrex (and __cinit__) ensure that happens, so we don't have to
         # do that.
         if read_fd >= 0:
-            event_set(&self.read_wakeup_ev, read_fd, c_EV_READ,
+            event_set(&self.read_owi.ev, read_fd, c_EV_READ,
                       HandleCWakeup, NULL)
         if write_fd >= 0:
-            event_set(&self.write_wakeup_ev, write_fd, c_EV_WRITE,
+            event_set(&self.write_owi.ev, write_fd, c_EV_WRITE,
                       HandleCWakeup, NULL)
 
     def fileno(nbfile self):
-        if self.read_fd >= 0:
-            return self.read_fd
+        if self.read_owi.fd >= 0:
+            return self.read_owi.fd
         else:
-            return self.write_fd
+            return self.write_owi.fd
 
     # This method is not present in standard file.
     def write_fileno(nbfile self):
-        return self.write_fd
+        return self.write_owi.fd
 
     # !! TODO: SUXX: __dealloc__ is not allowed to call close() or flush()
     #          (too late, see Pyrex docs), __del__ is not special
@@ -764,32 +766,32 @@ cdef class nbfile:
     def forget_write_fd(nbfile self):
        """Return and forget the write file descriptor."""
        cdef int retval
-       retval = self.write_fd
-       self.write_fd = -1
+       retval = self.write_owi.fd
+       self.write_owi.fd = -1
        return retval
 
     def close(nbfile self):
         cdef int got
         try:
             if self.write_eb.off > 0:
-                # This can raise self.c_write_exc_class.
+                # This can raise self.write_owi.exc_class.
                 self.flush()
         finally:
             if not self.c_closed:
                 self.c_closed = 1
                 if self.c_do_close:
                     if self.close_ref is None:
-                        if self.read_fd >= 0:
-                            got = close(self.read_fd)
+                        if self.read_owi.fd >= 0:
+                            got = close(self.read_owi.fd)
                             if got < 0:
-                                exc = self.c_write_exc_class(errno, strerror(errno))
-                                close(self.write_fd)
+                                exc = (<object>self.write_owi.exc_class)(errno, strerror(errno))
+                                close(self.write_owi.fd)
                                 raise exc
-                        if (self.read_fd != self.write_fd and
-                            self.write_fd > 0):
-                            got = close(self.write_fd)
+                        if (self.read_owi.fd != self.write_owi.fd and
+                            self.write_owi.fd > 0):
+                            got = close(self.write_owi.fd)
                             if got < 0:
-                                raise self.c_write_exc_class(errno, strerror(errno))
+                                raise (<object>self.write_owi.exc_class)(errno, strerror(errno))
                     else:
                         close_ref = self.close_ref
                         self.close_ref = False
@@ -825,15 +827,21 @@ cdef class nbfile:
 
     property read_exc_class:
         def __get__(nbfile self):
-            return self.c_read_exc_class
+            return <object>self.read_owi.exc_class
         def __set__(nbfile self, object new_value):
-            self.c_read_exc_class = new_value
+            if not issubclass(new_value, BaseException):
+              raise TypeError
+            # No need for reference counting, new_value (as a class) has
+            # references anyway.
+            self.read_owi.exc_class = <UncountedObject*>new_value
 
     property write_exc_class:
         def __get__(nbfile self):
-            return self.c_write_exc_class
+            return <object>self.write_owi.exc_class
         def __set__(nbfile self, object new_value):
-            self.c_write_exc_class = new_value
+            if not issubclass(new_value, BaseException):
+              raise TypeError
+            self.write_owi.exc_class = <UncountedObject*>new_value
 
     property mode:
         def __get__(nbfile self):
@@ -930,8 +938,7 @@ cdef class nbfile:
             # above so we wouldn't take this shortcut if the buffer wasn't
             # empty.
             # TODO(pts): Use the socket timeout.
-            coio_c_writeall(self.write_fd, &self.write_wakeup_ev, p, n,
-                            self.c_write_exc_class)
+            coio_c_writeall(&self.write_owi, p, n)
             return
         if wlimit == 1:  # Line buffering.
             k = n
@@ -949,26 +956,23 @@ cdef class nbfile:
                 self.write_eb.off + self.write_eb.misalign)
             if k > n:  # Buffer not full yet.
                 evbuffer_add(&self.write_eb, <void_constp>p, n)
-                coio_c_writeall(self.write_fd, &self.write_wakeup_ev,
+                coio_c_writeall(&self.write_owi,
                                 <char_constp>self.write_eb.buf,
-                                self.write_eb.off,
-                                self.c_write_exc_class)
+                                self.write_eb.off)
                 self.write_eb.buf = self.write_eb.orig_buffer
                 self.write_eb.misalign = 0
                 self.write_eb.off = 0
             else:
                 if self.write_eb.off > 0:
                     # Flush self.write_eb.
-                    coio_c_writeall(self.write_fd, &self.write_wakeup_ev,
+                    coio_c_writeall(&self.write_owi,
                                     <char_constp>self.write_eb.buf,
-                                    self.write_eb.off,
-                                    self.c_write_exc_class)
+                                    self.write_eb.off)
                     self.write_eb.buf = self.write_eb.orig_buffer
                     self.write_eb.misalign = 0
                     self.write_eb.off = 0
                 # Flush lines directly from the argument.
-                coio_c_writeall(self.write_fd, &self.write_wakeup_ev, p, n,
-                                self.c_write_exc_class)
+                coio_c_writeall(&self.write_owi, p, n)
             if keepc > 0:
                 p += n
                 if self.write_eb.totallen == 0:
@@ -993,18 +997,16 @@ cdef class nbfile:
                 # Flush self.write_eb.
                 # TODO(pts): Speed: return early even if coio_c_writeall
                 # couldn't write everything yet (EAGAIN). Do this everywhere.
-                coio_c_writeall(self.write_fd, &self.write_wakeup_ev,
+                coio_c_writeall(&self.write_owi,
                                 <char_constp>self.write_eb.buf,
-                                self.write_eb.off,
-                                self.c_write_exc_class)
+                                self.write_eb.off)
                 self.write_eb.buf = self.write_eb.orig_buffer
                 self.write_eb.misalign = 0
                 self.write_eb.off = 0
 
             if n >= wlimit:
                 # Flush directly from the argument.
-                coio_c_writeall(self.write_fd, &self.write_wakeup_ev, p, n,
-                                self.c_write_exc_class)
+                coio_c_writeall(&self.write_owi, p, n)
             else:
                 if self.write_eb.totallen == 0:
                     evbuffer_expand(&self.write_eb, wlimit)
@@ -1014,9 +1016,8 @@ cdef class nbfile:
         # Please note that this method may raise an error even if parts of the
         # buffer has been flushed.
         if self.write_eb.off > 0:
-            coio_c_writeall(self.write_fd, &self.write_wakeup_ev,
-                            <char_constp>self.write_eb.buf, self.write_eb.off,
-                            self.c_write_exc_class)
+            coio_c_writeall(&self.write_owi,
+                            <char_constp>self.write_eb.buf, self.write_eb.off)
             self.write_eb.buf = self.write_eb.orig_buffer
             self.write_eb.misalign = 0
             self.write_eb.off = 0
@@ -1053,7 +1054,7 @@ cdef class nbfile:
     def discard(nbfile self, int n):
         """Read and discard exactly n bytes.
 
-        Please note that self.read_fd won't be read past the n bytes specified.
+        Please note that self.read_owi.fd won't be read past the n bytes specified.
         TODO(pts): Add an option to speed up HTTP keep-alives by batching
         multiple read requests.
 
@@ -1083,9 +1084,7 @@ cdef class nbfile:
             if self.read_eb.totallen == 0:
                 # Expand to the next power of 2.
                 evbuffer_expand(&self.read_eb, self.c_min_read_buffer_size)
-            got = coio_c_evbuffer_read(&self.read_eb, self.read_fd, got,
-                                       self.c_read_exc_class,
-                                       &self.read_wakeup_ev)
+            got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, got)
             if got == 0:  # EOF
                 return n
             else:
@@ -1122,7 +1121,7 @@ cdef class nbfile:
         cdef double timeout_double
         # !! TODO(pts): Speed: return early if already readable.
         if timeout is None:
-            return (coio_c_wait(&self.read_wakeup_ev, NULL)
+            return (coio_c_wait(&self.read_owi.ev, NULL)
                     is event_happened_token)
         else:
             timeout_double = timeout
@@ -1136,7 +1135,7 @@ cdef class nbfile:
                 tv.tv_usec = <unsigned int>(
                     (timeout_double - <double>tv.tv_sec) * 1000000.0)
             return coio_c_wait_for(
-                self.read_fd, c_EV_READ, HandleCTimeoutWakeup, &tv
+                self.read_owi.fd, c_EV_READ, HandleCTimeoutWakeup, &tv
                 ) is event_happened_token
 
     def read(nbfile self, int n=-1):
@@ -1148,7 +1147,7 @@ cdef class nbfile:
         Returns:
           String containing the bytes read; an empty string on EOF.
         Raises:
-          self.c_read_exc_class or IOError: (but not EOFError)
+          self.read_owi.exc_class or IOError: (but not EOFError)
         """
         cdef int got
         cdef object buf
@@ -1162,10 +1161,9 @@ cdef class nbfile:
                     # TODO(pts): Check out-of-memory error everywhere.
                     evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
                     got = coio_c_evbuffer_read(
-                        &self.read_eb, self.read_fd,
+                        &self.read_owi, &self.read_eb,
                         self.read_eb.totallen - self.read_eb.off -
-                        self.read_eb.misalign,
-                        self.c_read_exc_class, &self.read_wakeup_ev)
+                        self.read_eb.misalign)
                     if got == 0:  # EOF
                         break
                 buf = PyString_FromStringAndSize(
@@ -1202,9 +1200,7 @@ cdef class nbfile:
                 # EVBUFFER_MAX_READ == 4096.
                 # !! TODO(pts): Get rid of magic constant 65536.
                 got = self.read_eb.totallen
-            got = coio_c_evbuffer_read(&self.read_eb, self.read_fd, got,
-                                       self.c_read_exc_class,
-                                       &self.read_wakeup_ev)
+            got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, got)
             if got == 0:  # EOF
                 n = self.read_eb.off
                 break
@@ -1221,7 +1217,7 @@ cdef class nbfile:
         Negative values for n are not allowed.
 
         If the read buffer is not empty (self.read_buffer_len), data inside it
-        will be returned, and no attempt is done to read self.read_fd.
+        will be returned, and no attempt is done to read self.read_owi.fd.
         """
         cdef int got
         if n <= 0:
@@ -1242,9 +1238,7 @@ cdef class nbfile:
         while 1:
             # TODO(pts): Don't read it to the buffer, read without memcpy.
             #            We'd need the readinto method for that.
-            got = coio_c_evbuffer_read(&self.read_eb, self.read_fd, n,
-                                       self.c_read_exc_class,
-                                       &self.read_wakeup_ev)
+            got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, n)
             if got == 0:
                 return ''
             else:
@@ -1282,10 +1276,9 @@ cdef class nbfile:
                 # full (because evbuffer doubles its size at minimum).
                 evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
             got = coio_c_evbuffer_read(
-                &self.read_eb, self.read_fd,
+                &self.read_owi, &self.read_eb,
                 self.read_eb.totallen - self.read_eb.off -
-                self.read_eb.misalign,
-                self.c_read_exc_class, &self.read_wakeup_ev)
+                self.read_eb.misalign)
             if got == 0:  # EOF
                 break
             elif self.c_read_limit >= 0:
@@ -1314,10 +1307,9 @@ cdef class nbfile:
                 # full (because evbuffer doubles its size at minimum).
                 evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
             got = coio_c_evbuffer_read(
-                &self.read_eb, self.read_fd,
+                &self.read_owi, &self.read_eb,
                 self.read_eb.totallen - self.read_eb.off -
-                self.read_eb.misalign,
-                self.c_read_exc_class, &self.read_wakeup_ev)
+                self.read_eb.misalign)
             if got == 0:  # EOF
                 break
             else:
@@ -1486,7 +1478,7 @@ cdef class nbfile:
         cdef evbuffer_s *read_eb
         cdef int had_short_read
         read_eb = &self.read_eb
-        fd = self.read_fd
+        fd = self.read_owi.fd
         had_short_read = 0
         min_off = 0
         if self.c_read_limit >= 0:
@@ -1510,9 +1502,7 @@ cdef class nbfile:
             # need = buf->off + datlen when reallocing.
             n = read_eb.totallen - read_eb.off - read_eb.misalign
 
-            got = coio_c_evbuffer_read(read_eb, fd, n,
-                                       self.c_read_exc_class,
-                                       &self.read_wakeup_ev)
+            got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, n)
             if got == 0:  # EOF, return remaining bytes ('' or partial line)
                 n = read_eb.off
                 buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, n)
@@ -1562,9 +1552,9 @@ cdef class nbfile:
 
     def isatty(nbfile self):
         cdef int got
-        got = isatty(self.read_fd)
+        got = isatty(self.read_owi.fd)
         if got < 0:
-            raise self.c_read_exc_class(errno, strerror(errno))
+            raise (<object>self.read_owi.exc_class)(errno, strerror(errno))
         elif got:
             return True
         else:
@@ -1572,8 +1562,8 @@ cdef class nbfile:
 
     def truncate(nbfile self, int size):
         # TODO(pts): Do we need this? It won't work for streams (like seek, tell)
-        if ftruncate(self.read_fd, size) < 0:
-            raise self.c_write_exc_class(errno, strerror(errno))
+        if ftruncate(self.read_owi.fd, size) < 0:
+            raise (<object>self.write_owi.exc_class)(errno, strerror(errno))
 
 # !! implement open(...) properly, with modes etc.
 # !! prevent writing to a nonwritable file

@@ -156,6 +156,19 @@ static inline int coio_loaded(void) {
   return 0;
 }
 
+/* Helper type for passing PyObject pointers without reference counting. */
+struct _UncountedObject;
+typedef struct _UncountedObject UncountedObject;
+
+struct coio_oneway_wakeup_info {
+  struct event ev;
+  double timeout_value;
+  int fd;
+  struct timeval tv;
+  /** Exception class to raise on I/O error */
+  UncountedObject *exc_class;
+};
+
 struct coio_socket_wakeup_info {
   struct event read_ev;
   struct event write_ev;
@@ -187,8 +200,10 @@ static inline PyObject *coio_c_handle_eagain(
   */
   PyObject *retval;
   struct event *wakeup_ev;
-  if (swi->timeout_value == 0.0)
+  if (swi->timeout_value == 0.0) {
+    /* This is what methods of socket.socket raise, we just mimic that */
     return PyErr_SetFromErrno(coio_socket_error);
+  }
   wakeup_ev =
       evtype == EV_READ ?  &swi->read_ev :
       evtype == EV_WRITE ? &swi->write_ev : 0;
@@ -267,11 +282,9 @@ Returns:
   Number of bytes read, or -1 on error. Error code is in errno.
 */
 static inline int coio_c_evbuffer_read(
+    struct coio_oneway_wakeup_info *owi,
     struct coio_evbuffer *read_eb,
-    int fd,
-    int n,
-    PyObject *read_exc_class,
-    struct event *read_wakeup_ev) {
+    int n) {
   int got;
   if (n > 0) {
     if (0 != coio_evbuffer_expand(read_eb, n)) {
@@ -286,12 +299,12 @@ static inline int coio_c_evbuffer_read(
     if (n == 0)
       return 0;
   }
-  while (0 > (got = read(fd, (char*)read_eb->buffer + read_eb->off, n))) {
+  while (0 > (got = read(owi->fd, (char*)read_eb->buffer + read_eb->off, n))) {
     if (errno == EAGAIN) {
-      if (NULL == coio_c_wait(read_wakeup_ev, NULL))
+      if (NULL == coio_c_wait(&owi->ev, NULL))
         return -1;
     } else {
-      PyErr_SetFromErrno(read_exc_class);
+      PyErr_SetFromErrno((PyObject*)owi->exc_class);
       return -1;
     }
   }
@@ -308,24 +321,23 @@ static inline int coio_c_evbuffer_read(
 Returns:
   None
 Raises:
-  write_exc_class:
+  owi->exc_class:
 */
 static inline int coio_c_writeall(
-    int fd,
-    struct event *write_wakeup_ev,
+    struct coio_oneway_wakeup_info *owi,
     const char *p,
-    Py_ssize_t n,
-    PyObject *write_exc_class) {
+    Py_ssize_t n) {
   int got;
+  int fd = owi->fd;
   while (n > 0) {
     got = write(fd, p, n);
     while (got < 0) {
       if (errno != EAGAIN) {
-        PyErr_SetFromErrno(write_exc_class);
+        PyErr_SetFromErrno((PyObject*)owi->exc_class);
         return -1;
       }
       /* Assuming caller has called event_set(...). */
-      coio_c_wait(write_wakeup_ev, NULL);
+      coio_c_wait(&owi->ev, NULL);
       got = write(fd, p, n);
     }
     p += got;
