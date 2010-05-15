@@ -414,6 +414,17 @@ syncless.coio.DnsLookupError: [Errno -65] reply truncated or ill-formed
 5. Socket timeouts are not enforced on file objects created by
    nbsocket.makefile().
 
+   The normal Python behavior is to raise IOError(errno.EAGAIN, ...) no
+   matter what the timeout is, even if the file object was created before
+   setting the timeout.
+
+     sock1, sock2 = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM, 0)
+     f = sock1.makefile('r')
+     assert f.fileno() != sock1.fileno()
+     sock1.settimeout(42)
+     f.read(1)  # raises IOError(errno.EAGAIN, ...)
+
+
 FAQ
 ~~~
 Q1. I have created quite a few tasklets, put them into the runnables list.
