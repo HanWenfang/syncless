@@ -712,7 +712,9 @@ cdef class nbfile:
                  char do_set_fd_nonblocking=1,
                  char do_close=0,
                  object close_ref=None, object mode='r+',
-                 object name=None):
+                 object name=None,
+                 double timeout_double=-1.0):
+        cdef event_handler wakeup_handler
         assert read_fd >= 0 or mode == 'w'
         assert write_fd >= 0 or mode == 'r'
         assert mode in ('r', 'w', 'r+')
@@ -722,6 +724,25 @@ cdef class nbfile:
         self.write_owi.exc_class = <UncountedObject*>IOError
         self.read_owi.fd = read_fd
         self.write_owi.fd = write_fd
+
+        if timeout_double < 0.0:
+            self.read_owi.timeout_value = self.write_owi.timeout_value = -1.0
+            wakeup_handler = HandleCWakeup
+        elif timeout_double == 0.0:
+            wakeup_handler = HandleCTimeoutWakeup
+            self.read_owi.timeout_value = self.write_owi.timeout_value = 0.0
+            self.read_owi.tv.tv_sec = 0
+            self.read_owi.tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
+            self.write_owi.tv = self.read_owi.tv
+        else:
+            wakeup_handler = HandleCTimeoutWakeup
+            self.read_owi.timeout_value = self.write_owi.timeout_value = (
+                timeout_double)
+            self.read_owi.tv.tv_sec = <long>timeout_double
+            self.read_owi.tv.tv_usec = <unsigned int>(
+                (timeout_double - <double>self.read_owi.tv.tv_sec) * 1000000.0)
+            self.write_owi.tv = self.read_owi.tv
+
         if do_set_fd_nonblocking:
             if read_fd >= 0:
                 set_fd_nonblocking(read_fd)
@@ -743,10 +764,43 @@ cdef class nbfile:
         # do that.
         if read_fd >= 0:
             event_set(&self.read_owi.ev, read_fd, c_EV_READ,
-                      HandleCWakeup, NULL)
+                      wakeup_handler, NULL)
         if write_fd >= 0:
             event_set(&self.write_owi.ev, write_fd, c_EV_WRITE,
-                      HandleCWakeup, NULL)
+                      wakeup_handler, NULL)
+
+    property timeout:
+        """Return a nonnegative double, or None if there is no timeout.
+
+        socket._realsocket has a read-only .timeout, socket.socket doesn't
+        have an attribute named timeout.
+        """
+        def __get__(self):
+            if self.read_owi.timeout_value < 0:
+                return None
+            else:
+                return self.read_owi.timeout_value
+
+    def settimeout(nbfile self, timeout):
+        cdef double timeout_double
+        if timeout is None:
+            # SUXX: Pyrex or Cython wouldn't catch the type error if we had
+            # None instead of -1.0 here.
+            self.read_owi.timeout_value = self.write_owi.timeout_value = -1.0
+        else:
+            timeout_double = timeout
+            if timeout_double < 0.0:
+                raise ValueError('Timeout value out of range')
+            self.read_owi.timeout_value = self.write_owi.timeout_value = (
+                timeout_double)
+            if timeout_double == 0.0:
+                self.read_owi.tv.tv_sec = 0
+                self.read_owi.tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
+            else:
+                self.read_owi.tv.tv_sec = <long>timeout_double
+                self.read_owi.tv.tv_usec = <unsigned int>(
+                    (timeout_double - <double>self.read_owi.tv.tv_sec) * 1000000.0)
+            self.write_owi.tv = self.read_owi.tv
 
     def fileno(nbfile self):
         if self.read_owi.fd >= 0:
@@ -1731,7 +1785,7 @@ cdef class nbsocket:
             return self.realsock.family
 
     property timeout:
-        """Return a nonnegative double, or -1.0 if there is no timeout.
+        """Return a nonnegative double, or None if there is no timeout.
 
         socket._realsocket has a read-only .timeout, socket.socket doesn't
         have an attribute named timeout.
@@ -1906,13 +1960,14 @@ cdef class nbsocket:
     def makefile_samefd(nbsocket self, mode='r+', int bufsize=-1):
         """Create and return an nbfile with self.swi.fd.
 
-        The nbfile will be buffered, and its close method won't cause an
-        os.close(self.swi.fd).
+        The nbfile will be buffered, and its close method won't close any
+        filehandles (especially not self.swi.fd).
 
         This method is not part of normal sockets.
         """
         return nbfile(self.swi.fd, self.swi.fd, bufsize, bufsize,
-                      do_set_fd_nonblocking=0)
+                      do_set_fd_nonblocking=0,
+                      timeout_double=self.swi.timeout_value)
 
     def makefile(nbsocket self, mode='r', int bufsize=-1):
         """Create an nbfile (non-blocking file-like) object from self.
@@ -1929,8 +1984,9 @@ cdef class nbsocket:
         if fd < 0:
             raise socket_error(errno, strerror(errno))
         # TODO(pts): Verify proper close semantics for _realsocket emulation.
-        return nbfile(fd, fd, bufsize, bufsize, do_close=1, close_ref=self,
-                      do_set_fd_nonblocking=0)
+        return nbfile(fd, fd, bufsize, bufsize, do_close=1,
+                      do_set_fd_nonblocking=0,
+                      timeout_double=self.swi.timeout_value)
 
 
 def new_realsocket(*args):
