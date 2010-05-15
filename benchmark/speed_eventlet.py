@@ -4,7 +4,7 @@ import sys
 
 import lprng
 
-import eventlet.api
+import eventlet
 
 def Worker(connection):
   reader = connection.makefile('r')
@@ -54,10 +54,10 @@ def read_chat_forever(writer, reader):
     print "Participant left chat."
 
 if __name__ == '__main__':
-  server = eventlet.api.tcp_listener(('127.0.0.1', 8080), backlog=128)
+  server = eventlet.listen(('127.0.0.1', 8080), backlog=128)
   print >>sys.stderr, 'info: listening on %r' % (server.getsockname(),)
   while True:
     new_connection, peer_name = server.accept()
     print >>sys.stderr, 'info: connection from %r' % (peer_name,)
-    eventlet.api.spawn(Worker, new_connection)
+    eventlet.spawn(Worker, new_connection)
     new_connection = None
