@@ -107,3 +107,83 @@ class Queue(object):
 
   def __iter__(self):
     return iter(self.deque)
+
+
+class TimeoutException(Exception):
+  """Raised when the timeout has been reached."""
+
+
+class Timeout(object):
+  """Timeout context manager.
+  
+  Example (needs Python 2.6):
+
+    with Timeout(1.5):
+      ... # Do work here.
+
+  If the timeout is reached, the work is silently terminated, and execution
+  resumes at after the `while' block. This is implemented by creating a
+  timeout tasklet, which raises TimeoutException (configurable), which gets
+  caught and ignored in self.__exit__ in the current (busy) tasklet.
+
+  If the busy tasklet is not scheduled or it's blocked on a channel, the
+  TimeoutException gets delivered anyway, inserting back the busy tasklet to
+  the runnables list.
+
+  Please note that multitasking with Syncless is still cooperative:
+  TimeoutException won't be delivered until the Syncless main loop tasklet
+  is scheduled, and for that, all busy tasklets has to give up control (by
+  running a coio.sleep, a Syncless non-blocking I/O operation, or a
+  stackless.schedule() or stackless.schedule_remove().
+  """
+  __slots__ = ['timeout', 'sleeper_tasklet', 'busy_tasklet', 'exc']
+  def __init__(self, timeout, exc=TimeoutException):
+    self.timeout = timeout
+    self.busy_tasklet = self.sleeper_tasklet = None
+    self.exc = exc
+
+  def __enter__(self):
+    self.busy_tasklet = stackless.current
+    if self.timeout is not None:
+      self.sleeper_tasklet = stackless.tasklet(self.Sleeper)()
+    return self
+
+  def __exit__(self, typ, val, tb):
+    self.busy_tasklet = None
+    if self.sleeper_tasklet:
+      # Let's continue with us after the kill().
+      self.sleeper_tasklet.remove().kill()
+      self.sleeper_tasklet = None
+    if typ:
+      if isinstance(self.exc, BaseException):
+        return issubclass(typ, type(self.exc))
+      else:
+        return issubclass(typ, self.exc)
+
+  def cancel(self):
+    """Cancel the timeout, let it run indefinitely.
+    
+    self.cancel() is equivalent to self.change(None).
+    """
+    if self.sleeper_tasklet:
+      self.sleeper_tasklet.remove().kill()
+      self.sleeper_tasklet = None
+
+  def change(self, timeout):
+    """Change the timeout (restarting from 0)."""
+    if self.sleeper_tasklet:
+      self.sleeper_tasklet.remove().kill()
+      self.sleeper_tasklet = None
+    self.timeout = timeout
+    if timeout is not None:
+      # TODO(pts): speed: Do this without creating a new tasklet. Would this
+      # improve speed?
+      self.sleeper_tasklet = stackless.tasklet(self.Sleeper)()
+
+  def Sleeper(self):
+    coio.sleep(self.timeout)
+    if self.busy_tasklet:
+      if isinstance(self.exc, BaseException):
+        self.busy_tasklet.raise_exception(type(self.exc), *self.exc.args)
+      else:
+        self.busy_tasklet.raise_exception(self.exc)
