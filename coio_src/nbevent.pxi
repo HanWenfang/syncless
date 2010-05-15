@@ -2822,7 +2822,7 @@ cdef void HandleCWakeupInfoWakeup(int fd, short evtype, void *arg) with gil:
     cdef wakeup_info wakeup_info_obj
     cdef int mode
     wakeup_info_obj = <wakeup_info>arg
-    if fd >= 0:  # fd is -1 for a create_timer.
+    if fd >= 0:  # fd is -1 for a timer (such as timeout_event)
         mode = 0
         if evtype & EV_READ:
             mode |= 1
@@ -2924,8 +2924,7 @@ cdef class wakeup_info:
             finally:
                 self.wakeup_tasklet = None
         else:
-            timeout_event = wakeup_info_event(self, c_EV_TIMEOUT, -1,
-                                              timeout)
+            timeout_event = wakeup_info_event(self, 0, -1, timeout)
             self.wakeup_tasklet = stackless.current
             # Event handlers call self.wakeup_tasklet.insert() to cancel this
             # stackless.schedule_remove().

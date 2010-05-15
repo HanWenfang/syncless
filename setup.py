@@ -719,17 +719,17 @@ setup(name='syncless',
                    version['VERSION'],
       packages=['syncless'],
       long_description=
-          "Syncless is an experimental, lightweight, non-blocking (asynchronous) client "
-          "and server socket network communication library for Stackless Python 2.6. "
-          "(and also for regular Python with greenlet). "
-          "For high speed, Syncless uses libev (and libevent), and parts of "
-          "Syncless' code is implemented in C (Pyrex). Thus Syncless can be faster than "
-          "many other non-blocking Python communication libraries. Syncless contains an "
-          "asynchronous DNS resolver (using evdns) and a HTTP server capable of serving "
-          "WSGI applications. Syncless aims to be a coroutine-based alternative of "
-          "event-driven networking engines (such as Twisted and FriendFeed's Tornado), "
-          "and it's a competitor of gevent, pyevent, python-libevent, Eventlet and "
-          "Concurrence.",
+          "Syncless is a non-blocking (asynchronous) concurrent client and server "
+          "socket network communication library for Stackless Python 2.6 (and also for "
+          "regular Python with greenlet). For high speed, Syncless uses libev (and "
+          "libevent) for event notification, and parts of Syncless' code is implemented "
+          "in Pyrex/Cython and C. This alone makes Syncless faster than many of its "
+          "non-blocking network libraries for Python. Syncless contains an asynchronous "
+          "DNS resolver (using evdns) and a HTTP server capable of serving WSGI "
+          "applications. Syncless aims to be a coroutine-based alternative of "
+          "event-driven networking engines (such as Twisted, asyncore, pyevent, "
+          "python-libevent and FriendFeed's Tornado), and it's a competitor of gevent, "
+          "Eventlet and Concurrence.",
       license="GPL v2",
       platforms=["Unix"],
       classifiers=[
