@@ -730,7 +730,7 @@ setup(name='syncless',
           "event-driven networking engines (such as Twisted, asyncore, pyevent, "
           "python-libevent and FriendFeed's Tornado), and it's a competitor of gevent, "
           "Eventlet and Concurrence.",
-      license="GPL v2",
+      license="Apache License, Version 2.0",
       platforms=["Unix"],
       classifiers=[
           "Development Status :: 3 - Alpha",
@@ -738,7 +738,7 @@ setup(name='syncless',
           "Environment :: No Input/Output (Daemon)",
           "Environment :: Other Environment",
           "Intended Audience :: Developers",
-          "License :: OSI Approved :: GNU General Public License (GPL)",
+          "License :: OSI Approved :: Apache Software License",
           "Operating System :: POSIX :: Linux",
           "Operating System :: Unix",
           "Programming Language :: Python :: 2.5",
