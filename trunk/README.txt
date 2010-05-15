@@ -171,9 +171,10 @@ Remember your picks above.
    Syncless has been tested on Linux with libev-3.9. The version shipped
    with your Linux distribution will probably also be OK if it's new enough.
 
-5. If you have picked libev, you also have to install libevhdns. Download
-   the libevhdns sources from http://code.google.com/p/libevhdns/ , and
-   install them. The minimum version required is 1.4.13.4.
+5. If you have picked libev, you may want to install libevhdns (That's an
+   extra with marginal benefit, most users don't need that).
+   Download the libevhdns sources from http://code.google.com/p/libevhdns/ ,
+   and install them. The minimum version required is 1.4.13.4.
 
    Most probably your Linux distribution doesn't have libevhdns, so you should
    install libevhdns from source.
@@ -220,10 +221,14 @@ Remember your picks above.
    * COIO_USE_CO_GREENLET: greenlet is used for coroutines.
    * COIO_USE_LIBEVHDNS: libevhdns is used for DNS resolution.
    * COIO_USE_MINIHDNS: minihdns is used for DNS resolution.
-   * COIO_USE_MINIEVENT: libev is used for notification.
+   * COIO_USE_MINIEVENT: minievent is used for notification.
    * COIO_USE_LIBEV: libev is used for notification.
    * COIO_USE_LIBEVENT1: libevent1 is used for DNS resolution and notification.
    * COIO_USE_LIBEVENT2: libevent2 is used for DNS resolution and notification.
+
+   Don't get confused by None, only the presence of a constant matters, e.g.
+   if (COIO_USE_CO_STACKLESS, None) is present, than Stackless _will_ be
+   used.
 
    Before running `setup.py build', you can set one or more of the following
    environment variables to force Syncless use a specific dependency instead
