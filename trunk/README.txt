@@ -65,7 +65,7 @@ Installation (the fast and easy way)
 You need a Unix system with Python 2.5 or 2.6. Stackless Python is
 recommended, but not necessary.
 
-To install syncless, run this as root (without the # sign):
+To install Syncless, run this as root (without the # sign):
 
   # easy_install syncless
 
@@ -88,7 +88,7 @@ invocation:
 
   $ python -m syncless.console
 
-If you want to install syncless to a specific Pyton version on your system,
+If you want to install Syncless to a specific Pyton version on your system,
 run the following instead (without python substituted properly):
 
   # python -c'from setuptools.command.easy_install import main;main()' syncless
@@ -98,7 +98,7 @@ If you don't have the easy_install command installed, do this:
   $ wget http://peak.telecommunity.com/dist/ez_setup.py
   $ python ez_setup.py syncless
 
-If installation fails, or you want to reinstall syncless to get the highest
+If installation fails, or you want to reinstall Syncless to get the highest
 performance, please follow the next Installation section.
 
 Installation (the hard way)
@@ -243,7 +243,7 @@ Remember your picks above.
 
 
     Please note that you don't have to run the `install' step to experiment
-    with syncless: after the `build' step, you can run the demos in the
+    with Syncless: after the `build' step, you can run the demos in the
     `examples' directory, and you can also run the tests in the `test'
     directory.
 
@@ -930,7 +930,7 @@ A25. Yes, it's in the syncless.console module. You can start it using:
 
      syncless.console is like the regular interactive Python interpreter
      except that it has some useful global variables preloaded (such as
-     help, syncless and ticker), and it supports running coroutines
+     help, Syncless and ticker), and it supports running coroutines
      (tasklets) in the background while the user can issue Python commands.
      It's an easy-to-use environment to learn Syncless and to experiment with
      tasklets.

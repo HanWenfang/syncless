@@ -2593,6 +2593,7 @@ cdef class nbsslsocket:
         Both the returned nbfile and this nbsslsocket will see the decrypted
         data.
         """
+        # !! fix this if self.sslobj is None
         return nbfile(self.swi.fd, self.swi.fd, bufsize, bufsize,
                       do_set_fd_nonblocking=0, sslobj=self.sslobj,
                       timeout_double=self.swi.timeout_value)
@@ -2621,6 +2622,7 @@ cdef class nbsslsocket:
             socket.socket.makefile.
         """
         cdef int fd
+        # !! fix this if self.sslobj is None
         realsock = self.realsock.dup()
         sslobj = self.sslobj
         fd = self.swi.fd
