@@ -14,6 +14,7 @@ from syncless import patch
 
 def FetchWorker(url, result_channel):
   try:
+    # This will use nbsslsocket and nbsslsocket.makefile()
     f = urllib2.urlopen(url)
     try:
       data = f.read()

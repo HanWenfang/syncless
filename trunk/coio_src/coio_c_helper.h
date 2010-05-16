@@ -162,11 +162,13 @@ typedef struct _UncountedObject UncountedObject;
 
 struct coio_oneway_wakeup_info {
   struct event ev;
+  struct event *other_ev;
   double timeout_value;
   int fd;
   struct timeval tv;
   /** Exception class to raise on I/O error */
   UncountedObject *exc_class;
+  UncountedObject *sslobj;
 };
 
 struct coio_socket_wakeup_info {
@@ -266,6 +268,88 @@ static inline PyObject *coio_c_socket_call(PyObject *function, PyObject *args,
   }
 }
 
+/* nbevent.pxi overrides these hard-coded values (from Python 2.6.5
+ * Modules/_ssl.c) with actual imported values.
+ */
+static int coio_c_SSL_ERROR_WANT_READ = 2;
+static int coio_c_SSL_ERROR_WANT_WRITE = 3;
+static int coio_c_SSL_ERROR_EOF = 8;
+static PyObject *coio_c_SSLError;
+
+/* Helper function to wait when sslobj gets blocked. */
+static int coio_c_handle_ssl_eagain(
+    struct coio_oneway_wakeup_info *owi,
+    struct event *read_ev,
+    struct event *write_ev,
+    char do_return_zero_at_eof) {
+  PyObject *ptype, *pvalue, *ptraceback, *retval;
+  int errcode;
+  if (!PyErr_ExceptionMatches(coio_c_SSLError))
+    return -1;
+  PyErr_Fetch(&ptype, &pvalue, &ptraceback);
+  assert(pvalue != NULL);
+  /* AnyException('foo', ...)[0] yields 'foo', no need for exc.args[0]
+   * in Python 2.x (but needed in 3.x).
+   */
+  retval = PySequence_GetItem(pvalue, 0);
+  if (retval == NULL) {
+    PyErr_Restore(ptype, pvalue, ptraceback);
+    return -1;
+  }
+  if (!PyInt_Check(retval)) {
+    Py_DECREF(retval);
+    PyErr_Restore(ptype, pvalue, ptraceback);
+    return -1;
+  }
+  errcode = PyInt_AsLong(retval);
+  Py_DECREF(retval);
+  if (errcode == coio_c_SSL_ERROR_WANT_READ) {
+    /* TODO(pts): More efficient wait. !! timeout */
+    /* !! if (retval != coio_event_happened_token && retval != NULL) */
+    Py_XDECREF(ptype); Py_XDECREF(pvalue); Py_XDECREF(ptraceback);
+    if (owi->timeout_value == 0.0) {
+      /* This is what methods of socket.socket raise, we just mimic that */
+      /* !! set to EAGAIN here */
+      PyErr_SetFromErrno((PyObject*)owi->exc_class);
+      return -1;
+    }
+    retval = coio_c_wait(read_ev, &owi->tv);
+    if (retval != coio_event_happened_token && retval != NULL) {
+      Py_DECREF(retval);
+      PyErr_SetString(coio_socket_timeout, "timed out");
+      return -1;
+    }
+    if (retval == NULL)
+      return -1;
+    Py_DECREF(retval);
+    return 1;
+  } else if (errcode == coio_c_SSL_ERROR_WANT_WRITE) {
+    Py_XDECREF(ptype); Py_XDECREF(pvalue); Py_XDECREF(ptraceback);
+    if (owi->timeout_value == 0.0) {
+      /* This is what methods of socket.socket raise, we just mimic that */
+      /* !! set to EAGAIN here */
+      PyErr_SetFromErrno((PyObject*)owi->exc_class);
+      return -1;
+    }
+    retval = coio_c_wait(write_ev, &owi->tv);
+    if (retval != coio_event_happened_token && retval != NULL) {
+      Py_DECREF(retval);
+      PyErr_SetString(coio_socket_timeout, "timed out");
+      return -1;
+    }
+    if (retval == NULL)
+      return -1;
+    Py_DECREF(retval);
+    return 1;
+  } else if (errcode == coio_c_SSL_ERROR_EOF && do_return_zero_at_eof) {
+    Py_XDECREF(ptype); Py_XDECREF(pvalue); Py_XDECREF(ptraceback);
+    return 0;
+  } else {
+    PyErr_Restore(ptype, pvalue, ptraceback);
+    return -1;
+  }
+}
+
 /* Read at most n bytes to read_eb from file fd.
 
 This function is similar to evbuffer_read, but it doesn't do an
@@ -285,8 +369,9 @@ static inline int coio_c_evbuffer_read(
     struct coio_oneway_wakeup_info *owi,
     struct coio_evbuffer *read_eb,
     int n) {
-  int got;
-  PyObject *obj;
+  Py_ssize_t got;
+  PyObject *obj, *read_obj, *args, *n_obj;
+  const char *buffer;
   if (n > 0) {
     if (0 != coio_evbuffer_expand(read_eb, n)) {
       PyErr_SetString(PyExc_MemoryError, "not enough memory for read buffer");
@@ -300,30 +385,73 @@ static inline int coio_c_evbuffer_read(
     if (n == 0)
       return 0;
   }
-  while (0 > (got = read(owi->fd, (char*)read_eb->buffer + read_eb->off, n))) {
-    if (errno == EAGAIN) {
-      if (owi->timeout_value < 0) {
-        if (NULL == coio_c_wait(&owi->ev, NULL))
-          return -1;
-      } else {
-        if (owi->timeout_value == 0.0) {
-          /* This is what methods of socket.socket raise, we just mimic that */
-          PyErr_SetFromErrno((PyObject*)owi->exc_class);  /* EAGAIN */
-          return -1;
-        }
-        obj = coio_c_wait(&owi->ev, &owi->tv);
-        if (obj != coio_event_happened_token && obj != NULL) {
-          Py_DECREF(obj);
-          PyErr_SetString(coio_socket_timeout, "timed out");
-          return -1;
-        }
-        if (obj == NULL)
-          return -1;
-        Py_DECREF(obj);
-      }
-    } else {
-      PyErr_SetFromErrno((PyObject*)owi->exc_class);
+  if (owi->sslobj != NULL) {
+    /* sslobj is defined in Modules/_ssl.c */
+    read_obj = PyObject_GetAttrString((PyObject*)owi->sslobj, "read");
+    if (read_obj == NULL)
       return -1;
+    if (n > 65536)  /* Avoid allocating a large string below at once. */
+      n = 65536;
+   read_again:
+    n_obj = PyInt_FromSsize_t(n);
+    if (n_obj == NULL) {
+      Py_DECREF(read_obj);
+      return -1;
+    }
+    args = PyTuple_New(1);
+    if (args == NULL) {
+      Py_DECREF(n_obj);
+      Py_DECREF(read_obj);
+      return -1;
+    }
+    PyTuple_SET_ITEM(args, 0, n_obj);
+    obj = PyObject_CallObject(read_obj, args);
+    Py_DECREF(args);
+    if (obj == NULL) {
+      got = coio_c_handle_ssl_eagain(owi, &owi->ev, owi->other_ev, 1);
+      if (got == -1) {
+        Py_DECREF(read_obj);
+        return -1;
+      }
+      if (got == 0)
+        return 0;
+      goto read_again;
+    }
+    if (PyObject_AsCharBuffer(obj, &buffer, &got) == -1) {
+      Py_DECREF(obj);
+      Py_DECREF(read_obj);
+      return -1;
+    }
+    memcpy((char*)read_eb->buffer + read_eb->off, buffer, got);
+    Py_DECREF(obj);
+    Py_DECREF(read_obj);
+  } else {
+    while (0 > (got = read(
+        owi->fd, (char*)read_eb->buffer + read_eb->off, n))) {
+      if (errno == EAGAIN) {
+        if (owi->timeout_value < 0) {
+          if (NULL == coio_c_wait(&owi->ev, NULL))
+            return -1;
+        } else {
+          if (owi->timeout_value == 0.0) {
+            /* This is what methods of socket.socket raise, we just mimic that */
+            PyErr_SetFromErrno((PyObject*)owi->exc_class);  /* EAGAIN */
+            return -1;
+          }
+          obj = coio_c_wait(&owi->ev, &owi->tv);
+          if (obj != coio_event_happened_token && obj != NULL) {
+            Py_DECREF(obj);
+            PyErr_SetString(coio_socket_timeout, "timed out");
+            return -1;
+          }
+          if (obj == NULL)
+            return -1;
+          Py_DECREF(obj);
+        }
+      } else {
+        PyErr_SetFromErrno((PyObject*)owi->exc_class);
+        return -1;
+      }
     }
   }
   read_eb->off += got;
@@ -345,38 +473,79 @@ static inline int coio_c_writeall(
     struct coio_oneway_wakeup_info *owi,
     const char *p,
     Py_ssize_t n) {
-  PyObject *obj;
-  int got;
+  PyObject *obj, *write_obj, *args, *buf;
+  Py_ssize_t got;
   int fd = owi->fd;
-  while (n > 0) {
-    while (0 > (got = write(fd, p, n))) {
-      if (errno != EAGAIN) {
-        PyErr_SetFromErrno((PyObject*)owi->exc_class);
+  if (n <= 0)
+    return 0;
+  if (owi->sslobj != NULL) {
+    /* sslobj is defined in Modules/_ssl.c */
+    write_obj = PyObject_GetAttrString((PyObject*)owi->sslobj, "write");
+    if (write_obj == NULL)
+      return -1;
+    do {
+     write_again:
+      if (NULL == (buf = PyBuffer_FromMemory((void*)p, n))) {
+        Py_DECREF(write_obj);
         return -1;
       }
-      /* Assuming caller has called event_set(...). */
-      if (owi->timeout_value < 0) {
-        if (NULL == coio_c_wait(&owi->ev, NULL))
-          return -1;
-      } else {
-        if (owi->timeout_value == 0.0) {
-          /* This is what methods of socket.socket raise, we just mimic that */
-          PyErr_SetFromErrno((PyObject*)owi->exc_class);  /* EAGAIN */
-          return -1;
-        }
-        obj = coio_c_wait(&owi->ev, &owi->tv);
-        if (obj != coio_event_happened_token && obj != NULL) {
-          Py_DECREF(obj);
-          PyErr_SetString(coio_socket_timeout, "timed out");
-          return -1;
-        }
-        if (obj == NULL)
-          return -1;
-        Py_DECREF(obj);
+      if (NULL == (args = PyTuple_New(1))) {
+        Py_DECREF(buf);
+        Py_DECREF(write_obj);
+        return -1;
       }
-    }
-    p += got;
-    n -= got;
+      PyTuple_SET_ITEM(args, 0, buf);
+      obj = PyObject_CallObject(write_obj, args);
+      Py_DECREF(args);
+      if (obj == NULL) {
+        if (-1 == coio_c_handle_ssl_eagain(owi, owi->other_ev, &owi->ev, 0)) {
+          Py_DECREF(write_obj);
+          return -1;
+        }
+        goto write_again;
+      }
+      got = PyInt_AsSsize_t(obj);
+      if (PyErr_Occurred()) {
+        Py_DECREF(obj);
+        Py_DECREF(write_obj);
+        return -1;
+      }
+      Py_DECREF(obj);
+      p += got;
+      n -= got;
+    } while (n > 0);
+    Py_DECREF(write_obj);
+  } else {
+    do {
+      while (0 > (got = write(fd, p, n))) {
+        if (errno != EAGAIN) {
+          PyErr_SetFromErrno((PyObject*)owi->exc_class);
+          return -1;
+        }
+        /* Assuming caller has called event_set(...). */
+        if (owi->timeout_value < 0) {
+          if (NULL == coio_c_wait(&owi->ev, NULL))
+            return -1;
+        } else {
+          if (owi->timeout_value == 0.0) {
+            /* This is what methods of socket.socket raise, we just mimic. */
+            PyErr_SetFromErrno((PyObject*)owi->exc_class);  /* EAGAIN */
+            return -1;
+          }
+          obj = coio_c_wait(&owi->ev, &owi->tv);
+          if (obj != coio_event_happened_token && obj != NULL) {
+            Py_DECREF(obj);
+            PyErr_SetString(coio_socket_timeout, "timed out");
+            return -1;
+          }
+          if (obj == NULL)
+            return -1;
+          Py_DECREF(obj);
+        }
+      }
+      p += got;
+      n -= got;
+    } while (n > 0);
   }
   return 0;
 }

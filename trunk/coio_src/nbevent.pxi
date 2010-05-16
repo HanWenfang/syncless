@@ -147,6 +147,7 @@ cdef extern from "./coio_c_include_libevent.h":
         int   ev_flags
         void *ev_arg
         #short ev_events  # c_EV_READ | c_EV_WRITE etc.
+        event_handler ev_callback
 
     int coio_event_init()
     int coio_event_reinit(int do_recreate)
@@ -262,12 +263,14 @@ cdef extern from "./coio_c_helper.h":
         timeval tv
     struct oneway_wakeup_info_s "coio_oneway_wakeup_info":
         event_t ev
-        # -1.0 if None (infinite timeout).  !! use this timeout
+        # -1.0 if None (infinite timeout).
         double timeout_value
         int fd
         timeval tv
         # Exception class to raise on I/O error.
         UncountedObject *exc_class
+        UncountedObject *sslobj
+        event_t *other_ev
 
     # This involves a call to PyStackless_Schedule(None, 1).
     object coio_c_wait(event_t *ev, timeval *timeout)
@@ -283,6 +286,9 @@ cdef extern from "./coio_c_helper.h":
                              int n) except -1
     int coio_c_writeall(oneway_wakeup_info_s *owi, char_constp p,
                         Py_ssize_t n) except -1
+    int c_SSL_ERROR_WANT_READ "coio_c_SSL_ERROR_WANT_READ"
+    int c_SSL_ERROR_WANT_WITE "coio_c_SSL_ERROR_WANT_WRITE"
+    int c_SSL_ERROR_EOF "coio_c_SSL_ERROR_EOF"
 
 # --- Low-level event functions
 
@@ -665,7 +671,7 @@ cdef object nbfile_readline_with_limit(nbfile self, int limit):
     evbuffer_drain(&self.read_eb, n)
     return buf
 
-# !! implement timeout (does socket._realsocket.makefile do that?)
+
 cdef class nbfile:
     """A non-blocking file (I/O channel).
 
@@ -685,7 +691,7 @@ cdef class nbfile:
     # might be waiting for read, and another one waiting for write.
     cdef oneway_wakeup_info_s read_owi
     cdef oneway_wakeup_info_s write_owi
-    # This must not be negative. Allowed values:
+    # bufsize, buffer size, This must not be negative. Allowed values:
     # 0: (compatible with Python `file') no buffering, call write(2)
     #    immediately
     # 1: (compatible with Python `file', unimplemented) line buffering
@@ -706,13 +712,14 @@ cdef class nbfile:
     cdef char c_softspace
     cdef object c_mode
     cdef object c_name
+    cdef object sslobj
 
     def __init__(nbfile self, int read_fd, int write_fd,
                  int write_buffer_limit=-1, int min_read_buffer_size=-1,
                  char do_set_fd_nonblocking=1,
                  char do_close=0,
                  object close_ref=None, object mode='r+',
-                 object name=None,
+                 object name=None, object sslobj=None,
                  double timeout_double=-1.0):
         cdef event_handler wakeup_handler
         assert read_fd >= 0 or mode == 'w'
@@ -724,7 +731,15 @@ cdef class nbfile:
         self.write_owi.exc_class = <UncountedObject*>IOError
         self.read_owi.fd = read_fd
         self.write_owi.fd = write_fd
-
+        if sslobj:
+            self.sslobj = sslobj  # Just for the Py_INCREF(...).
+            self.read_owi.sslobj = self.write_owi.sslobj = (
+                <UncountedObject*>sslobj)
+            self.read_owi.other_ev = &self.write_owi.ev
+            self.write_owi.other_ev = &self.read_owi.ev
+        else:
+            self.sslobj = None
+            self.read_owi.sslobj = self.write_owi.sslobj = NULL
         if timeout_double < 0.0:
             self.read_owi.timeout_value = self.write_owi.timeout_value = -1.0
             wakeup_handler = HandleCWakeup
@@ -787,6 +802,8 @@ cdef class nbfile:
             # SUXX: Pyrex or Cython wouldn't catch the type error if we had
             # None instead of -1.0 here.
             self.read_owi.timeout_value = self.write_owi.timeout_value = -1.0
+            self.read_owi.ev.ev_callback = self.write_owi.ev.ev_callback = (
+                HandleCWakeup)
         else:
             timeout_double = timeout
             if timeout_double < 0.0:
@@ -801,6 +818,8 @@ cdef class nbfile:
                 self.read_owi.tv.tv_usec = <unsigned int>(
                     (timeout_double - <double>self.read_owi.tv.tv_sec) * 1000000.0)
             self.write_owi.tv = self.read_owi.tv
+            self.read_owi.ev.ev_callback = self.write_owi.ev.ev_callback = (
+                HandleCTimeoutWakeup)
 
     def fileno(nbfile self):
         if self.read_owi.fd >= 0:
@@ -826,6 +845,7 @@ cdef class nbfile:
 
     def close(nbfile self):
         cdef int got
+        self.sslobj = None
         try:
             if self.write_eb.off > 0:
                 # This can raise self.write_owi.exc_class.
@@ -2018,16 +2038,14 @@ def new_realsocket_fromfd(*args):
 
 # --- SSL sockets
 
-cdef int SSL_ERROR_EOF
-cdef int SSL_ERROR_WANT_READ
-cdef int SSL_ERROR_WANT_WRITE
+cdef object c_SSLError "coio_c_SSLError"
 try:
     import ssl
     sslsocket_impl = ssl.SSLSocket
-    SSLError = ssl.SSLError
-    SSL_ERROR_EOF = ssl.SSL_ERROR_EOF
-    SSL_ERROR_WANT_READ = ssl.SSL_ERROR_WANT_READ
-    SSL_ERROR_WANT_WRITE = ssl.SSL_ERROR_WANT_WRITE
+    c_SSLError = ssl.SSLError
+    c_SSL_ERROR_EOF = ssl.SSL_ERROR_EOF
+    c_SSL_ERROR_WANT_READ = ssl.SSL_ERROR_WANT_READ
+    c_SSL_ERROR_WANT_WRITE = ssl.SSL_ERROR_WANT_WRITE
 except ImportError, e:
     sslsocket_impl = None
     ssl = None
@@ -2047,9 +2065,6 @@ cdef class sockwrapper:
 
 
 # !! TODO(pts): implement all NotImplementedError
-# TODO(pts): Test timeout for connect and do_handshake.
-# TODO(pts): Test timeout for send, recv.
-# TODO(pts): Test timeout for makefile read, write.
 cdef class nbsslsocket:
     """Non-blocking drop-in replacement class for ssl.SSLSocket.
 
@@ -2149,19 +2164,23 @@ cdef class nbsslsocket:
         return self.swi.fd
 
     def dup(nbsslsocket self):
-        """Duplicates to a non-SSL socket (as in SSLSocket.dup)."""
+        """Duplicates to a non-SSL socket (just like SSLSocket.dup)."""
         # TODO(pts): Skip the fcntl2 in the set_fd_nonblocking call in the
         # constructor.
         return nbsocket(self.realsock.dup())
 
-    # !! TODO: SUXX: __dealloc__ is not allowed to call close() or flush()
-    #          (too late, see Pyrex docs), __del__ is not special
-    def __dealloc__(nbfile self):
+    # TODO(pts): SUXX: __dealloc__ is not allowed to call close() or flush()
+    #            (too late, see Pyrex docs), __del__ is not special
+    def __dealloc__(nbsslsocket self):
         self.close()
 
     def close(nbsslsocket self):
-        self.sslsock.close()
-        self.sslobj = self.sslsock._sslobj
+        """Incompatible with SSLSocket.close: just drops the references."""
+        self.swi.fd = -1
+        if self.sslsock:
+          self.sslsock.close()  # This sets self.sslsock._sslobj = None
+        self.sslobj = self.realsock = self.sslsock = None
+        # Compatibility: self.sslobj = self.sslsock._sslobj
 
     property type:
         def __get__(self):
@@ -2287,12 +2306,12 @@ cdef class nbsslsocket:
         while 1:
             try:
                 return self.sslobj.read(len)
-            except SSLError, e:
-                if e.errno == SSL_ERROR_WANT_READ:
+            except c_SSLError, e:
+                if e.errno == c_SSL_ERROR_WANT_READ:
                     coio_c_handle_eagain(&self.swi, c_EV_READ)
-                elif e.errno == SSL_ERROR_WANT_WRITE:
+                elif e.errno == c_SSL_ERROR_WANT_WRITE:
                     coio_c_handle_eagain(&self.swi, c_EV_WRITE)
-                elif (e.errno == SSL_ERROR_EOF and
+                elif (e.errno == c_SSL_ERROR_EOF and
                       self.sslsock.suppress_ragged_eofs):
                     return ''
                 else:
@@ -2303,10 +2322,10 @@ cdef class nbsslsocket:
         while 1:
             try:
                 return self.sslobj.write(data)
-            except SSLError, e:
-                if e.errno == SSL_ERROR_WANT_READ:
+            except c_SSLError, e:
+                if e.errno == c_SSL_ERROR_WANT_READ:
                     coio_c_handle_eagain(&self.swi, c_EV_READ)
-                elif e.errno == SSL_ERROR_WANT_WRITE:
+                elif e.errno == c_SSL_ERROR_WANT_WRITE:
                     coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                 else:
                     raise
@@ -2348,7 +2367,7 @@ cdef class nbsslsocket:
                 # Workaround for Linux 2.6.31-20 for the delayed non-blocking
                 # select() problem.
                 # http://stackoverflow.com/questions/2708738/why-is-a-non-blocking-tcp-connect-occasionally-so-slow-on-linux
-                if self.c_family == AF_INET:
+                if self.realsock.family == AF_INET:
                     tv.tv_sec = 0
                     tv.tv_usec = connect_magic_usec
                     os_select(0, NULL, NULL, NULL, &tv)
@@ -2381,7 +2400,7 @@ cdef class nbsslsocket:
             self.connect(address)
         except socket_error, e:
             return e.args[0]
-        except ssl.SSLError, e:
+        except c_SSLError, e:
             return -800 - e.errno  # TODO(pts): Better reporting
         return 0
 
@@ -2413,10 +2432,10 @@ cdef class nbsslsocket:
             try:
                 self.sslobj.do_handshake()
                 return
-            except SSLError, e:
-                if e.errno == SSL_ERROR_WANT_READ:
+            except c_SSLError, e:
+                if e.errno == c_SSL_ERROR_WANT_READ:
                     coio_c_handle_eagain(&self.swi, c_EV_READ)
-                elif e.errno == SSL_ERROR_WANT_WRITE:
+                elif e.errno == c_SSL_ERROR_WANT_WRITE:
                     coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                 else:
                     raise
@@ -2442,12 +2461,12 @@ cdef class nbsslsocket:
             while 1:
                 try:
                     return self.sslobj.read(buflen)
-                except SSLError, e:
-                    if e.errno == SSL_ERROR_WANT_READ:
+                except c_SSLError, e:
+                    if e.errno == c_SSL_ERROR_WANT_READ:
                         coio_c_handle_eagain(&self.swi, c_EV_READ)
-                    elif e.errno == SSL_ERROR_WANT_WRITE:
+                    elif e.errno == c_SSL_ERROR_WANT_WRITE:
                         coio_c_handle_eagain(&self.swi, c_EV_WRITE)
-                    elif (e.errno == SSL_ERROR_EOF and
+                    elif (e.errno == c_SSL_ERROR_EOF and
                           self.sslsock.suppress_ragged_eofs):
                         return ''
                     else:
@@ -2460,9 +2479,35 @@ cdef class nbsslsocket:
         return coio_c_socket_call(self.realsock.recvfrom, args,
                                   &self.swi, c_EV_READ)
 
-    def recv_into(nbsslsocket self, *args):
-        raise NotImplementedError  # !!
-        return coio_c_socket_call(self.realsock.recv_into, args,
+    def recv_into(nbsslsocket self, buf, nbytes=None, flags=0):
+        if self.sslobj:
+            if flags:
+                raise ValueError(
+                    'flags=0 expected for recv on ' + str(self.__class__))
+            if not nbytes:
+                # ssl.SSLScoket.recv_into sets nbytes to 1024 if the buffer
+                # is false. How can a buffer be false (and still extensible)?
+                nbytes = len(buffer)
+            if nbytes > 65536:  # Don't preallocate too much below.
+                nbytes = 65536
+            while 1:
+                try:
+                    # TODO(pts): Does self.sslobj have a readinto method?
+                    data = self.sslobj.read(nbytes)
+                except c_SSLError, e:
+                    if e.errno == c_SSL_ERROR_WANT_READ:
+                        coio_c_handle_eagain(&self.swi, c_EV_READ)
+                    elif e.errno == c_SSL_ERROR_WANT_WRITE:
+                        coio_c_handle_eagain(&self.swi, c_EV_WRITE)
+                    elif (e.errno == c_SSL_ERROR_EOF and
+                          self.sslsock.suppress_ragged_eofs):
+                        return ''
+                    else:
+                        raise
+                buf[:len(data)] = data
+                return len(data)
+        return coio_c_socket_call(self.realsock.recv_into,
+                                  (buf, nbytes or 0, flags),
                                   &self.swi, c_EV_READ)
 
     def recvfrom_into(nbsslsocket self, *args):
@@ -2478,10 +2523,10 @@ cdef class nbsslsocket:
             while 1:
                 try:
                     return self.sslobj.write(data)
-                except SSLError, e:
-                    if e.errno == SSL_ERROR_WANT_READ:
+                except c_SSLError, e:
+                    if e.errno == c_SSL_ERROR_WANT_READ:
                         coio_c_handle_eagain(&self.swi, c_EV_READ)
-                    elif e.errno == SSL_ERROR_WANT_WRITE:
+                    elif e.errno == c_SSL_ERROR_WANT_WRITE:
                         coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                     else:
                         raise
@@ -2508,10 +2553,10 @@ cdef class nbsslsocket:
                     try:
                         got2 = 0  # Pacify gcc warning.
                         got2 = self.sslobj.write(buf)
-                    except SSLError, e:
-                        if e.errno == SSL_ERROR_WANT_READ:
+                    except c_SSLError, e:
+                        if e.errno == c_SSL_ERROR_WANT_READ:
                             coio_c_handle_eagain(&self.swi, c_EV_READ)
-                        elif e.errno == SSL_ERROR_WANT_WRITE:
+                        elif e.errno == c_SSL_ERROR_WANT_WRITE:
                             coio_c_handle_eagain(&self.swi, c_EV_WRITE)
                         else:
                             raise
@@ -2537,23 +2582,56 @@ cdef class nbsslsocket:
                 # we create a new one.
                 buf = buffer(data, got)
 
-    def makefile(nbsslsocket self, mode='r+', int bufsize=-1):
+    def makefile_samefd(nbsslsocket self, mode='r+', int bufsize=-1):
+        """Create and return an nbfile with self.swi.fd.
+
+        The nbfile will be buffered, and its close method won't close any
+        filehandles (especially not self.swi.fd).
+
+        This method is not part of normal sockets.
+
+        Both the returned nbfile and this nbsslsocket will see the decrypted
+        data.
+        """
+        return nbfile(self.swi.fd, self.swi.fd, bufsize, bufsize,
+                      do_set_fd_nonblocking=0, sslobj=self.sslobj,
+                      timeout_double=self.swi.timeout_value)
+
+    def makefile(nbsslsocket self, mode='r', int bufsize=-1):
         """Create an nbfile (non-blocking file-like) object from self.
 
-        os.dup(self.swi.fd) will be passed to the new nbfile object, and its
-        .close() method will close that file descriptor.
+        The .close() method of the returned nbfile will close a different
+        file descriptor than the .close() method of this nbsslsocket _after_
+        this function returns.
 
-        As of now, the returned file object is slow (uses a pure Python
-        implementation of socket._fileobject).
+        Due to implementation quirks, nbsslsocket.makefile behaves a bit
+        funnily: TODO(pts): Document this in the README.
+
+        * The original nbsslsocket (self) loses its SSL property: attempts
+          to .send() and .recv() from it will see the encrypted byte stream.
+          (This is because it's impossible to change the fileno of
+          self.sslobj.)
+        * The .fileno() of the original nbsslsocket (self) is changed, and the
+          returned nbfile gets the original fileno.
+
+        To avoid this funniness, use self.makefile_samefd() instead.
 
         Args:
-          mode: 'r', 'w', 'r+' etc. The default is mode'r', just as for
+          mode: 'r', 'w', 'r+' etc. The default is mode 'r', just as for
             socket.socket.makefile.
         """
-        # !! TODO(pts): Implement .makefile_samefd() using our fast buffering
-        # (something similar to nbfile).
-        self.sslsock._makefile_refs += 1
-        return socket._fileobject(self, mode, bufsize, close=True)
+        cdef int fd
+        realsock = self.realsock.dup()
+        sslobj = self.sslobj
+        fd = self.swi.fd
+        self.sslsock._sock = self.realsock = self.realsock.dup()
+        self.sslobj = self.sslsock._sslobj = None
+        self.swi.fd = self.realsock.fileno()
+        # do_close=0, because sslobj forcibly closes when there are no more
+        # references.
+        return nbfile(fd, fd, bufsize, bufsize, do_close=0,
+                      do_set_fd_nonblocking=0, sslobj=sslobj,
+                      timeout_double=self.swi.timeout_value)
 
 if ssl:
     _fake_ssl_globals = {'SSLSocket': nbsslsocket}
@@ -2677,7 +2755,7 @@ cdef class selecter:
     #    self.readable_fds = None  # Automatic.
     #    self.writeable_fds = None  # Automatic.
 
-    def __destroy__(selecter self):
+    def __dealloc__(selecter self):
         if self.wakeup_evs != NULL:
             PyMem_Free(self.wakeup_evs)
 
@@ -2838,7 +2916,7 @@ cdef class wakeup_info_event:
         Py_DECREF(self)
         self.wakeup_info_obj = None
 
-    # No need for `def __destroy__', Py_INCREF(self) above ensures that the
+    # No need for `def __dealloc__', Py_INCREF(self) above ensures that the
     # object is not auto-destroyed.
 
 
