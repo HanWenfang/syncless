@@ -1,0 +1,386 @@
+# other relevant comparison: http://nichol.as/asynchronous-servers-in-python
+#    2009-11-22
+#    left out from here, but present there:
+#    Circuits (event-driven)
+#    Orbited, DieselWeb, MultiTask, Chiral, FriendlyFlow, Weightless,
+#    Fibra, Cogen (generator-based)
+#
+# This is a feature comparison. Some claims are made about performance, but it
+# was not measured here.
+
+pure Python: can work without compiling C code
+  Concurrence: no
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: yes
+  gevent: no
+  Syncless: no
+pure Python: runs at full speed without compiling C code
+  Concurrence: no
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: yes
+  gevent: no
+  Syncless: no
+standard module in Python 2.6
+  Concurrence: no
+  Eventlet: no
+  Tornado: no
+  Twisted: no
+  asyncore: yes
+  gevent: no
+  Syncless: no
+has asynchronous DNS resolver
+  Concurrence: no
+  Eventlet: yes, thread pool or Twisted
+  Tornado: no
+  Twisted: yes, built-in
+  asyncore: no
+  gevent: yes, evdns
+  Syncless: yes, evdns or its equivalents: minihdns or evhdns
+supports running other tasklets while DNS resolving is in progress
+  Concurrence: no
+  Eventlet: yes
+  Tornado: no
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+has fully asynchronous and scalable DNS resolver
+  Concurrence: no
+  Eventlet: yes, if Twisted is available
+  Tornado: no
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+supports timeouts on individual socket send() and recv() operations
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: no
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+has WSGI server
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+can work with CherryPy's WSGI server
+  Concurrence: no
+  Eventlet: no
+  Tornado: no
+  Twisted: no
+  asyncore: no
+  gevent: no
+  Syncless: yes
+can run web frameworks using non-WSGI connectors
+  Concurrence: no
+  Eventlet: yes, BaseHTTPServer
+  Tornado: no
+  Twisted: no
+  asyncore: no
+  gevent: no
+  Syncless: yes++, BaseHTTPServer, CherryPy, web.py, Google webapp
+runs with Stackless Python
+  Concurrence: yes
+  Eventlet: yes--, has partial, incomplete and incomatible greenlet emulation
+  Tornado: yes, event-driven
+  Twisted: yes, event-driven
+  asyncore: yes, event-driven
+  gevent: no
+  Syncless: yes
+runs with greenlet
+  Concurrence: yes--, has partial and incompatible Stackless Python emulation
+  Eventlet: yes
+  Tornado: yes, event-driven
+  Twisted: yes, event-driven
+  asyncore: yes, event-driven
+  gevent: yes
+  Syncless: yes
+has fast non-blocking socket class implemented in C or Pyrex
+  Concurrence: no
+  Eventlet: no
+  Tornado: no
+  Twisted: no
+  asyncore: no
+  gevent: no
+  Syncless: yes
+has fast read and write buffer code implemented in C or Pyrex
+  Concurrence: yes
+  Eventlet: no
+  Tornado: no
+  Twisted: no
+  asyncore: no
+  gevent: yes, evbuffer
+  Syncless: yes
+uses fast (C or Pyrex) buffer code for its socket.socket.makefile()
+  Concurrence: yes
+  Eventlet: no
+  Tornado: no
+  Twisted: no
+  asyncore: no
+  gevent: no
+  Syncless: yes
+uses fast (C or Pyrex) buffer code for its ssl.SSLSocket.makefile()
+  Concurrence: no, no SSL support
+  Eventlet: no
+  Tornado: no
+  Twisted: no
+  asyncore: no
+  gevent: no
+  Syncless: yes
+has SSL support
+  Concurrence: no
+  Eventlet: yes
+  Tornado: no
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+has monkey-patchig for socket.socket and other blocking I/O operations
+  Concurrence: no
+  Eventlet: yes
+  Tornado: no, event-driven
+  Twisted: no, event-driven
+  asyncore: no, event-driven
+  gevent: yes
+  Syncless: yes
+prints and recovers from an uncaught exception
+  Concurrence: yes, in the Tasklet class
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: yes
+  gevent: yes
+  Syncless: no, the process exits
+can use libevent
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: no
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+can use the libevent emulation of libev
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: no
+  Twisted: yes
+  asyncore: no
+  gevent: no, needs evdns
+  Syncless: yes
+works without libevent or an emulation installed
+  Concurrence: no
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: yes
+  gevent: no
+  Syncless: yes
+avoids C stack copying (which is slower than soft switching)
+  Concurrence: no
+  Eventlet: no, uses greenlet
+  Tornado: yes, event-driven
+  Twisted: yes, event-driven
+  asyncore: yes, event-driven
+  gevent: no, uses greenlet
+  Syncless: no, calls stackless.schedule() from C code
+can use a high performance event notification primitive (e.g. epoll on Linux)
+  Concurrence: yes, uses libevent
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: no, but uses poll and epoll could be added asily
+  gevent: yes, uses libevent
+  Syncless: yes, can use libev or libevent
+nichol.as: What license does the framework have?
+  Concurrence: yes, MIT
+  Eventlet: yes, MIT
+  Tornado: yes, Apache
+  Twisted: yes, MIT
+  asyncore: yes, MIT
+  gevent: yes, MIT
+  Syncless: yes, Apache License, Version 2.0
+nichol.as: Does it provide documentation?
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes--, README and docstrings
+nichol.as: Does the documentation contain examples?
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+nichol.as: Is it used in production somewhere?
+  Concurrence: yes, Hyves.nl (a Dutch social networking site)
+  Eventlet: yes, Second Life (a virtual reality game)
+  Tornado: yes, FriendFeed (a social networking site)
+  Twisted: yes
+  asyncore: no
+  gevent: no
+  Syncless: no
+nichol.as: Does it have some sort of community (mailinglist, irc, etc..)?
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: yes++, huge
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: no
+nichol.as: Is there any recent activity?
+  Concurrence: no, not since 2009-11-19
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+nichol.as: Does it have a blog (from the owner)?
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: yes, at facebook
+  Twisted: yes++, lots
+  asyncore: no
+  gevent: yes
+  Syncless: yes--, the author writes Syncless-related stuff to his blog
+nichol.as: Does it have a Twitter account?
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes--, the author writes Syncless-related stuff to his blog
+nichol.as: Where can I find the repository? (without links)
+  Concurrence: yes, GIT on github
+  Eventlet: yes, Mercurial on bitbucket
+  Tornado: yes, GIT on github
+  Twisted: yes, in its own Subversion + Trac repository
+  asyncore: yes, in Python's Subversion
+  gevent: yes, Mercurial on bitbuckig
+  Syncless: yes, Subversion on Google Code
+nichol.as: Does it have a thread pool?
+  Concurrence: no
+  Eventlet: yes
+  Tornado: no
+  Twisted: yes
+  asyncore: no
+  gevent: no
+  Syncless: no
+nichol.as: Does it it provide a HTTP server for WSGI applications?
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: yes--, limited
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+nichol.as: Does it provide access to a TCP Socket?
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: yes
+  gevent: yes
+  Syncless: yes
+nichol.as: Does it have any Comet features?
+  Concurrence: no
+  Eventlet: no
+  Tornado: no
+  Twisted: no
+  asyncore: no
+  gevent: no
+  Syncless: no
+nichol.as: Is it using epoll, if available?
+  Concurrence: yes, uses libevent
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: no, but uses poll and epoll could be added asily
+  gevent: yes, uses libevent
+  Syncless: yes, can use libev or libevent
+nichol.as: Does it have unit tests?
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: no
+  Twisted: yes
+  asyncore: yes
+  gevent: yes
+  Syncless: yes
+provides generic timeout for any block of code
+  Concurrence: yes
+  Eventlet: yes
+  Tornado: yes
+  Twisted: no
+  asyncore: no
+  gevent: yes
+  Syncless: yes
+provides synchronization primitives (e.g. semaphore, codition variable)
+  Concurrence: yes--, provides queues
+  Eventlet: yes
+  Tornado: no
+  Twisted: yes
+  asyncore: no
+  gevent: yes
+  Syncless: no
+lets the programmer control event delivery order (e.g. with priorities)
+  Concurrence: no
+  Eventlet: no
+  Tornado: no
+  Twisted: no
+  asyncore: no
+  gevent: no
+  Syncless: no
+provides callbacks (links) when some work is finished
+  Concurrence: no
+  Eventlet: yes
+  Tornado: yes, event-driven
+  Twisted: yes, event-driven
+  asyncore: yes, event-driven
+  gevent: yes
+  Syncless: no
+has a high-level, comprehensive, consistent network programming framework
+  Concurrence: no
+  Eventlet: yes
+  Tornado: yes--, not comprehensive
+  Twisted: yes
+  asyncore: no, low-level
+  gevent: yes--, not comprehensive
+  Syncless: no
+has non-blocking select.select() implementation
+  Concurrence: no
+  Eventlet: yes
+  Tornado: no, event-driven
+  Twisted: no, event-driven
+  asyncore: no, event-driven
+  gevent: yes
+  Syncless: yes
+implements some application-level protocols beyond HTTP, WSGI and DNS
+  Concurrence: yes, MySQL client
+  Eventlet: no++, Python console backdoor, can monkey-patch external modules
+  Tornado: yes, storage server compatible with Amazon S3
+  Twisted: yes++, tons of protocols
+  asyncore: no
+  gevent: no++, Python console backdoor, can monkey-patch external modules
+  Syncless: no++, can monkey-patch external modules
+compatible with other non-blocking systems in the same process
+  Concurrence: no, not by default
+  Eventlet: yes, has Twisted reactor
+  Tornado: no, not by default
+  Twisted: yes++, many including Gtk and Qt
+  asyncore: no, not by default
+  gevent: no, not by default
+  Syncless: yes++, has monkey-patching for Concurrence, Eventlet, Tornado, Twisted, asyncore and gevent

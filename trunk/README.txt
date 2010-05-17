@@ -44,8 +44,8 @@ Features
   BaseHTTPRequestHandler + BaseHTTPServer applications, CherryPy
   applications, web.py applications, and Google webapp applications (not
   supporting most other Google AppEngine technologies) as well
-* combination of Syncless and (Twisted, Tornado (fast), Concurrence, gevent
-  and/or asyncore) in the same process
+* combination of Syncless and (Twisted, Tornado (fast), Concurrence, gevent,
+  Eventlet and/or asyncore) in the same process
 
 Requirements
 ~~~~~~~~~~~~
@@ -1064,5 +1064,6 @@ Planned features
   and history.
 * TODO(pts): Fix very small float sleep value for libev.
 * TODO(pts): Add more protocol parsing examples.
+* TODO(pts): Add proper doucmentation as .rst.
 
 __EOF__
