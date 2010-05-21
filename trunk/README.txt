@@ -440,17 +440,27 @@ Q1. I have created quite a few tasklets, put them into the runnables list.
     How do I make my program run until there are no tasklets? Currently my
     the process exists as soon as the main tasklet returns.
 
-A1. It's impossible to do that since Syncless has migrated from libevent to
-    libev. The rest of the answer documents the old, now obsolete behavior.
+A1. It's impossible to do that reliably if you are using Syncless with
+    libev, or you have done any DNS lookups (e.g. with coio.gethostbyname)
+    not from /etc/hosts. In those cases your program will hang indefinitely
+    even after all the tasklets have finished running. To avoid that, and
+    make your program exit, you have to call sys.exit() explicitly from one
+    of your tasklets before it finishes.
 
-    OBSOLETE. Call `stackless.schedule_remove()' at the end of your main tasklet code.
+    It is still a recommended practice to call `stackless.schedule_remove()'
+    from the main tasklet if it has nothing useful to do, because it has
+    created other tasklets to do all the work. Calling
+    `stackless.schedule_remove()' at the end of the main tasklet is a faster
+    equivalent of doing `while True: coio.sleep(1000)'.
 
-    OBSOLETE. This would make your program run while there are tasklets on
-    the runnables list, or some tasklets are blocked on Syncless I/O.
-
-    Unfortunately this doesn't work (your program will run forever) if it
-    has done any DNS lookups (like with coio.gethostbyname), because evdns
-    registers and keeps additional event handlers.
+    Please don't do `while True: stackless.run()' or `while stackless.run():
+    pass' or `while True: stackless.schedule()' from any of your tasklets,
+    because those interfere with the main loop tasklet installed by
+    Syncless, and they will make your process use 100% CPU even if there is
+    no work to do, because stackless.run() and stackless.schedule() would
+    activate the main loop tasklet, which also calls stackless.schedule() in
+    its `while loop' in this case, so the previous tasklet gets activated,
+    and this loops forever, burning CPU.
 
 Q2. What is the `.scheduled' value for tasklets blocked on Syncless I/O?
 
