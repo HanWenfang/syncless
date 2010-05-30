@@ -2901,6 +2901,12 @@ def select(rlist, wlist, xlist, timeout=None):
     # TODO(pts): Simplify if len(rlist) == 1 and wlist is empty (etc.).
     return selecter().do_select(rlist, wlist, timeout)
 
+
+def select_ignorexlist(rlist, wlist, xlist, timeout=None):
+    """Like select, but tread xlist as empty."""
+    return selecter().do_select(rlist, wlist, timeout)
+
+
 # --- Twisted 10.0.0 syncless.reactor and Tornado support classes
 
 cdef class wakeup_info

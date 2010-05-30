@@ -45,7 +45,7 @@ Features
   applications, web.py applications, and Google webapp applications (not
   supporting most other Google AppEngine technologies) as well
 * combination of Syncless and (Twisted, Tornado (fast), Concurrence, gevent,
-  Eventlet and/or asyncore) in the same process
+  Eventlet, circuits and/or asyncore) in the same process
 * a thread pool class for wrapping blocking operations
 
 Requirements
@@ -308,6 +308,7 @@ Related projects
 * python-libevent (uses callbacks instead of coroutines)
 * Twisted (uses callbacks instead of coroutines)
 * Tornado (uses callbacks instead of coroutines)
+* circuits (uses callbacks instead of coroutines)
 
 Feature design of the new event loop (syncless.coio)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -666,7 +667,7 @@ A11. Not at the moment, since the main event loop of these GUI frameworks doesn'
      to make Syncless support these main event loops instead of libevent.
 
 Q12. Is it possible to use stacklessocket, asyncore, pyevent,
-     python-libevent, Tornado, Twisted or another event-driven network
+     python-libevent, Tornado, Twisted, circuits or another event-driven network
      library with Syncless?
 
 A12. Tornado (with its own main loop) is already supported with
@@ -682,8 +683,13 @@ A12. Tornado (with its own main loop) is already supported with
      timed event handling, some developers don't like its error handling
      design, and it's slow.
 
-     Adding support for Twisted would be possible, fun and interesting.
-     Adding asyncore would be possible and fun.
+     circuits (with its own main loop) is already supported with
+     patch.patch_circuits(). See also examples/demo_circuits.py . Please
+     note that the patch is a bit slow (it emualtes select.select()), but
+     that seemed to be the most stable way to get it working.
+
+     Twisted (with a custom reactor) is already supported with
+     syncless.reactor. See also examples/demo_twisted.py.
 
      Adding pyevent or python-libevent may become complicated because of the
      multiple libevent-based I/O loops. (Most importantly: the Syncless main
@@ -962,12 +968,12 @@ Q26. Can I use other non-blocking network libraries in the same process
      which runs Syncless?
 
 A26. Syncless supports the following libraries out-of-the-box with monkey
-     patching: gevent, Eventlet, Concurrence, Twisted, Tornado and asyncore.
-     See Q12 and Q13 for more details how to enable them. Please note that
-     there is no direct synchronization support between Syncless and the
-     other library, i.e. there is no way for a tasklet managed by a library
-     to notify a tasklet managed by another library that computation results
-     are available.
+     patching: gevent, Eventlet, Concurrence, Twisted, Tornado, circuits and
+     asyncore. See Q12 and Q13 for more details how to enable them. Please
+     note that there is no direct synchronization support between Syncless
+     and the other library, i.e. there is no way for a tasklet managed by a
+     library to notify a tasklet managed by another library that computation
+     results are available.
 
      If you want to run a web framework supporting WSGI, run its WSGI
      application function/class directly with syncless.wsgi instead.

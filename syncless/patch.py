@@ -138,6 +138,7 @@ def patch_asyncore():
 
 
 def patch_tornado():
+  """Patch Tornado 0.2."""
   from syncless import coio
   import tornado.ioloop
 
@@ -172,6 +173,39 @@ def patch_tornado():
       return self.wakeup_info.tick_and_move(timeout)
 
   tornado.ioloop._poll = TornadoSynclessPoll
+
+
+def patch_circuits():
+  """Patch circuits 2010-05-16.
+
+  This patch has been tested with the changeset 1917:4a299eadc54d, the
+  2010-05-16 version of the Mercurial repository of circuits.
+
+  The implementation could be made faster by using coio.wakeup_info instead
+  of coio.select_ignorexlist, but the source code of circuits.net.pollers
+  doesn't indicate that anything other than select() is stable.
+
+  This patch has to be called before the first circuits Client or Server gets
+  created. (This property is unchecked.)
+
+  See the file examples/demo_circuits.py for an example.
+  """
+  from syncless import coio
+  from circuits.net import sockets
+  from circuits.net import pollers
+  Select = pollers.Select
+  _Poller = pollers._Poller
+  sockets.DefaultPoller = Select
+  pollers.select = coio.select_ignorexlist
+  for name in dir(pollers):
+    value = getattr(pollers, name)
+    if (isinstance(value, type) and issubclass(value, _Poller) and
+        value is not _Poller and value is not Select):
+      # Remove EPoll and Poll.
+      delattr(pollers, name)
+    if name.startswith('HAS_') and isinstance(value, int):
+      # HAS_POLL = 0; HAS_EPOLL = 0
+      setattr(pollers, name, 0)
 
 
 def patch_concurrence():
