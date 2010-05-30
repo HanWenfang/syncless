@@ -383,4 +383,4 @@ compatible with other non-blocking systems in the same process
   Twisted: yes++, many including Gtk and Qt
   asyncore: no, not by default
   gevent: no, not by default
-  Syncless: yes++, has monkey-patching for Concurrence, Eventlet, Tornado, Twisted, asyncore and gevent
+  Syncless: yes++, has monkey-patching for Concurrence, Eventlet, Tornado, Twisted, gevent, circuits and asyncore
