@@ -17,12 +17,13 @@ elif coio_event_init() != 0:
   raise OSError(EIO, 'event_init failed')
 
 _setup_sigint()
+_setup_sigusr2()
 
 # Don't publish it, as a safety for read-only.
 cdef tasklet main_loop_tasklet
 def get_main_loop_tasklet():
   return main_loop_tasklet
-main_loop_tasklet = stackless.tasklet(MainLoop)()
+main_loop_tasklet = stackless.tasklet(_main_loop)()
 
 try:
   read_etc_hosts()

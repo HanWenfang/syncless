@@ -279,7 +279,7 @@ nichol.as: Does it have a thread pool?
   Twisted: yes
   asyncore: no
   gevent: no
-  Syncless: no
+  Syncless: yes--, not tested in production
 nichol.as: Does it provide a HTTP server for WSGI applications?
   Concurrence: yes
   Eventlet: yes

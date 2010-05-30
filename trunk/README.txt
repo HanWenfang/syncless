@@ -46,6 +46,7 @@ Features
   supporting most other Google AppEngine technologies) as well
 * combination of Syncless and (Twisted, Tornado (fast), Concurrence, gevent,
   Eventlet and/or asyncore) in the same process
+* a thread pool class for wrapping blocking operations
 
 Requirements
 ~~~~~~~~~~~~
@@ -977,6 +978,32 @@ A26. Syncless supports the following libraries out-of-the-box with monkey
      Otherwise, the library most probably won't work with Syncless in the
      same process. Most probably either Syncless I/O will make progress, and
      the other library's I/O will be stalled, or the other way round.
+
+Q27. Syncless is compatible with lots of other libraries. Is it possible to
+     remove the compatibility features so my program which doesn't use
+     them becomes faster?
+
+A27. The compatibility features are separated properly in the Syncless code
+     base, and they are disabled with no performance impact if not used. By
+     removing those features all you'd gain is a few milliseconds of startup
+     time because the syncless.patch and syncless.coio modules would become
+     smaller.
+
+Q28. Does Syncless has a thread pool for wrapping blocking operations?
+
+A28. Yes, see the coio.thread_pool class and the corresponding examples in
+     examples/demo_thread_pool*.py.
+
+     In your production code, please try to avoid a thread pool, and revert
+     to it if there is no other feasible solution, because the thread pool
+     needs more memory and CPU than coroutines (tasklets), so you might lose
+     most performance advantages of Syncless (over threads) if you use the
+     thread pool. For example, please use a non-blocking MySQL client (see
+     elsewhere in the README) instead of calling the methods of
+     libmysqlclient in a thread pool.
+
+     Please note that coio.thread_pool has not been probed for performance
+     yet.
 
 Links
 ~~~~~

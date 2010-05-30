@@ -5,6 +5,8 @@
  *
  */
 
+void coio_c_nop(void) {}
+
 /* --- Event pool */
 
 /** Not 16384 to give some space for malloc's linked list headers. */
@@ -548,4 +550,33 @@ static inline int coio_c_writeall(
     } while (n > 0);
   }
   return 0;
+}
+
+/* --- Wrapping exceptions */
+
+static inline PyObject *coio_c_call_wrap_bomb(PyObject *function,
+                                              PyObject *args,
+                                              PyObject *kwargs,
+                                              PyObject *bomb_class) {
+  PyObject *retval = PyObject_Call(function, args, kwargs);
+  PyObject *ptype, *pvalue, *ptraceback, *bomb_args;
+  if (retval != NULL)
+    return retval;
+  PyErr_Fetch(&ptype, &pvalue, &ptraceback);
+
+  /* No need to set ptraceback = ptraceback.tb_next, since
+   * coio_c_call_wrap_bomb is a C function (in contrast to Pyrex), so we
+   * have no Python frame to get rid of here.
+   */
+  bomb_args = PyTuple_New(3);
+  if (bomb_args == NULL) {
+    Py_XDECREF(ptype); Py_XDECREF(pvalue); Py_XDECREF(ptraceback);
+    return NULL;
+  }
+  PyTuple_SET_ITEM(bomb_args, 0, ptype);  /* Transfer ownership of ptype. */
+  PyTuple_SET_ITEM(bomb_args, 1, pvalue);
+  PyTuple_SET_ITEM(bomb_args, 2, ptraceback);
+  retval = PyObject_CallObject(bomb_class, bomb_args);
+  Py_DECREF(bomb_args);
+  return retval;
 }
