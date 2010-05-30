@@ -64,7 +64,7 @@ def main(argv):
     aspects[-1][1][subject] = (evaluation, evalclass)
   for aspect, evaluations in aspects:
     missing_subjects = subjects_set.difference(evaluations)
-    assert not missing_subjects, (aspect, missing)
+    assert not missing_subjects, (aspect, missing_subjects)
     # Verify that there are no HTML-unquoted &s.
     assert ('&' not in aspect or 
             '&' not in re.sub(r'&#?[-a-z0-9]+;', '', aspect)), aspect
@@ -111,6 +111,8 @@ def main(argv):
     output.append('<p>Comments:\n')
     i = 1
     for comment in comments:
+      comment = re.sub(r'(https?://[^"\s!,;]+)', '<a href="\\1">[link]</a>',
+                       comment)
       output.append('<br><a name="comment%s"><b>%s)</b></a> %s\n' % (i, i, comment))
       i += 1
   f = open(output_filename, 'w')

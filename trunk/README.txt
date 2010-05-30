@@ -1108,5 +1108,7 @@ Planned features
 * TODO(pts): Fix very small float sleep value for libev.
 * TODO(pts): Add more protocol parsing examples.
 * TODO(pts): Add proper doucmentation as .rst.
+* TODO(pts): Get ideas from
+  http://code.google.com/p/gevent/wiki/ProjectsUsingGevent
 
 __EOF__
