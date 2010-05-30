@@ -118,6 +118,9 @@ cdef extern from "fcntl.h":
     int F_SETFL
 cdef extern from "signal.h":
     int SIGINT
+    int SIGUSR2
+    int kill(int pid, int signum)
+    int getpid()
 cdef extern from "sys/socket.h":
     int AF_INET6
     int AF_INET
@@ -289,6 +292,9 @@ cdef extern from "./coio_c_helper.h":
     int c_SSL_ERROR_WANT_READ "coio_c_SSL_ERROR_WANT_READ"
     int c_SSL_ERROR_WANT_WITE "coio_c_SSL_ERROR_WANT_WRITE"
     int c_SSL_ERROR_EOF "coio_c_SSL_ERROR_EOF"
+    void coio_c_nop()
+    object coio_c_call_wrap_bomb(object function, object args, object kwargs,
+                                 object bomb_class)
 
 # --- Low-level event functions
 
@@ -438,7 +444,19 @@ def set_fd_blocking(int fd, is_blocking):
 
 # --- The main loop
 
-def MainLoop():
+# Is the main loop waiting for events to happen, not continuing until at an
+# event happens?
+cdef char is_main_loop_waiting
+is_main_loop_waiting = 0
+
+def cancel_main_loop_wait():
+    """Cancel the waiting for events to happen in the main loop."""
+    if is_main_loop_waiting:
+        kill(getpid(), SIGUSR2)
+
+# A cdef wouldn't work here, because we call `stackless.tasklet(_main_loop)'.
+def _main_loop():
+    global is_main_loop_waiting
     #cdef PyTaskletObject *pprev
     #cdef PyTaskletObject *pnext
     cdef int loop_retval
@@ -487,8 +505,10 @@ def MainLoop():
             Py_DECREF(<object>p)
         else:
             # Block, wait for events once, without timeout.
+            is_main_loop_waiting = 1
             with nogil:
                 loop_retval = event_loop(EVLOOP_ONCE)
+            is_main_loop_waiting = 0
             if loop_retval:
                 # No events registered, and no tasklets in the queue. This
                 # means that nothing more can happen in this program. By
@@ -529,6 +549,24 @@ cdef void _setup_sigint():
     # This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
     # gets control) a KeyboardInterrupt in the main tasklet.
     event_add(&sigint_ev, NULL)
+
+
+cdef void HandleCSigUsr2(int fd, short evtype, void *arg):
+    pass
+
+
+cdef event_t sigusr2_ev
+sigusr2_ev.ev_flags = 0
+
+# Set up a null handler for SIGUSR2 so cancel_main_loop_wait() can send this
+# signal.
+cdef void _setup_sigusr2():
+    event_set(&sigusr2_ev, SIGUSR2, c_EV_SIGNAL | c_EV_PERSIST,
+              <event_handler>coio_c_nop, NULL)
+    # Make loop() exit immediately of only EVLIST_INTERNAL events
+    # were added. Add EVLIST_INTERNAL after event_set.
+    sigusr2_ev.ev_flags |= EVLIST_INTERNAL
+    event_add(&sigusr2_ev, NULL)
 
 # The token in waiting_tasklet.tempval to signify that the event-waiting is
 # pending. This token is intentionally not exported to Python code, so they
@@ -3164,3 +3202,122 @@ cdef class concurrence_event:
 
     def __repr__(self):
         return '<event flags=0x%x, callback=%s' % (self.ev.ev_flags, self.callback)
+
+
+# --- Thread pool
+
+def _thread_worker_function(result_channel, start_lock, list call_info):
+    """Function which runs forever in a thread."""
+    while True:
+        start_lock.acquire()
+        function, args, kwargs = call_info
+        del call_info[:]
+        # We need a wrapper, because sys.exc_info() doesn't work in Pyrex
+        # (returns None in Pyrex 0.9.9) and `except BaseException, e, tb'
+        # doesn't work in Cython.
+        retval = coio_c_call_wrap_bomb(function, args, kwargs, bomb)
+        if result_channel.balance < 0:
+            result_channel.send(retval)  # Prefer the sender.
+            cancel_main_loop_wait()
+
+
+# Field indices of a ThreadWorkerInfo.
+cdef enum:
+    TWI_RESULT_CHANNEL = 0
+    TWI_START_LOCK = 1
+    TWI_CALL_INFO = 2
+
+
+cdef class thread_pool:
+    """A bounded thread pool of workers to run arbitrary functions.
+
+    The thread pool can be used to wrap blocking operations (such as SQLite3
+    queries) inside the non-blocking Syncless program.
+
+    The __call__ method of the thread pool runs an arbitrary function in a
+    worker thread (created with thread.start_new_thread, and retained for
+    future use), waits for the result, and returns the result (or raises the
+    corresponding exception). Other tasklets can run while the caller is
+    waiting for the result.
+
+    Please try to avoid a thread pool, and revert to it if there is no other
+    feasible solution, because the thread pool needs more memory and CPU than
+    coroutines (tasklets), so you might lose most performance advantages of
+    Syncless (over threads) if you use the thread pool. For example, please use
+    a non-blocking MySQL client (see the Syncless README) instead of calling
+    the methods of libmysqlclient in a thread pool.
+
+    See examples/demo_thread_pool*.py for example uses.
+
+    Please note that TaskletExit or SystemExit is not raised in the worker
+    threads active when the process is exiting. Those will just get aborted
+    abrouptly.
+    """
+
+    cdef int startable_count
+    cdef list available_thread_workers
+    cdef object notify_channel
+    cdef object allocate_lock
+    cdef object start_new_thread
+
+    def __cinit__(self, int max_thread_count, thread=None):
+        if thread is None:
+            thread = __import__('thread')
+        self.allocate_lock = thread.allocate_lock
+        self.start_new_thread = thread.start_new_thread
+        self.startable_count = int(max_thread_count)
+        self.available_thread_workers = []
+        # Channel to notify waiting callers that a thread_worker_info is available.
+        self.notify_channel = stackless.channel()
+        self.notify_channel.preference = 1    # Prefer the sender.
+
+    def __call__(self, function, *args, **kwargs):
+        cdef list thread_worker
+        if self.available_thread_workers:
+            thread_worker = self.available_thread_workers.pop()
+        elif self.startable_count:
+            #TWI_RESULT_CHANNEL = 0
+            #TWI_START_LOCK = 1
+            #TWI_CALL_INFO = 2
+            thread_worker = [stackless.channel(),   # TWI_RESULT_CHANNEL = 0
+                             self.allocate_lock(),  # TWI_START_LOCK = 1
+                             []]                    # TWI_CALL_INFO = 2
+            thread_worker[TWI_RESULT_CHANNEL].preference = 1    # Prefer the sender.
+            thread_worker[TWI_START_LOCK].acquire()
+            # TODO(pts): Let the user specify the thread stack size
+            # (thread.stack_size(...)).
+            self.start_new_thread(_thread_worker_function, tuple(thread_worker))
+            self.startable_count -= 1
+        else:
+            # This blocks until 
+            thread_worker = self.notify_channel.receive()
+        try:
+            assert thread_worker[TWI_START_LOCK].locked()
+            assert not thread_worker[TWI_CALL_INFO]
+            thread_worker[TWI_CALL_INFO][:] = (function, args, kwargs)
+            thread_worker[TWI_START_LOCK].release()
+            # At this point Work calls function, puts the result to thread_worker.call_info, and
+            # calls thread_worker.result_channel.release().
+            #
+            # This receive operation blocks.
+            #
+            # This might raise a bomb.
+            #
+            # This poeration happens to work even with greenstackless.
+            # TODO(pts): examples/demo_thread_pool_work.py seems to wait an
+            # extra amount above CR with greenstackless (as compared to real
+            # stackless).
+            return thread_worker[TWI_RESULT_CHANNEL].receive()
+        finally:
+            if self.available_thread_workers or self.notify_channel.balance >= 0:
+                self.available_thread_workers.append(thread_worker)
+            else:
+                self.notify_channel.send(thread_worker)
+
+import sys
+
+def Foo(f):
+  try:
+    f()
+  except:
+    print sys.exc_info()
