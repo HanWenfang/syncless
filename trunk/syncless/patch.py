@@ -53,6 +53,7 @@ def _populate_socket_module_with_coio(socket_module):
   socket_module.getnameinfo = None
   socket_module.create_connection = get_fake_create_connection()
   socket_module.socketpair = coio.socketpair
+  socket_module.ssl = coio.sslwrap_simple
   return socket_module
 
 fake_coio_socket_module = None
@@ -66,6 +67,9 @@ def get_fake_coio_socket_module():
     for name in dir(socket):
       if (name[0] in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' and
           isinstance(getattr(socket, name), int)):
+        setattr(fake_coio_socket_module, name, getattr(socket, name))
+      if name.startswith('RAND_'):
+        # RAND_Add, RAND_egd and RAND_status from the SSL module.
         setattr(fake_coio_socket_module, name, getattr(socket, name))
     _populate_socket_module_with_coio(fake_coio_socket_module)
   return fake_coio_socket_module

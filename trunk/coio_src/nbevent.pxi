@@ -2091,6 +2091,7 @@ try:
 except ImportError, e:
     sslsocket_impl = None
     ssl = None
+    # c_SSLError is None by default (set by initcoio()).
 
 
 cdef class sockwrapper:
@@ -2103,7 +2104,6 @@ cdef class sockwrapper:
     property _sock:
         def __get__(self):
             return self.c_sock
-
 
 
 # !! TODO(pts): implement all NotImplementedError
@@ -2204,7 +2204,10 @@ cdef class nbsslsocket:
         # TODO(pts): Set this in a `finally:' block.
         if timeout is not None:
             self.swi.timeout_value = timeout
-            
+
+    def get_sslobj(nbsslsocket self):
+        return self.sslobj
+
     def fileno(nbsslsocket self):
         return self.swi.fd
 
@@ -2610,6 +2613,104 @@ cdef class nbsslsocket:
                       do_set_fd_nonblocking=0, sslobj=sslobj,
                       timeout_double=self.swi.timeout_value)
 
+
+cdef class nbsslobj:
+    """Non-blocking drop-in replacement class for ssl._ssl.sslwrap(...).
+    
+    Most users need nbsslsocket instead of nbsslobj instead.
+    """
+    cdef socket_wakeup_info_s swi
+    cdef object sslobj
+
+    def __init__(nbsslobj self, sock, *args):
+        # We must disallow sslobj (isinstance(sock, ssl._ssl.SSLType)) here,
+        # because it's impossible to query the fileno and the timeout.
+        timeout = sock.gettimeout()
+        if timeout is None:
+            self.swi.timeout_value = -1.0
+        else:
+            self.swi.timeout_value = timeout
+            if self.swi.timeout_value <= 0.0:
+                self.swi.timeout_value = 0.0
+                self.swi.tv.tv_sec = 0
+                self.swi.tv.tv_usec = 1  # libev-3.9 ignores the timeout of 0
+            else:
+                self.swi.tv.tv_sec = <long>self.swi.timeout_value
+                self.swi.tv.tv_usec = <unsigned int>(
+                    (self.swi.timeout_value -
+                     <double>self.swi.tv.tv_sec) * 1000000.0)
+        self.swi.fd = sock.fileno()
+        event_set(&self.swi.read_ev,  self.swi.fd, c_EV_READ,
+                  HandleCTimeoutWakeup, NULL)
+        event_set(&self.swi.write_ev, self.swi.fd, c_EV_WRITE,
+                  HandleCTimeoutWakeup, NULL)
+
+        if hasattr(sock, 'get_sslobj') and hasattr(sock, 'makefile_samefd'):
+            # isinstance(sock, nbsslsocket)
+            self.sslobj = sock.get_sslobj()
+        else:
+            # This not only puts self.swi.fd to O_NONBLOCK, but it
+            # communicates to the to-be-created sslobj that it should return
+            # c_SSLERROR(c_SSL_ERROR_WANT_READ) etc.
+            sock.settimeout(0)
+            if hasattr(sock, '_sock'):
+                self.sslobj = ssl._ssl.sslwrap(sock._sock, *args)
+            else:
+                # isinstance(sock, socket._realsocket)
+                # isinstance(sock, socket_impl)
+                self.sslobj = ssl._ssl.sslwrap(sock, *args)
+
+    # Delegate sslobj methods which never block.
+    def cipher(nbsslobj self):
+        return self.sslobj.cipher()
+    def issuer(nbsslobj self):
+        return self.sslobj.issuer()
+    def peer_certificate(nbsslobj self, der=False):
+        return self.sslobj.peer_certificate(der)
+    def server(nbsslobj self):
+        return self.server()
+
+    # Delegate and wrap sslobj methods which may block.
+    def do_handshake(nbsslobj self):
+        # TODO(pts): Maybe prefetch self.sslobj.do_handshake to speed up,
+        # also in other classes and methods as well.
+        return coio_c_ssl_call(self.sslobj.do_handshake, (), &self.swi, 0)
+    def pending(nbsslobj self):
+        # Deliberately no EOF handling (last arg 0) here for compatibility.
+        return coio_c_ssl_call(self.sslobj.pending, (), &self.swi, 0)
+    def read(nbsslobj self, len=1024):
+        if len <= 0:
+            # The original sslobj doesn't return immediately on len=0, so
+            # we may be a little incompatible here.
+            return ''
+        # Deliberately no EOF handling (last arg 0) here for compatibility.
+        return coio_c_ssl_call(self.sslobj.read, (len,), &self.swi, 0)
+    def shutdown(nbsslobj self):
+        return coio_c_ssl_call(self.sslobj.shutdown, (), &self.swi, 0)
+    def write(nbsslobj self, data):
+        return coio_c_ssl_call(self.sslobj.write, (data,), &self.swi, 0)
+
+
+def sslwrap_simple(sock, keyfile=None, certfile=None):
+    """Non-blocking drop-in replacement for function ssl.sslwrap_simple().
+
+    Please note that the socket.ssl() function is the Python 2.5 equivalent
+    of ssl.sslwrap_simple(), and it has been deprecated in Python 2.6. This
+    function is thus a drop-in replacement for socket.ssl() as well.
+
+    This function returns a new, possibly handshaked instance of nbsslobj.
+    """
+    nbsslobj_obj = nbsslobj(sock, 0, keyfile, certfile, ssl.CERT_NONE,
+                            ssl.PROTOCOL_SSLv23, None)
+    try:
+        sock.getpeername()
+    except socket_error, e:
+        pass
+    else:
+        nbsslobj_obj.do_handshake()  # Do the handshake if connected.
+    return nbsslobj_obj
+
+
 if ssl:
     _fake_ssl_globals = {'SSLSocket': nbsslsocket}
     ssl_wrap_socket = types.FunctionType(
@@ -2619,6 +2720,8 @@ if ssl:
         """Non-blocking drop-in replacement for ssl.wrap_socket.""")
 else:
     globals()['nbsslsocket'] = None  
+    globals()['nbsslobj'] = None
+    globals()['sslwrap_simple'] = None
 
 
 # --- Sleeping.
@@ -2659,7 +2762,7 @@ def sleep(double duration):
     return coio_c_wait_for(-1, 0, HandleCSleepWakeup, &tv)
 
 
-# ---
+# --- Channels with timeout.
 
 
 # Helper method used by receive_with_timeout.
@@ -2699,7 +2802,9 @@ def receive_with_timeout(object timeout, object receive_channel,
     PyTasklet_Kill(sleeper_tasklet)
   return received_value
 
+
 # --- select() emulation.
+
 
 cdef class selecter
 

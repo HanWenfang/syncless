@@ -53,7 +53,7 @@ def main():
     data = match.group(1).strip()
   print 'Downloaded:', data
   # Needed for exit because we did DNS lookups with coio (evdns).
-  # !! Remove stackless.main.insert() once the segfault bug is fixed.
+  # TODO(pts): Remove stackless.main.insert() once the segfault bug is fixed.
   stackless.main.insert()
   sys.exit(0)
 

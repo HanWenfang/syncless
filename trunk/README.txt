@@ -572,7 +572,7 @@ A7. If your client software is written in pure Python, and it uses the
 
 Q8. How do I connect to a MySQL database with Syncless?
 
-    Use ``MySQL Connector/Python'' (https://launchpad.net/myconnpy), which
+A8. Use ``MySQL Connector/Python'' (https://launchpad.net/myconnpy), which
     is dbapi2-compatible pure Python MySQL client implementation, and call
     patch.patch_socket() or patch.patch_mysql_connector(). See
     examples/demo_mysql_client.py for an example. Please note that myconnpy
@@ -1010,6 +1010,50 @@ A28. Yes, see the coio.thread_pool class and the corresponding examples in
 
      Please note that coio.thread_pool has not been probed for performance
      yet.
+
+Q29. How do I connect to a PostgreSQL database with Syncless?
+
+A29. Don't use Pyscopg or PyGreSQL, because they use libpq, the standard
+     PostgreSQL C client library, which doesn't support non-blocking
+     operation compatible with Syncless. So with thise client libraries, all
+     your tasklets would be blocked while one tasklet is waiting for the
+     result of a query.
+
+     Don't use py-postgresql, because it needs Python 3.x (and Syncless
+     supports Python 2.5 and 2.6).
+
+     Don't use PyPo, it's not available anymore, and the last release
+     happened in 2003.
+
+     Use any of these pure Python PostgreSQL clients:
+
+     * pg8000: http://pybrary.net/pg8000/
+     * pg_proboscis: http://pypi.python.org/pypi/pg_proboscis/1.0.5
+     * py-bpgsql: http://code.google.com/p/py-bpgsql
+       no release since June 2009
+
+     !! You will need monkey-patching with these clients.
+
+     !! TODO(pts): Write this answer properly.
+
+     !! TODO(pts): Which is the fastest?
+
+Q30. Does Syncless support SSL client and server connections?
+
+A30. Yes, with Python 2.6 (not with Python 2.5) with the builtin `ssl'
+     module (not pyOpenSSL). The functionality is only available if the
+     `ssl' module is also available (detected and compiled at Python compile
+     time). See the files examples/demo_https_client.py,
+     examples/demo_ssl_client.py, examples/demo_ssl_server.py,
+     examples/demo_ssl_client_sslwrap_simple.py,
+     examples/demo_ssl_client_simple.py .
+
+     The syncless.coio.nbsslsocket class is a drop-in replacement for
+     ssl.SSLSocket (please see the docstrings of methods `makefile' and
+     `makefile_samefd' for the most important incompatibilities). The
+     syncless.coio.ssl_wrap_socket function is a drop-in replacement for
+     ssl.wrap_socket. No non-blocking equivalent is provided for the
+     constructor functions ssl.sslwrap_simple and socket.ssl.
 
 Links
 ~~~~~
