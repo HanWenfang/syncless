@@ -295,6 +295,9 @@ cdef extern from "./coio_c_helper.h":
     void coio_c_nop()
     object coio_c_call_wrap_bomb(object function, object args, object kwargs,
                                  object bomb_class)
+    object coio_c_ssl_call(object function, object args,
+                           socket_wakeup_info_s *swi,
+                           char do_handle_read_eof)
 
 # --- Low-level event functions
 
@@ -343,6 +346,11 @@ def nonblocking_loop_for_tests():
 cdef int connect_tv_magic_usec
 connect_magic_usec = 120
 
+cdef object c_errno_eagain "coio_c_errno_eagain"
+cdef object c_strerror_eagain "coio_c_strerror_eagain"
+
+c_errno_eagain = EAGAIN
+c_strerror_eagain = strerror(EAGAIN)
 
 def _schedule_helper():
   return PyStackless_GetCurrent().next.next.remove().run()
@@ -549,10 +557,6 @@ cdef void _setup_sigint():
     # This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
     # gets control) a KeyboardInterrupt in the main tasklet.
     event_add(&sigint_ev, NULL)
-
-
-cdef void HandleCSigUsr2(int fd, short evtype, void *arg):
-    pass
 
 
 cdef event_t sigusr2_ev
@@ -2137,6 +2141,7 @@ cdef class nbsslsocket:
     # Of type ssl._ssl.SSLType, i.e. 'ssl.SSLContext' defined in
     # modules/_ssl.c; or None if not connected.
     cdef object sslobj
+    cdef char do_handle_read_eof
 
     def __init__(nbsslsocket self, *args, **kwargs):
         cdef int do_handshake_now
@@ -2173,6 +2178,8 @@ cdef class nbsslsocket:
             delattr(self.sslsock, attr)
         self.realsock = self.sslsock._sock
         self.sslobj = self.sslsock._sslobj
+        if self.sslsock.suppress_ragged_eofs:
+          self.do_handle_read_eof = 1
         self.swi.fd = self.realsock.fileno()
         timeout = self.realsock.gettimeout()
         # It seems that either of these setblocking calls are enough.
@@ -2276,7 +2283,7 @@ cdef class nbsslsocket:
 
     property suppress_ragged_eofs:
         def __get__(self):
-            return self.sslsock._suppress_ragged_eofs
+            return self.do_handle_read_eof
 
     property _makefile_refs:
         def __get__(self):
@@ -2341,32 +2348,12 @@ cdef class nbsslsocket:
 
     def read(nbsslsocket self, len=1024):
         """Emulate ssl.SSLSocket.read, doesn't make much sense."""
-        while 1:
-            try:
-                return self.sslobj.read(len)
-            except c_SSLError, e:
-                if e.errno == c_SSL_ERROR_WANT_READ:
-                    coio_c_handle_eagain(&self.swi, c_EV_READ)
-                elif e.errno == c_SSL_ERROR_WANT_WRITE:
-                    coio_c_handle_eagain(&self.swi, c_EV_WRITE)
-                elif (e.errno == c_SSL_ERROR_EOF and
-                      self.sslsock.suppress_ragged_eofs):
-                    return ''
-                else:
-                    raise
+        return coio_c_ssl_call(self.sslobj.read, (len,), &self.swi,
+                               self.do_handle_read_eof)
 
     def write(nbsslsocket self, data):
         """Emulate ssl.SSLSocket.write, doesn't make much sense."""
-        while 1:
-            try:
-                return self.sslobj.write(data)
-            except c_SSLError, e:
-                if e.errno == c_SSL_ERROR_WANT_READ:
-                    coio_c_handle_eagain(&self.swi, c_EV_READ)
-                elif e.errno == c_SSL_ERROR_WANT_WRITE:
-                    coio_c_handle_eagain(&self.swi, c_EV_WRITE)
-                else:
-                    raise
+        return coio_c_ssl_call(self.sslobj.write, (data,), &self.swi, 0)
 
     def accept(nbsslsocket self):
         cdef nbsslsocket asslsock
@@ -2466,17 +2453,7 @@ cdef class nbsslsocket:
         raise ValueError('No SSL wrapper around ' + str(self.sslsock))
 
     def do_handshake(nbsslsocket self):
-        while 1:
-            try:
-                self.sslobj.do_handshake()
-                return
-            except c_SSLError, e:
-                if e.errno == c_SSL_ERROR_WANT_READ:
-                    coio_c_handle_eagain(&self.swi, c_EV_READ)
-                elif e.errno == c_SSL_ERROR_WANT_WRITE:
-                    coio_c_handle_eagain(&self.swi, c_EV_WRITE)
-                else:
-                    raise
+        return coio_c_ssl_call(self.sslobj.do_handshake, (), &self.swi, 0)
 
     def getpeercert(nbsslsocket self, binary_form=False):
         return self.sslobj.peer_certificate(binary_form)
@@ -2496,19 +2473,8 @@ cdef class nbsslsocket:
             if flags:
                 raise ValueError(
                     'flags=0 expected for recv on ' + str(self.__class__))
-            while 1:
-                try:
-                    return self.sslobj.read(buflen)
-                except c_SSLError, e:
-                    if e.errno == c_SSL_ERROR_WANT_READ:
-                        coio_c_handle_eagain(&self.swi, c_EV_READ)
-                    elif e.errno == c_SSL_ERROR_WANT_WRITE:
-                        coio_c_handle_eagain(&self.swi, c_EV_WRITE)
-                    elif (e.errno == c_SSL_ERROR_EOF and
-                          self.sslsock.suppress_ragged_eofs):
-                        return ''
-                    else:
-                        raise
+            return coio_c_ssl_call(self.sslobj.read, (buflen,), &self.swi,
+                                   self.do_handle_read_eof)
         return coio_c_socket_call(self.realsock.recv, (buflen, flags),
                                   &self.swi, c_EV_READ)
 
@@ -2528,22 +2494,11 @@ cdef class nbsslsocket:
                 nbytes = len(buffer)
             if nbytes > 65536:  # Don't preallocate too much below.
                 nbytes = 65536
-            while 1:
-                try:
-                    # TODO(pts): Does self.sslobj have a readinto method?
-                    data = self.sslobj.read(nbytes)
-                except c_SSLError, e:
-                    if e.errno == c_SSL_ERROR_WANT_READ:
-                        coio_c_handle_eagain(&self.swi, c_EV_READ)
-                    elif e.errno == c_SSL_ERROR_WANT_WRITE:
-                        coio_c_handle_eagain(&self.swi, c_EV_WRITE)
-                    elif (e.errno == c_SSL_ERROR_EOF and
-                          self.sslsock.suppress_ragged_eofs):
-                        return ''
-                    else:
-                        raise
-                buf[:len(data)] = data
-                return len(data)
+            # No .readinto method in self.sslobj, so doing a regular read.
+            data = coio_c_ssl_call(self.sslobj.read, (nbytes,), &self.swi,
+                                   self.do_handle_read_eof)
+            buf[:len(data)] = data
+            return len(data)
         return coio_c_socket_call(self.realsock.recv_into,
                                   (buf, nbytes or 0, flags),
                                   &self.swi, c_EV_READ)
@@ -2558,16 +2513,7 @@ cdef class nbsslsocket:
             if flags:
                 raise ValueError(
                     'flags=0 expected for send on ' + str(self.__class__))
-            while 1:
-                try:
-                    return self.sslobj.write(data)
-                except c_SSLError, e:
-                    if e.errno == c_SSL_ERROR_WANT_READ:
-                        coio_c_handle_eagain(&self.swi, c_EV_READ)
-                    elif e.errno == c_SSL_ERROR_WANT_WRITE:
-                        coio_c_handle_eagain(&self.swi, c_EV_WRITE)
-                    else:
-                        raise
+            return coio_c_ssl_call(self.sslobj.write, (data,), &self.swi, 0)
         return coio_c_socket_call(self.realsock.send, (data, flags),
                                   &self.swi, c_EV_WRITE)
 
@@ -2588,22 +2534,12 @@ cdef class nbsslsocket:
                         'flags=0 expected for sendall on ' +
                         str(self.__class__))
                 while 1:
-                    try:
-                        got2 = 0  # Pacify gcc warning.
-                        got2 = self.sslobj.write(buf)
-                    except c_SSLError, e:
-                        if e.errno == c_SSL_ERROR_WANT_READ:
-                            coio_c_handle_eagain(&self.swi, c_EV_READ)
-                        elif e.errno == c_SSL_ERROR_WANT_WRITE:
-                            coio_c_handle_eagain(&self.swi, c_EV_WRITE)
-                        else:
-                            raise
+                    got2 = coio_c_ssl_call(self.sslobj.write, (buf,), &self.swi, 0)
                     assert got2 > 0
                     got += got2
                     if got >= len(data):
                         return
                     buf = buffer(data, got)
-                    
             while 1:
                 try:
                     got2 = 0  # Pacify gcc warning.
@@ -2612,6 +2548,7 @@ cdef class nbsslsocket:
                     if e.args[0] != EAGAIN:
                         raise
                     coio_c_handle_eagain(&self.swi, c_EV_WRITE)
+                    continue
                 assert got2 > 0
                 got += got2
                 if got >= len(data):
@@ -3319,11 +3256,3 @@ cdef class thread_pool:
                 self.available_thread_workers.append(thread_worker)
             else:
                 self.notify_channel.send(thread_worker)
-
-import sys
-
-def Foo(f):
-  try:
-    f()
-  except:
-    print sys.exc_info()

@@ -276,11 +276,32 @@ static inline PyObject *coio_c_socket_call(PyObject *function, PyObject *args,
 static int coio_c_SSL_ERROR_WANT_READ = 2;
 static int coio_c_SSL_ERROR_WANT_WRITE = 3;
 static int coio_c_SSL_ERROR_EOF = 8;
-static PyObject *coio_c_SSLError;
+static PyObject *coio_c_SSLError;  /* initialized in nbevent.pyx */
+static PyObject *coio_c_errno_eagain;  /* initialized in nbevent.pyx */
+static PyObject *coio_c_strerror_eagain;  /* initialized in nbevent.pyx */
 
-/* Helper function to wait when sslobj gets blocked. */
+/** Set the current exception to exc_class(EAGAIN) */
+static void coio_c_exc_set_eagain(PyObject *exc_class) {
+  PyObject *exc_args = PyTuple_New(2);
+  if (NULL == (exc_args = PyTuple_New(2)))
+    return;
+  Py_INCREF(coio_c_errno_eagain);
+  PyTuple_SET_ITEM(exc_args, 0, coio_c_errno_eagain);
+  Py_INCREF(coio_c_errno_eagain);
+  PyTuple_SET_ITEM(exc_args, 1, coio_c_strerror_eagain);
+  PyErr_SetObject(exc_class, exc_args);
+  Py_DECREF(exc_args);
+}
+
+/** Helper function to wait when sslobj gets blocked.
+ *
+ * This function is called from nbsslsocket.makefile().read(), called from
+ * httplib used by urllib used by examples/demo_https_client.py.
+ */
 static int coio_c_handle_ssl_eagain(
-    struct coio_oneway_wakeup_info *owi,
+    double timeout_value,
+    struct timeval *tv,
+    UncountedObject *exc_class,
     struct event *read_ev,
     struct event *write_ev,
     char do_return_zero_at_eof) {
@@ -298,6 +319,7 @@ static int coio_c_handle_ssl_eagain(
     PyErr_Restore(ptype, pvalue, ptraceback);
     return -1;
   }
+  /* TODO(pts): if (retval != coio_event_happened_token && retval != NULL) */
   if (!PyInt_Check(retval)) {
     Py_DECREF(retval);
     PyErr_Restore(ptype, pvalue, ptraceback);
@@ -306,16 +328,14 @@ static int coio_c_handle_ssl_eagain(
   errcode = PyInt_AsLong(retval);
   Py_DECREF(retval);
   if (errcode == coio_c_SSL_ERROR_WANT_READ) {
-    /* TODO(pts): More efficient wait. !! timeout */
-    /* !! if (retval != coio_event_happened_token && retval != NULL) */
+    /* TODO(pts): More efficient wait. */
     Py_XDECREF(ptype); Py_XDECREF(pvalue); Py_XDECREF(ptraceback);
-    if (owi->timeout_value == 0.0) {
+    if (timeout_value == 0.0) {
       /* This is what methods of socket.socket raise, we just mimic that */
-      /* !! set to EAGAIN here */
-      PyErr_SetFromErrno((PyObject*)owi->exc_class);
+      coio_c_exc_set_eagain((PyObject*)exc_class);
       return -1;
     }
-    retval = coio_c_wait(read_ev, &owi->tv);
+    retval = coio_c_wait(read_ev, tv);
     if (retval != coio_event_happened_token && retval != NULL) {
       Py_DECREF(retval);
       PyErr_SetString(coio_socket_timeout, "timed out");
@@ -327,13 +347,12 @@ static int coio_c_handle_ssl_eagain(
     return 1;
   } else if (errcode == coio_c_SSL_ERROR_WANT_WRITE) {
     Py_XDECREF(ptype); Py_XDECREF(pvalue); Py_XDECREF(ptraceback);
-    if (owi->timeout_value == 0.0) {
+    if (timeout_value == 0.0) {
       /* This is what methods of socket.socket raise, we just mimic that */
-      /* !! set to EAGAIN here */
-      PyErr_SetFromErrno((PyObject*)owi->exc_class);
+      coio_c_exc_set_eagain((PyObject*)exc_class);
       return -1;
     }
-    retval = coio_c_wait(write_ev, &owi->tv);
+    retval = coio_c_wait(write_ev, tv);
     if (retval != coio_event_happened_token && retval != NULL) {
       Py_DECREF(retval);
       PyErr_SetString(coio_socket_timeout, "timed out");
@@ -349,6 +368,32 @@ static int coio_c_handle_ssl_eagain(
   } else {
     PyErr_Restore(ptype, pvalue, ptraceback);
     return -1;
+  }
+}
+
+/** Call function(args), and do a non-blocking wait for SSL IO if
+ * needed.
+ *
+ * This function is called from nbsslsocket methods .do_handshake, .send,
+ * .sendall, .recv, .read .write etc. The file created by nbsslsocket.makefile
+ * doesn't call this function, but it calls coio_c_evbuffer_read() and
+ * coio_c_writeall().
+ */
+static PyObject *coio_c_ssl_call(PyObject *function, PyObject *args,
+                                 struct coio_socket_wakeup_info *swi,
+                                 char do_handle_read_eof) {
+  PyObject *retval;
+  int got;
+  while (1) {
+    if (NULL != (retval = PyObject_CallObject(function, args)))
+      return retval;
+    got = coio_c_handle_ssl_eagain(
+        swi->timeout_value, &swi->tv, (UncountedObject*)coio_c_SSLError,
+        &swi->read_ev, &swi->write_ev, do_handle_read_eof);
+    if (got == -1)  /* coio_c_handle_ssl_eagain could not catch exception */
+      return NULL;
+    if (got == 0)  /* EOF when do_handle_read_eof=1 */
+      return PyString_FromStringAndSize(NULL, 0);
   }
 }
 
@@ -410,7 +455,9 @@ static inline int coio_c_evbuffer_read(
     obj = PyObject_CallObject(read_obj, args);
     Py_DECREF(args);
     if (obj == NULL) {
-      got = coio_c_handle_ssl_eagain(owi, &owi->ev, owi->other_ev, 1);
+      got = coio_c_handle_ssl_eagain(
+          owi->timeout_value, &owi->tv, owi->exc_class,
+          &owi->ev, owi->other_ev, 1);
       if (got == -1) {
         Py_DECREF(read_obj);
         return -1;
@@ -500,7 +547,9 @@ static inline int coio_c_writeall(
       obj = PyObject_CallObject(write_obj, args);
       Py_DECREF(args);
       if (obj == NULL) {
-        if (-1 == coio_c_handle_ssl_eagain(owi, owi->other_ev, &owi->ev, 0)) {
+        if (-1 == coio_c_handle_ssl_eagain(
+            owi->timeout_value, &owi->tv, owi->exc_class,
+            owi->other_ev, &owi->ev, 0)) {
           Py_DECREF(write_obj);
           return -1;
         }
