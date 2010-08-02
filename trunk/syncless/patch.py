@@ -7,7 +7,8 @@ __author__ = 'pts@fazekas.hu (Peter Szabo)'
 import sys
 import types
 
-# TODO(pts): Have a look at Concurrence (or others) for patching everything.
+# TODO(pts): Have a look at gevent, Eventlet, Concurrence (or others) for
+# patching everything.
 
 fake_create_connection = None
 
@@ -101,6 +102,81 @@ def patch_ssl():
   # There is no need to patch ssl.wrap_socket since ssl.SSLSocket is already
   # patched.
   #ssl.wrap_socket = coio.ssl_wrap_socket
+
+
+def patch_geventmysql():
+  """Patch gevent-MySQL at 2010-08-02.
+
+  It is OK and harmless to call this function more than once.
+  
+  It is recommended that this function is called before `import geventmysql',
+  so the real gevent wouldn't get loaded, and this patch would work without
+  gevent even being installed.
+  
+  TODO(pts): Make it geventmysql with real gevent and Syncless in the same
+  process.
+  """
+  import sys
+  from syncless import coio
+
+  if ('geventmysql' in sys.modules and
+      sys.modules['geventmysql'].gevent.socket.socket is coio.nbsocket):
+    return  # Already patched.
+
+  import socket
+
+  class Timeout(Exception):
+    """Unused timeout class for Syncless geventmysql."""
+    pass
+
+  def create_connection(address):
+    # socket.create_connection supports timeout=..., which is not needed by
+    # geventmysql, so we don't support it here.
+    if isinstance(address, str) and address[0] == '/':
+      family = socket.AF_UNIX
+    elif ':' in address[0]:
+      # TODO(pts): Better support IPv6 connections, especially as DNS hosts.
+      family = socket.AF_INET6
+    else:
+      family = socket.AF_INET
+    sock = coio.nbsocket(family, socket.SOCK_STREAM)
+    sock.connect(address)
+    return sock
+
+  gevent_module = type(sys)('fake_gevent')
+  gevent_module.socket = type(sys)('fake_gevent_socket')
+  gevent_module.socket.create_connection = create_connection
+  gevent_module.socket.socket = coio.nbsocket
+  gevent_module.GreenletExit = TaskletExit
+  # This exception is needed, but it's never raised.
+  gevent_module.Timeout = Timeout
+
+  if 'geventmysql' in sys.modules:
+    geventmysql = sys.modules['geventmysql']
+  else:
+    old_gevent = sys.modules.pop('gevent', None)
+    old_gevent_socket = sys.modules.pop('gevent.socket', None)
+    sys.modules['gevent'] = gevent_module
+    try:
+      import geventmysql
+    finally:
+      if old_gevent:
+        sys.modules['gevent'] = old_gevent
+      else:
+        sys.modules.pop('gevent', None)
+      if old_gevent_socket:
+        sys.modules['gevent_socket'] = old_gevent_socket
+      else:
+        sys.modules.pop('gevent.socket', None)
+
+  # These redefinitions are not strictly needed if geventmysql was not
+  # imported before.
+  for module in (geventmysql, geventmysql.client, geventmysql.mysql,
+                 geventmysql.buffered):
+    if hasattr(module, 'gevent'):
+      module.gevent = gevent_module
+    if hasattr(module, 'socket'):
+      module.socket = gevent_module.socket
 
 
 def patch_mysql_connector():
@@ -934,6 +1010,7 @@ def patch_all_std():
   patch_ssl()
   #patch_mysql_connector()  # Non-standard module, don't patch.
   #patch_pymysql()  # Non-standard module, don't patch.
+  #patch_geventmysql()  # Non-standard module, don't patch.
   patch_time()
   patch_select()
   #patch_tornado()  # Non-standard module, don't patch.

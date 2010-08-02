@@ -1,9 +1,11 @@
 #! /usr/local/bin/stackless2.6
-# by pts@fazekas.hu at Sun Apr 18 12:44:36 CEST 2010
+# by pts@fazekas.hu at Mon Aug  2 17:04:44 CEST 2010
+
+"""MySQL client for Syncless using gevent-MySQL."""
 
 import sys
 
-import mysql.connector as mysql_dbapi
+from syncless.fast_mysql import geventmysql
 from syncless.best_stackless import stackless
 from syncless import patch
 
@@ -26,7 +28,8 @@ def Worker(db_conn, num_iterations, progress_channel):
   while i < num_iterations:
     cursor = db_conn.cursor()
     cursor.execute('SHOW FULL TABLES')
-    list(cursor)  # Fetch all the values.
+    cursor.fetchall()
+    cursor.close()  # geventmysql requires this.
 
     i += 1
     if i == num_iterations:
@@ -41,20 +44,32 @@ def Worker(db_conn, num_iterations, progress_channel):
 
 
 def main():
-  # Without patch.patch_socket() or patch.patch_mysql_connector() the
-  # counter below would jump from 0 to 1000 in one big step. With this
-  # patch, MySQL socket communication is done with Syncless, so the counter
-  # increases in little steps.
-  patch.patch_mysql_connector()
-  # patch_socket() works instead of patch_mysql_connector(), but it effects more
-  # Python modules.
-  #patch.patch_socket()
+  # Without patch.geventmysql() run by importing fast_mysql, not only the
+  # counter below would jump from 0 to 1000 in one big step, but maybe the
+  # client wouldn't work at all, because vanilla gevenymysql expects gevent,
+  # but we use Syncless here. With this patch, MySQL socket communication is
+  # done with Syncless, so the counter increases in little steps.
+
   patch.patch_stderr()
 
-  db_conn = mysql_dbapi.connect(**MYSQL_CONFIG)
-  assert mysql_dbapi.paramstyle == 'pyformat'
-  assert db_conn.charset_name == 'utf8'
-  assert db_conn.collation_name == 'utf8_general_ci'
+  # Preprocess the connection information.
+  mysql_config = dict(MYSQL_CONFIG)
+  if mysql_config.get('unix_socket'):
+    mysql_config['host'] = mysql_config.pop('unix_socket')
+    mysql_config['port'] = None
+    assert mysql_config['host'].startswith('/')
+  if 'database' in mysql_config:
+    mysql_config['db'] = mysql_config.pop('database')
+  old_use_unicode = bool(mysql_config.pop('use_unicode', False))
+  mysql_config['use_unicode'] = True  # Required for mysql_config['charset'].
+  mysql_config.setdefault('charset', 'utf-8')
+  db_conn = geventmysql.connect(**mysql_config)
+  db_conn.client.set_use_unicode(old_use_unicode)
+  assert geventmysql.paramstyle == 'format'
+
+  # These are not supported by geventmysql.
+  #assert db_conn.charset_name == 'utf8'
+  #assert db_conn.collation_name == 'utf8_general_ci'
 
   #query = 'SELECT CONNECTION_ID()'
   #query = 'SELECT LENGTH("\xC3\xA1")'  # :2
@@ -65,9 +80,11 @@ def main():
   # In SQLite, this would be:
   # for row in cursor.execute('SELECT LENGTH(?), ('\xC3\xA1',)): print row
   cursor.execute('SELECT CHAR_LENGTH(%s)', ('\xC3\xA1',))
-  #for row in cursor:  # Fetch results.
-  #  print >>sys.stderr, row
-  assert list(cursor) == [(1,)]
+
+  # Since geventmysql cursors are not iterable, we have to use
+  # cursor.fetchall() instead of list(cursor) here.
+  assert cursor.fetchall() == [(1,)]
+  cursor.close()  # geventmysql requires this.
 
   if len(sys.argv) > 1:
     num_iterations = int(sys.argv)

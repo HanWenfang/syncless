@@ -429,8 +429,17 @@ implements some application-level protocols beyond HTTP, WSGI and DNS
   Twisted: yes++, tons of protocols
   asyncore: no
   gevent: no++, Python console backdoor, can monkey-patch external modules
-  Syncless: no++, can monkey-patch external modules
+  Syncless: yes++, can monkey-patch external modules, supports geventmysql
   circuits: yes, pygame, GTK+, inotify and pygame
+can use a non-blocking, high performance MySQL client
+  Concurrence: yes, built-in
+  Eventlet: no
+  Tornado: no
+  Twisted: no, the built-in one is implemented in pure Python (slow)
+  asyncore: no
+  gevent: yes, gevent-MySQL (not built-in)
+  Syncless: yes, gevent-MySQL (not built-in)
+  circuits: no
 compatible with other non-blocking systems in the same process
   Concurrence: no, not by default
   Eventlet: yes, has Twisted reactor

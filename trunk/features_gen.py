@@ -1,4 +1,4 @@
-#! /usr/bin/python2.6
+#! /usr/bin/python2.4
 # by pts@fazekas.hu at Mon May 17 23:03:43 CEST 2010
 
 """Tool Generate features.html from features.txt.
@@ -40,7 +40,10 @@ def main(argv):
       aspects.append((aspect, {}))
       continue
     assert aspect
-    subject, evaluation = line.lstrip().split(':', 1)
+    try:
+      subject, evaluation = line.lstrip().split(':', 1)
+    except ValueError:
+      raise ValueError(repr(line))
     assert evaluation.startswith(' ')
     evaluation = evaluation.lstrip()
     if subject not in subjects_set:
