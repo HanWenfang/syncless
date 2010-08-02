@@ -32,6 +32,7 @@ Features
   smtplib, ftplib, imaplib, poplib, asyncore, popen2, subprocess etc. modules
 * special monkey-patching for pure Python MySQL client libraries
   mysql.connector and pymysql
+* special monkey-patching for C (Cython) MySQL client library geventmysql
 * compatible timeout handling on individual socket operations
 * I/O event detection using libev, which can use Linux epoll(7) or BSD
   kqueue (if available)
@@ -570,20 +571,61 @@ A7. If your client software is written in pure Python, and it uses the
     is written in Pyrex or Cython, you get non-blocking functionality by
     calling patch.patch_socket() as early as possible.
 
+    For Syncless-compatible MySQL clients, see Q8.
+
 Q8. How do I connect to a MySQL database with Syncless?
 
-A8. Use ``MySQL Connector/Python'' (https://launchpad.net/myconnpy), which
-    is dbapi2-compatible pure Python MySQL client implementation, and call
-    patch.patch_socket() or patch.patch_mysql_connector(). See
-    examples/demo_mysql_client.py for an example. Please note that myconnpy
-    might be slower than other clients, because it's implemented in pure
-    Python -- but non-blocking functionality is much harder to patch into
-    other clients.
+A8. The following options are recommended:
 
-    If you want to use pymysql instead, then see
-    examples/demo_mysql_client_pymysql.py .
+    * MySQL Connector/Python (myconnpy). This is a pure Python MySQL client,
+      so it is expected to be slower than gevent-MySQL.
+
+      Get it from https://launchpad.net/myconnpy , use its dbapi2-compatible
+      interface, but call patch.patch_socket() or
+      patch.patch_mysql_connector() first. See examples/demo_mysql_client.py
+      for an example use.
+
+    * gevent-MySQL (geventmysql). This is implemented as a C (Cython)
+      extension, so it's faster than myconnpy. It is also less flexible
+      (like cursors don't support the iterator interface, they have to be
+      closed explicitly, and it's not possible to fetch data from multiple
+      cursors concurrently).
+
+      Get it from http://github.com/mthurlin/gevent-MySQL . Neither gevent,
+      nor Cython is necessary for installation. If you don't have Cython,
+      you have to patch setup.py, like this:
+
+        $ git clone http://github.com/mthurlin/gevent-MySQL.git
+        $ cd gevent-MySQL
+        $ python -c 's="".join([s for s in open("setup.py") if
+            "build_ext" not in s]).replace(".pyx", ".c"                                
+            );open("setup.py","w").write(s)'
+        $ stackless2.6 setup.py build
+        # sudo stackless2.6 setup.py install
+
+      See examples/demo_mysql_client_geventmysql.py for an example use.
+
+    The following options are not recommended:
+
+    * pymysql. This is a pure Python MySQL client, like myconnpy, but it's a
+      bit faster (because of less overhead), but it seems to be less
+      maintained, has more bugs and quirks (like trivial escaping bugs and a
+      nonfunctional encoding (UTF-8) support), so it's not recommended to
+      use it in production until it gets mature.
+
+      Get it from http://code.google.com/p/pymysql/ .
+      See examples/demo_mysql_client_pymysql.py for an example use.
+
+    * Any library that uses libmysqlclient (the official MySQL C API),
+      because such libraries are inherently blocking. Examples:
+      MySQL for Python (mysql-python) and oursql.
 
     See also Q7.
+
+    It has not been tested if it's possible to run multiple queries (and
+    fetch their results concurrently) in parallel in the same connection.
+    Opening multiple connections to the MySQL server, and using 1 cursor per
+    connection always works.
 
     A more detailed analysis:
 
@@ -591,16 +633,20 @@ A8. Use ``MySQL Connector/Python'' (https://launchpad.net/myconnpy), which
       it works with patch.patch_socket() and patch.patch_mysql_connector(). The
       disadvantage is that it's slower than C extensions (which don't work).
       https://launchpad.net/myconnpy
-    * libmysqlclient is inherently blocking, so it wouldn't work
-      http://mysql-python.blogspot.com/
-    * oursql uses libmysqlclient
-    * Concurrence has a non-blocking MySQL client implemented in Pyrex/Cython,
-      but it's quite hard to abstract away the networking part to make it work
-      with Syncless.
+    * libmysqlclient is inherently blocking, so it wouldn't work. See also
+      http://mysql-python.blogspot.com/2010/02/asynchronous-programming-and-mysqldb.html
+      about blocking calls in the C API.
     * The client ``MySQL for Python''
       (http://sourceforge.net/projects/mysql-python/files/) is implemented
       as a C extension using the official C client (libmysqlclient), so it's
-      inherently blocking.
+      inherently blocking, and thus it wouldn't work concurrently with
+      multiple Syncless coroutines.
+    * oursql uses libmysqlclient (so it wouldn't work)
+    * Concurrence has a non-blocking MySQL client implemented in Pyrex/Cython,
+      but it's quite hard to abstract away the networking part to make it work
+      with Syncless. It has been ported to gevent (as gevent-MySQL), which was
+      easy to monkey-patch for Syncless, see above. Disadvantage: neither
+      Concurrence, nor its MySQL client is being maintained since 2009.
     * There is also the pure Python client ``pymysql''
       (http://code.google.com/p/pymysql/), but it seems to be less
       maintained than myconnpy. It also seems a bit immature and not used in
@@ -1005,7 +1051,7 @@ A28. Yes, see the coio.thread_pool class and the corresponding examples in
      needs more memory and CPU than coroutines (tasklets), so you might lose
      most performance advantages of Syncless (over threads) if you use the
      thread pool. For example, please use a non-blocking MySQL client (see
-     elsewhere in the README) instead of calling the methods of
+     Q8 in the FAQ) instead of calling the methods of
      libmysqlclient in a thread pool.
 
      Please note that coio.thread_pool has not been probed for performance
@@ -1014,10 +1060,10 @@ A28. Yes, see the coio.thread_pool class and the corresponding examples in
 Q29. How do I connect to a PostgreSQL database with Syncless?
 
 A29. Don't use Pyscopg or PyGreSQL, because they use libpq, the standard
-     PostgreSQL C client library, which doesn't support non-blocking
-     operation compatible with Syncless. So with thise client libraries, all
-     your tasklets would be blocked while one tasklet is waiting for the
-     result of a query.
+     PostgreSQL C client library, which is inherently blocking, i.e. it
+     doesn't support non-blocking operation compatible with Syncless. So
+     with these client libraries, all your tasklets would be blocked while
+     one tasklet is waiting for the result of a query.
 
      Don't use py-postgresql, because it needs Python 3.x (and Syncless
      supports Python 2.5 and 2.6).
@@ -1032,7 +1078,8 @@ A29. Don't use Pyscopg or PyGreSQL, because they use libpq, the standard
      * py-bpgsql: http://code.google.com/p/py-bpgsql
        no release since June 2009
 
-     !! You will need monkey-patching with these clients.
+     !! You will need monkey-patching with these clients (e.g.
+     patch.patch_socket()).
 
      !! TODO(pts): Write this answer properly.
 
