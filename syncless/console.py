@@ -10,6 +10,8 @@ Example invocation:
 See more on http://code.google.com/p/syncless/wiki/Console .
 """
 
+__author__ = 'pts@fazekas.hu (Peter Szabo)'
+
 import array
 import code
 import errno

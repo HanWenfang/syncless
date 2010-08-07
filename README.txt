@@ -21,26 +21,30 @@ Eventlet and Concurrence.
 Features
 ~~~~~~~~
 * handling multiple TCP connections concurrently in a single Python process,
-  using cooperative multitasking provided by Stackless Python (without
-  the need for callbacks, threads, subprocesses or locking)
-* non-intruisive I/O multiplexing, easy to integrate with existing code
-  because locking is not needed and it's monkey-patchable
+  using cooperative multitasking based on coroutines, as provided by
+  Stackless Python or greenlet (without the need for callbacks, threads,
+  subprocesses or locking)
+* non-blocking DNS resolver using evdns
 * monkey-patchable, almost faithful non-blocking reimplementation of
   socket.socket, socket.gethostbyname (etc.), ssl.SSLSocket, time.sleep
   and select.select
+* compatible timeout handling on individual socket operations
+* I/O event detection with libevent1, libevent2 or libev (fastest) and
+  provides a slow fallback if none of these are available
+* easy to convert existing single-threaded, multi-threaded or multiprocess
+  code to Syncless coroutines (because coroutines work like lightweight
+  threads, Syncless exposes a compatible, monkey-patchable interface for
+  sockets, pipes and buffered I/O, and locking is not needed)
 * non-blocking support added by monkey-patching to built-in urllib, urllib2,
   smtplib, ftplib, imaplib, poplib, asyncore, popen2, subprocess etc. modules
 * special monkey-patching for pure Python MySQL client libraries
   mysql.connector and pymysql
 * special monkey-patching for C (Cython) MySQL client library geventmysql
-* compatible timeout handling on individual socket operations
-* I/O event detection using libev, which can use Linux epoll(7) or BSD
-  kqueue (if available)
+* I/O event detection using the fastest methods (epoll(7) on Linux, kqueue
+  on BSD etc.) with libev
 * built-in (non-blocking) WSGI server, but can use CherryPy's WSGI server as
   well in non-blocking mode
-* non-blocking DNS resolver using evdns
-* non-blocking stdin/stdout support (can be useful for implementing an
-  interactive server console)
+* non-blocking stdin/stdout support
 * built-in WSGI server capable of running not only WSGI applications, but
   BaseHTTPRequestHandler + BaseHTTPServer applications, CherryPy
   applications, web.py applications, and Google webapp applications (not
@@ -48,6 +52,11 @@ Features
 * combination of Syncless and (Twisted, Tornado (fast), Concurrence, gevent,
   Eventlet, circuits and/or asyncore) in the same process
 * a thread pool class for wrapping blocking operations
+* an interactive Python console for experimenting with the Syncless library,
+  without having to write a Python script
+* a remote interactive Python console (backdoor) named RemoteConsole for
+  debugging, which accepts TCP (telnet) connections, and supports line
+  editing (readline) if used with the supplied client
 
 Requirements
 ~~~~~~~~~~~~
@@ -981,11 +990,17 @@ A24. To run Syncless, you need a recent Unix system with Python 2.5 or 2.6.
      especially at higher loads (>10 concurrent TCP connections). See the
      Installation section in the README for more details.
 
-Q25. Does Syncless have an interactive Python console?
+Q25. Does Syncless have an interactive Python console (python -i)?
 
 A25. Yes, it's in the syncless.console module. You can start it using:
 
        $ python -m syncless.console
+
+     Please don't use `python -i' directly, it doesn't cooperate well with
+     tasklets, so if you create a tasklet there, it most probably won't ever
+     get scheduled, because the interactive console wants to run the whole
+     time in a blocking way. Use syncless.console instead, it solves this
+     problem.
 
      Run the ``help'' command to find out some examples.
 
@@ -1009,6 +1024,8 @@ A25. Yes, it's in the syncless.console module. You can start it using:
      creating your tasklets with `wrap_tasklet(Function)' instead of
      `stackless.tasklet(Function)'. If you do so, the exception will be
      printed, but the interactive console resumes afterwards.
+
+     IPython is not supported in syncless.console.
 
 Q26. Can I use other non-blocking network libraries in the same process
      which runs Syncless?
@@ -1102,6 +1119,32 @@ A30. Yes, with Python 2.6 (not with Python 2.5) with the builtin `ssl'
      ssl.wrap_socket. No non-blocking equivalent is provided for the
      constructor functions ssl.sslwrap_simple and socket.ssl.
 
+Q25. Does Syncless have a remote interactive Python console (backdoor)?
+
+A25. Yes, it's in the syncless.remote_console module. You can start the
+     server using:
+
+       $ python -m syncless.remote_console 5454
+
+     Example client connection with line editing (readline):
+
+       $ python -m syncless.backdoor_client 127.0.0.1 5454
+
+     Example client connection without line editing:
+
+       $ telnet 127.0.0.1 5454
+
+     See more in the docstring of the syncless.remote_console module.
+
+     The primary purpose of the RemoteConsole is to enable simple debugging
+     of long-running servers based on Syncless. Please note that the Python
+     debugger is not supported (may or may not work, most probably it won't
+     work), the typical use case of the RemoteConsole for debugging is that
+     the user evaluates Python statements and expression to understand and
+     manipulate the state (memory) of a long-running server. See the
+     docstring of the syncless.remote_console module for instructions for
+     enabling the RemoteConsole for your server application.
+
 Links
 ~~~~~
 * doc: related: eventlet vs gevent:
@@ -1194,8 +1237,6 @@ Planned features
 * TODO(pts): Implement an SSL-capable HTTP proxy as a reference.
 * TODO(pts): doc: signal.alarm doesn't work (the SIGALRM will get ignored?)
 * TODO(pts): Make os.waitpid non-blocking by installing a SIGCHLD handler.
-* TODO(pts): Add interactive console like gevent.backdoor with line editing
-  and history.
 * TODO(pts): Fix very small float sleep value for libev.
 * TODO(pts): Add more protocol parsing examples.
 * TODO(pts): Add proper doucmentation as .rst.
