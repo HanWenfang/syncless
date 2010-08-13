@@ -67,6 +67,15 @@ coio_evbuffer_free(struct coio_evbuffer *buffer)
 	free(buffer);
 }
 
+/** This function is not part of original libevent evbuffer */
+inline void
+coio_evbuffer_reset(struct coio_evbuffer *buffer)
+{
+	if (buffer->orig_buffer != NULL)
+		free(buffer->orig_buffer);
+	memset(buffer, '\0', sizeof(*buffer));
+}
+
 /* Adds data to an event buffer */
 
 static void

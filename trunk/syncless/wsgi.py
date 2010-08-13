@@ -277,6 +277,9 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
   # http://www.python.org/dev/peps/pep-0333/
   if not isinstance(date, str):
     raise TypeError
+  if not hasattr(sock, 'makefile_samefd'):  # isinstance(sock, coio.nbsocket)
+    raise TypeError
+
   loglevel = logging.root.level
   is_debug = loglevel <= DEBUG
   req_buf = ''
@@ -292,10 +295,10 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         logging.debug('https SSL handshake failed: %s' % e)
       return
         
-  if hasattr(sock, 'makefile_samefd'):  # e.g. isinstance(sock, coio.nbsocket)
-    sockfile = sock.makefile_samefd()
-    sockfile.read_exc_class = WsgiReadError
-    sockfile.write_exc_class = WsgiWriteError
+  sockfile = sock.makefile_samefd()
+  sockfile.read_exc_class = WsgiReadError
+  sockfile.write_exc_class = WsgiWriteError
+
   reqhead_continuation_re = REQHEAD_CONTINUATION_RE
   try:
     while do_keep_alive_ary[0]:
