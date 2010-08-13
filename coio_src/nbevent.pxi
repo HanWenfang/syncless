@@ -192,9 +192,9 @@ cdef extern from "./coio_c_evbuffer.h":
         void *cbarg
         void (*cb)(evbuffer_s*, int, int, void*)
 
-    # These must match other declarations of the same name.
     evbuffer_s *evbuffer_new "coio_evbuffer_new"()
     void evbuffer_free "coio_evbuffer_free"(evbuffer_s *)
+    void evbuffer_reset "coio_evbuffer_reset"(evbuffer_s *)  # Non-std.
     int evbuffer_expand "coio_evbuffer_expand"(evbuffer_s *, int)
     int evbuffer_add "coio_evbuffer_add"(evbuffer_s *, void_constp, int)
     int evbuffer_drain "coio_evbuffer_drain"(evbuffer_s *b, int size)
@@ -893,6 +893,8 @@ cdef class nbfile:
                 # This can raise self.write_owi.exc_class.
                 self.flush()
         finally:
+            evbuffer_reset(&self.read_eb)  # Also free the allocated buffer.
+            evbuffer_reset(&self.write_eb)
             if not self.c_closed:
                 self.c_closed = 1
                 if self.c_do_close:
