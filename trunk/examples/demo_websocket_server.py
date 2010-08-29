@@ -37,16 +37,14 @@ def WsgiApp(env, start_response):
     return wsgi.SendWildcardPolicyFile(env, start_response)
 
   if env.get('HTTP_UPGRADE') == 'WebSocket':
-    start_response('101', [('Upgrade', 'WebSocket')])
-    read_msg = env['syncless.websocket_read_msg']
-    write_msg = env['syncless.websocket_write_msg']
-    write_msg('Hello!')
-    for msg in iter(read_msg, None):
+    web_socket = start_response('WebSocket', [('foo-bar', 'baz!')])
+    web_socket.write_msg('Hello!')
+    for msg in iter(web_socket.read_msg, None):
       if isinstance(msg, str):
         # Make sure whe have a Unicode string (list of code points), so we can
         # safely reverse it below.
         msg = msg.decode('UTF-8')
-      write_msg(msg[::-1])  # Send back reversed.
+      web_socket.write_msg(msg[::-1])  # Send back reversed.
     return ()
 
   if env['PATH_INFO'] == '/':

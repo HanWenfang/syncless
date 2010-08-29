@@ -13,10 +13,26 @@ web applications. Example use:
 
 Example use with yield:
 
+  from syncless import wsgi
   def WsgiApp(env, start_response):
     start_response('200 OK', [('Content-Type', 'text/html')])
     yield 'Hello, '
     yield 'World!'
+  wsgi.RunHttpServer(WsgiApp)
+
+Minimal WebSocket server (see examples/demo_websocket_server.py for a useful
+example with a web browser client):
+
+  from syncless import wsgi
+  def WsgiApp(env, start_response):
+    if env.get('HTTP_UPGRADE') == 'WebSocket':
+      web_socket = start_response('WebSocket', ())
+      web_socket.write_msg('Hello!')
+      for msg in iter(web_socket.read_msg, None):
+        web_socket.write_msg('re(%s)' % msg)
+      return ()
+    start_response('404 Not Found', [('Content-Type', 'text/plain')])
+    return 'not found: %s' % env['PATH_INFO']
   wsgi.RunHttpServer(WsgiApp)
 
 See the following examples uses:
@@ -26,6 +42,7 @@ See the following examples uses:
 * examples/demo_syncless_cherrypy.py (CherryPy web app)
 * examples/demo_syncless_web_py.py (web.py web app)
 * examples/demo_syncless_webapp.py (Google AppEngine ``webapp'' web app)
+* examples/demo_websocket_server.py for a useful WebSocket server
 
 See http://www.python.org/dev/peps/pep-0333/ for more information about WSGI.
 
@@ -67,9 +84,12 @@ actual body data available, or until the application's returned iterable is
 exhausted.  (The only possible exception to this rule is if the response
 headers explicitly include a Content-Length of zero.)
 
+Please note that the WebSocket WSGI bindings implemented in syncless.wsgi
+are Syncless-specific, since WebSocket bindings are standardized in the WSGI
+specifications. gevent-websocket exposes a different binding API.
+
 Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
 Doc: WSGI specification: http://www.python.org/dev/peps/pep-0333/
-
 TODO(pts): Validate this implementation with wsgiref.validate.
 TODO(pts): Write access.log like BaseHTTPServer and CherryPy
 """
@@ -344,69 +364,86 @@ def GetWebSocketKey(value):
   return struct.pack('>I', number / spaces)
 
 
-def WebSocketReadMsg(f):
-  """Read one message (as a str) from a WebSocket file object.
+class WebSocket(object):
+  """A message-based bidirectional TCP connection with the WebSocket protocol.
   
-  A byte string is always returned. It contains UTF-8 or binary data
-  according to the WebSocket specification -- but that's not checked.
+  It is assumed that the WebSocket handshake is done before a WebSocket object
+  gets created.
+
+  TOOD(pts): Implement this C (Pyrex) for speed.
+  TODO(pts): Implement the close() method.
   """
-  # TODO(pts): Create a unicode object for UTF-8 data if requested.
-  frame_type = f.read(1)
-  if not frame_type:
-    return  # None
-  if frame_type == '\xff':
-    size = 0
-    while True:
-      i = f.read(1)
-      if not i:
-        raise WebSocketMessageTruncatedError
-      i = ord(i)
-      size = size * 128 + (i & 127)
-      if not (i & 128):  # Stop if the highest bit is unset.
-        break
-    if size:  # TODO(pts): Remember EOF condition (e.g. shutdown).
-      if size > MAX_WEBSOCKET_MESSAGE_SIZE:
-        # Protect against out-of-memory.
-        raise WebSocketMessageTooLargeError
-      msg = f.read(size)
-      if len(msg) < size:
-        raise WebSocketMessageTruncatedError
-      return msg
-  elif frame_type == '\x00':
-    while True:
-      i = f.find('\xff')
-      if i >= 0:
-        msg = f.read(i)
-        f.discard(1)  # '\xff'
-        return msg
-      if f.read_buffer_len >= MAX_WEBSOCKET_MESSAGE_SIZE:
-        # Protect against out-of-memory.
-        raise WebSocketMessageTooLargeError
-      if not f.read_more(1):
-        raise WebSocketMessageTruncatedError
-  else:
-    raise WebSocketInvalidFrameTypeError('%02X' % ord(frame_type))
-  # return None
+  __slots__ = ['_rwfile']
+
+  def __init__(self, rwfile):
+    """rwfile must be a syncless.coio.nbfile."""
+    if not isinstance(rwfile, coio.nbfile):
+      raise TypeError
+    self._rwfile = rwfile
+
+  def read_msg(self):
+    """Read one message (as a str) from a WebSocket file object.
     
+    A byte string is always returned. It contains UTF-8 or binary data
+    according to the WebSocket specification -- but that's not checked.
+    """
+    # TODO(pts): Create a unicode object for UTF-8 data if requested.
+    f = self._rwfile
+    frame_type = f.read(1)
+    if not frame_type:
+      return  # None
+    if frame_type == '\xff':
+      size = 0
+      while True:
+        i = f.read(1)
+        if not i:
+          raise WebSocketMessageTruncatedError
+        i = ord(i)
+        size = size * 128 + (i & 127)
+        if not (i & 128):  # Stop if the highest bit is unset.
+          break
+      if size:  # TODO(pts): Remember EOF condition (e.g. shutdown).
+        if size > MAX_WEBSOCKET_MESSAGE_SIZE:
+          # Protect against out-of-memory.
+          raise WebSocketMessageTooLargeError
+        msg = f.read(size)
+        if len(msg) < size:
+          raise WebSocketMessageTruncatedError
+        return msg
+    elif frame_type == '\x00':
+      while True:
+        i = f.find('\xff')
+        if i >= 0:
+          msg = f.read(i)
+          f.discard(1)  # '\xff'
+          return msg
+        if f.read_buffer_len >= MAX_WEBSOCKET_MESSAGE_SIZE:
+          # Protect against out-of-memory.
+          raise WebSocketMessageTooLargeError
+        if not f.read_more(1):
+          raise WebSocketMessageTruncatedError
+    else:
+      raise WebSocketInvalidFrameTypeError('%02X' % ord(frame_type))
+    # return None
+      
+  def write_msg(self, msg):
+    """Write a UTF-8 message (str or unicode) to a WebSocket.
+    
+    The order of the arguments is deliberate, so the defaults can be overridden.
 
-def WebSocketWriteMsg(msg, f):
-  """Write a UTF-8 message (str or unicode) to a WebSocket.
-  
-  The order of the arguments is deliberate, so the defaults can be overridden.
-
-  The message to be written must be valid UTF-8 (only it is checked that it
-  doesn't contain \\xFF).
-  """
-  # TODO(pts): Add support for writing binary messages, once there is
-  # consensus.
-  if isinstance(msg, str):
-    if '\xff' in msg:
-      raise ValueError('byte \\xFF in UTF-8 WebSocket message')
-    f.write('\x00%s\xff' % msg)
-  elif isinstance(msg, unicode):
-    f.write('\x00%s\xff' % msg.encode('UTF-8'))
-  else:
-    raise TypeError('expected WebSocket message, got %s' % type(msg))
+    The message to be written must be valid UTF-8 (only it is checked that it
+    doesn't contain \\xFF).
+    """
+    # TODO(pts): Add support for writing binary messages, once there is
+    # consensus.
+    if isinstance(msg, str):
+      if '\xff' in msg:
+        raise ValueError('byte \\xFF in UTF-8 WebSocket message')
+      self._rwfile.write('\x00%s\xff' % msg)
+    elif isinstance(msg, unicode):
+      self._rwfile.write('\x00%s\xff' % msg.encode('UTF-8'))
+    else:
+      raise TypeError('expected WebSocket message, got %s' % type(msg))
 
 
 def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
@@ -713,8 +750,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
 
         if HTTP_RESPONSE_STATUS_RE.match(status) and status[-1].strip():
           pass
-        elif (status.startswith('101') and
-              IsWebSocketResponse(response_headers)):
+        elif status == 'WebSocket':
           # This is non-standard behavior, because handling WebSocket
           # connections is not specified in the WSGI specification.
           ws_http_version = max(http_version, 'HTTP/1.1')
@@ -740,6 +776,21 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             ws_head = ['WebSocket-Origin: %s\r\n' % origin,
                        'WebSocket-Location: %s\r\n' % location]
             ws_digest = ''
+          for key, value in response_headers:
+            key = key.lower()
+            if (key not in ('status', 'server', 'date', 'connection',
+                            'charset', 'upgrade', 'set-cookie') and
+                not key.startswith('proxy-') and
+                not key.startswith('content-')):
+              key_capitalized = HEADER_WORD_LOWER_LETTER_RE.sub(
+                  lambda match: match.group(0).upper(), key)
+              value = str(value).strip()
+              if not HEADER_VALUE_RE.match(value):
+                raise WsgiResponseSyntaxError('invalid value for key %r: %r' %
+                                              (key_capitalized, value))
+              # TODO(pts): Eliminate duplicate keys (except for set-cookie).
+              ws_head.append('%s: %s\r\n' % (key_capitalized, value))
+
           # TODO(pts): Add more response headers from response_headers.
           sockfile.write(
               '%s 101 Web Socket Protocol Handshake\r\n'
@@ -754,17 +805,9 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           sockfile.read_limit = -1
           headers_sent_ary[0] = True
           do_keep_alive_ary[0] = False
-          env['syncless.websocket_read_msg'] = types.FunctionType(
-              WebSocketReadMsg.func_code, WebSocketReadMsg.func_globals,
-              None, (sockfile,))
-          env['syncless.websocket_write_msg'] = types.FunctionType(
-              WebSocketWriteMsg.func_code, WebSocketWriteMsg.func_globals,
-              None, (sockfile,))
-          # The user should use syncless.websocket_write_msg instead.
-          return WriteNotHead
+          return WebSocket(sockfile)
         else:
           raise WsgiResponseSyntaxError('bad HTTP response status: %r' % status)
-
         if special_request_type:  # e.g. 'policy-file'
           headers_sent_ary[0] = True
         else:
