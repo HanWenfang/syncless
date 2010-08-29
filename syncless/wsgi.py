@@ -227,7 +227,10 @@ def GetHttpDate(at):
 
 def RespondWithBad(status, date, server_software, sockfile, reason):
   status_str = HTTP_STATUS_STRINGS[status]
-  msg = '%s: %s' % (status_str, reason)
+  if reason:
+    msg = '%s: %s' % (status_str, reason)
+  else:
+    msg = status_str
   # TODO(pts): Add Server: and Date:
   sockfile.write('HTTP/1.0 %s %s\r\n'
                  'Server: %s\r\n'
@@ -269,7 +272,7 @@ def ConsumerWorker(items, is_debug):
     if is_debug:
       logging.debug('error writing HTTP body response: %s' % e)
   except Exception, e:
-    ReportAppException(sys.exc_info())
+    ReportAppException(sys.exc_info(), which='consume')
   finally:
     if hasattr(items, 'close'):  # According to the WSGI spec.
       try:
@@ -278,7 +281,7 @@ def ConsumerWorker(items, is_debug):
         if is_debug:
           logging.debug('error writing HTTP body response close: %s' % e)
       except Exception, e:
-        ReportAppException(sys.exc_info(), which='close')
+        ReportAppException(sys.exc_info(), which='consume-close')
 
 
 def PrependIterator(value, iterator):
@@ -385,7 +388,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
       except IOError_all, e:  # Raised in sock.recv above.
         if is_debug and e[0] != errno.ECONNRESET:
           logging.debug('error reading HTTP request headers: %s' % e)
-        break
+        return
       # TODO(pts): Speed up this splitting?
       req_head = reqhead_continuation_re.sub(
           ', ', req_head.rstrip('\r').replace('\r\n', '\n'))
@@ -629,7 +632,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           logging.debug('error writing HTTP response at call: %s' % e)
         return
       except Exception, e:
-        ReportAppException(sys.exc_info())
+        ReportAppException(sys.exc_info(), which='start')
         if not headers_sent_ary[0]:
           # TODO(pts): Report exc on HTTP in development mode.
           sockfile.discard_write_buffer()
@@ -745,14 +748,16 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
                   break
               if res_content_length_ary[1] > 0:
                 logging.error('content length too large for yeald')
-                do_keep_alive_ary[0] = False
+                # Ignore the rest in another tasklet.
+                stackless.tasklet(ConsumerWorker)(items, is_debug)
+                return
             else:
               for data in items:
                 sockfile.write(data)
           except (WsgiReadError, WsgiWriteError):
             raise
           except Exception, e:
-            ReportAppException(sys.exc_info())
+            ReportAppException(sys.exc_info(), which='yield')
             return
         else:  # HTTP HEAD response.
           if not headers_sent_ary[0]:
@@ -779,15 +784,15 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
 
       except WsgiReadError, e:
         # This should not happen, iteration should not try to read.
-        do_keep_alive_ary[0] = False
         sockfile.discard_write_buffer()
         if is_debug:
           logging.debug('error reading HTTP request at iter: %s' % e)
+        return
       except WsgiWriteError, e:
-        do_keep_alive_ary[0] = False
         sockfile.discard_write_buffer()
         if is_debug:
           logging.debug('error writing HTTP response at iter: %s' % e)
+        return
       finally:
         if hasattr(items, 'close'):  # According to the WSGI spec.
           try:
@@ -798,19 +803,19 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             # we call close() here nevertheless.
             items.close()
           except WsgiReadError, e:
-            do_keep_alive_ary[0] = False
             sockfile.discard_write_buffer()
             if is_debug:
               logging.debug('error reading HTTP request at close: %s' % e)
+            return
           except WsgiWriteError, e:
-            do_keep_alive_ary[0] = False
             sockfile.discard_write_buffer()
             if is_debug:
               logging.debug('error writing HTTP response at close: %s' % e)
+            return
           except Exception, e:
-            do_keep_alive_ary[0] = False
             sockfile.discard_write_buffer()
             ReportAppException(sys.exc_info(), which='close')
+            return
   finally:
     # Without this, when the function returns, sockfile.__del__ calls
     # sockfile.close calls sockfile.flush, which raises EBADF.
@@ -821,6 +826,8 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
       pass
     if is_debug:
       logging.debug('connection closed sock=%x' % id(sock))
+
+  # Don't add code here, since we have many ``return'' calls above.
 
 
 def WsgiListener(server_socket, wsgi_application):
