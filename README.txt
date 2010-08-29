@@ -57,6 +57,7 @@ Features
 * a remote interactive Python console (backdoor) named RemoteConsole for
   debugging, which accepts TCP (telnet) connections, and supports line
   editing (readline) if used with the supplied client
+* WebSocket server support in the WSGI server module
 
 Requirements
 ~~~~~~~~~~~~
@@ -1145,6 +1146,21 @@ A25. Yes, it's in the syncless.remote_console module. You can start the
      docstring of the syncless.remote_console module for instructions for
      enabling the RemoteConsole for your server application.
 
+Q26. Does Syncless support WebSocket connections?
+
+     There is no-built in support WebSocket clients, but you can use e.g.
+     patch_socket() and the pywebsocket reference implementation.
+
+     The syncless.wsgi module has support built-in for WebSocket servers.
+     See examples/demo_websocket_server.py for more information. Please note
+     that you need a quite recent web browser as a WebSocket client to try
+     this demo with. Read more about supported browsers in the module
+     docstring of the .py file.
+
+     See http://stackoverflow.com/questions/1253683/websocket-for-html5
+     for useful links and information about WebSocket.
+
+
 Links
 ~~~~~
 * doc: related: eventlet vs gevent:
@@ -1168,6 +1184,9 @@ Info: In interactive stackless, repeated invocations of stackless.current may
 Info: LIBEV_FLAGS=1 use select(); LIBEV_FLAGS=2 use poll()
 Info: gevent.backdoor doesn't support line editing with libreadline
       python2.5 -m gevent.backdoor 1234
+
+* picoev: libevent/libev replacement: http://developer.cybozu.co.jp/kazuho/2009/08/picoev-a-tiny-e.html
+* WSGI server meinheld http://pypi.python.org/pypi/meinheld/0.3.1
 
 Release procedure
 ~~~~~~~~~~~~~~~~~
@@ -1242,5 +1261,6 @@ Planned features
 * TODO(pts): Add proper doucmentation as .rst.
 * TODO(pts): Get ideas from
   http://code.google.com/p/gevent/wiki/ProjectsUsingGevent
+* TODO(pts): Port gevent-websocket.
 
 __EOF__
