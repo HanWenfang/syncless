@@ -636,7 +636,12 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         if not headers_sent_ary[0]:
           # TODO(pts): Report exc on HTTP in development mode.
           sockfile.discard_write_buffer()
-          RespondWithBad(500, date, server_software, sockfile, '')
+          try:
+            RespondWithBad(500, date, server_software, sockfile, '')
+          except WsgiWriteError, e:
+            if is_debug:
+              logging.debug('error writing HTTP response at start-500: %s' % e)
+            return
           do_keep_alive_ary[0] = do_req_keep_alive
           continue
         if (do_req_keep_alive and res_content_length_ary and
@@ -647,8 +652,10 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         return
 
       try:
-        assert sockfile.write_buffer_len or headers_sent_ary[0], (
-            'WSGI app must have called start_response by now')
+        if not (sockfile.write_buffer_len or headers_sent_ary[0]):
+          logging.error('app has not called start_response')
+          RespondWithBad(500, date, server_software, sockfile, '')
+          return
         date = None
         if (isinstance(items, list) or isinstance(items, tuple) or
             isinstance(items, str)):
