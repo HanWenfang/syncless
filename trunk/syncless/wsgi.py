@@ -127,6 +127,9 @@ SUB_URL_RE = re.compile(r'\A/[-A-Za-z0-9_./,~!@$*()\[\]\';:?&%+=]*\Z')
 
 NON_DIGITS_RE = re.compile(r'\D+')
 
+MAX_WEBSOCKET_MESSAGE_SIZE = 10 << 20
+"""Maximum number of bytes in an incoming WebSocket message."""
+
 HTTP_1_1_METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'DELETE',
                     'OPTIONS', 'TRACE', 'CONNECT')
 
@@ -206,8 +209,21 @@ class WsgiEmptyInputStream(object):
   def discard_to_read_limit(cls):
     pass
 
+
 class WsgiReadError(IOError):
   """Raised when reading the HTTP request."""
+
+
+class WebSocketMessageTruncatedError(WsgiReadError):
+  """Raised when a WebSocket message has been truncated."""
+
+
+class WebSocketInvalidFrameTypeError(WsgiReadError):
+  """Raised when a message with invalid frame type is read from a WebSocket."""
+
+
+class WebSocketMessageTooLargeError(WsgiReadError):
+  """Raised when a message about to be read would be too large."""
 
 
 class WsgiResponseSyntaxError(IOError):
@@ -294,6 +310,18 @@ def PrependIterator(value, iterator):
     yield item
 
 
+def SendWildcardPolicyFile(env, start_response):
+  """Helper function for WSGI applications to send the flash policy-file."""
+  # The Content-Type doesn't matter, it won't be sent.
+  start_response('200 OK', [('Content-Type', 'text/plain')])
+  return ('<?xml version="1.0"?>\n'
+          '<!DOCTYPE cross-domain-policy SYSTEM '
+          '"http://www.macromedia.com/xml/dtds/cross-domain-policy.dtd">\n'
+          '<cross-domain-policy>\n'
+          '<allow-access-from domain="*" to-ports="%s"/>\n'
+          '</cross-domain-policy>\n' % env['SERVER_PORT'],)
+
+
 def IsWebSocketResponse(response_headers):
   """Return a bool indicating if HTTP response headers are for WebSocket."""
   retval = False
@@ -314,6 +342,71 @@ def GetWebSocketKey(value):
   if number % spaces:
     raise ValueError('invalid number of spaces in web socket key: %r' % value)
   return struct.pack('>I', number / spaces)
+
+
+def WebSocketReadMsg(f):
+  """Read one message (as a str) from a WebSocket file object.
+  
+  A byte string is always returned. It contains UTF-8 or binary data
+  according to the WebSocket specification -- but that's not checked.
+  """
+  # TODO(pts): Create a unicode object for UTF-8 data if requested.
+  frame_type = f.read(1)
+  if not frame_type:
+    return  # None
+  if frame_type == '\xff':
+    size = 0
+    while True:
+      i = f.read(1)
+      if not i:
+        raise WebSocketMessageTruncatedError
+      i = ord(i)
+      size = size * 128 + (i & 127)
+      if not (i & 128):  # Stop if the highest bit is unset.
+        break
+    if size:  # TODO(pts): Remember EOF condition (e.g. shutdown).
+      if size > MAX_WEBSOCKET_MESSAGE_SIZE:
+        # Protect against out-of-memory.
+        raise WebSocketMessageTooLargeError
+      msg = f.read(size)
+      if len(msg) < size:
+        raise WebSocketMessageTruncatedError
+      return msg
+  elif frame_type == '\x00':
+    while True:
+      i = f.find('\xff')
+      if i >= 0:
+        msg = f.read(i)
+        f.discard(1)  # '\xff'
+        return msg
+      if f.read_buffer_len >= MAX_WEBSOCKET_MESSAGE_SIZE:
+        # Protect against out-of-memory.
+        raise WebSocketMessageTooLargeError
+      if not f.read_more(1):
+        raise WebSocketMessageTruncatedError
+  else:
+    raise WebSocketInvalidFrameTypeError('%02X' % ord(frame_type))
+  # return None
+    
+
+def WebSocketWriteMsg(msg, f):
+  """Write a UTF-8 message (str or unicode) to a WebSocket.
+  
+  The order of the arguments is deliberate, so the defaults can be overridden.
+
+  The message to be written must be valid UTF-8 (only it is checked that it
+  doesn't contain \\xFF).
+  """
+  # TODO(pts): Add support for writing binary messages, once there is
+  # consensus.
+  if isinstance(msg, str):
+    if '\xff' in msg:
+      raise ValueError('byte \\xFF in UTF-8 WebSocket message')
+    f.write('\x00%s\xff' % msg)
+  elif isinstance(msg, unicode):
+    f.write('\x00%s\xff' % msg.encode('UTF-8'))
+  else:
+    raise TypeError('expected WebSocket message, got %s' % type(msg))
 
 
 def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
@@ -653,11 +746,21 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
               'Upgrade: WebSocket\r\nConnection: Upgrade\r\n%s\r\n%s' %
               (ws_http_version, ''.join(ws_head), ws_digest))
           # TODO(pts): Add methods read_msg and write_msg instead.
-          env['syncless.sockfile'] = sockfile
+          # A callback for closing the connection is currently not
+          # implemented, neither by sending '\xff\x00', nor by closing the
+          # TCP connection. TODO(pts): Implement this once there is consensus.
           sockfile.flush()
-          sockfile.write_buffer_limit = 0
+          sockfile.write_buffer_limit = 0  # Unbuffered.
+          sockfile.read_limit = -1
           headers_sent_ary[0] = True
           do_keep_alive_ary[0] = False
+          env['syncless.websocket_read_msg'] = types.FunctionType(
+              WebSocketReadMsg.func_code, WebSocketReadMsg.func_globals,
+              None, (sockfile,))
+          env['syncless.websocket_write_msg'] = types.FunctionType(
+              WebSocketWriteMsg.func_code, WebSocketWriteMsg.func_globals,
+              None, (sockfile,))
+          # The user should use syncless.websocket_write_msg instead.
           return WriteNotHead
         else:
           raise WsgiResponseSyntaxError('bad HTTP response status: %r' % status)

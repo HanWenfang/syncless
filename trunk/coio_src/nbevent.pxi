@@ -743,9 +743,9 @@ cdef class nbfile:
     # >=3: use the value for the buffer size in bytes
     cdef int c_write_buffer_limit
     cdef int c_min_read_buffer_size
-    # Maximum number of bytes to be read from self.read_owi.fd, or -1 if unlimited.
-    # Please note that the bytes already read to self.read_eb are not counted in
-    # c_read_limit.
+    # Maximum number of bytes to be read from self.read_owi.fd, or -1 if
+    # unlimited. Please note that the bytes already read to self.read_eb are
+    # not counted in c_read_limit.
     cdef int c_read_limit
     cdef evbuffer_s read_eb
     cdef evbuffer_s write_eb
@@ -1407,7 +1407,6 @@ cdef class nbfile:
         """Read to buffer at least n more bytes, return number of bytes read.
 
         There is no such Python `file' method (file.read_more).
-
         """
         cdef Py_ssize_t c_n
         cdef Py_ssize_t got
@@ -1517,7 +1516,6 @@ cdef class nbfile:
         """Get string from read buffer.
 
         There is no such Python `file' method (file.get_string).
-
         """
         cdef Py_ssize_t c_start_idx
         cdef Py_ssize_t c_end_idx

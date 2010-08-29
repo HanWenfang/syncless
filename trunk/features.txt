@@ -476,3 +476,12 @@ compatible with other non-blocking systems in the same process
   gevent: no++, not by default, but there is the project gTornado
   Syncless: yes++, has monkey-patching for Concurrence, Eventlet, Tornado, Twisted, gevent, circuits and asyncore
   circuits: yes, pygame and GTK
+provides WebSocket server support
+  Concurrence: no
+  Eventlet: yes
+  Tornado: yes
+  Twisted: yes
+  asyncore: no
+  gevent: no++, with gevent-websocket
+  Syncless: yes
+  circuits: no
