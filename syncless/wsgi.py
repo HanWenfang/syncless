@@ -11,6 +11,14 @@ web applications. Example use:
     return ['Hello, World!']
   wsgi.RunHttpServer(WsgiApp)
 
+Example use with yield:
+
+  def WsgiApp(env, start_response):
+    start_response('200 OK', [('Content-Type', 'text/html')])
+    yield 'Hello, '
+    yield 'World!'
+  wsgi.RunHttpServer(WsgiApp)
+
 See the following examples uses:
 
 * examples/demo.py (WSGI web app for both HTTP and HTTPS)
@@ -271,6 +279,13 @@ def ConsumerWorker(items, is_debug):
           logging.debug('error writing HTTP body response close: %s' % e)
       except Exception, e:
         ReportAppException(sys.exc_info(), which='close')
+
+
+def PrependIterator(value, iterator):
+  """Iterator which yields value, then all by iterator."""
+  yield value
+  for item in iterator:
+    yield item
 
 
 def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
@@ -594,6 +609,17 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
       # TODO(pts): Handle application-level exceptions here.
       try:
         items = wsgi_application(env, StartResponse) or ''
+        if isinstance(items, types.GeneratorType) and not (
+            sockfile.write_buffer_len or headers_sent_ary[0]):
+          # Make sure StartResponse gets called now, by forcing the first
+          # iteration (yield).
+          try:
+            item = items.next()  # Only this might raise StopIteration.
+            if item:
+              items = PrependIterator(item, items)
+              item = None
+          except StopIteration:
+            item = None
       except WsgiReadError, e:
         if is_debug:
           logging.debug('error reading HTTP request body at call: %s' % e)
