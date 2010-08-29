@@ -247,11 +247,12 @@ def ReportAppException(exc_info, which='app'):
   logging.error(exc)
 
 
-def ConsumerWorker(items):
+def ConsumerWorker(items, is_debug):
   """Stackless tasklet to consume the rest of a wsgi_application output.
 
   Args:
     items: Iterable returned by the call to a wsgi_application.
+    is_debug: Bool specifying whether debugging is enabled.
   """
   try:
     for data in items:  # This calls the WSGI application.
@@ -312,7 +313,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
       # line-by-line.
       sockfile.write_buffer_limit = 2
       # Ensure there is no leftover from the previous request.
-      assert not sockfile.write_buffer_len
+      assert not sockfile.write_buffer_len, sockfile.write_buffer_len
 
       env = dict(default_env)
       env['REMOTE_HOST'] = env['REMOTE_ADDR'] = peer_name[0]
@@ -367,8 +368,9 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             return  # Possibly https request (starts with '\x80')
           req_new = None
       except IOError_all, e:  # Raised in sock.recv above.
-        if is_debug:
-          logging.debug('error reading HTTP request: %s' % e)
+        if is_debug and e[0] != errno.ECONNRESET:
+          logging.debug('error reading HTTP request headers: %s' % e)
+        break
       # TODO(pts): Speed up this splitting?
       req_head = reqhead_continuation_re.sub(
           ', ', req_head.rstrip('\r').replace('\r\n', '\n'))
@@ -392,6 +394,10 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         return  # Don't reuse the connection.
       env['REQUEST_METHOD'] = method
       env['SERVER_PROTOCOL'] = http_version
+      if is_debug:
+        logging.debug(
+            'on sock=%x %s %s' %
+            (id(sock), method, re.sub(r'(?s)[?].*\Z', '?...', suburl)))
       # TODO(pts): What does appengine set here? wsgiref.validate recommends
       # the empty string (not starting with '.').
       env['SCRIPT_NAME'] = ''
@@ -590,7 +596,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         items = wsgi_application(env, StartResponse) or ''
       except WsgiReadError, e:
         if is_debug:
-          logging.debug('error reading HTTP request at call: %s' % e)
+          logging.debug('error reading HTTP request body at call: %s' % e)
         return
       except WsgiWriteError, e:
         if is_debug:
@@ -742,15 +748,20 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           # other tasklet is working.
           # TODO(pts): Is this optimization safe? Limit the number of tasklets
           # to 1 to prevent DoS attacks.
-          stackless.tasklet(ConsumerWorker)(items)  # Don't run it yet.
+          stackless.tasklet(ConsumerWorker)(items, is_debug)  # Don't run it yet.
           items = None  # Prevent double items.close(), see below.
 
       except WsgiReadError, e:
+        # This should not happen, iteration should not try to read.
+        do_keep_alive_ary[0] = False
+        sockfile.discard_write_buffer()
         if is_debug:
-          logging.debug('error reading HTTP request: %s' % e)
+          logging.debug('error reading HTTP request at iter: %s' % e)
       except WsgiWriteError, e:
+        do_keep_alive_ary[0] = False
+        sockfile.discard_write_buffer()
         if is_debug:
-          logging.debug('error writing HTTP response: %s' % e)
+          logging.debug('error writing HTTP response at iter: %s' % e)
       finally:
         if hasattr(items, 'close'):  # According to the WSGI spec.
           try:
@@ -761,12 +772,18 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             # we call close() here nevertheless.
             items.close()
           except WsgiReadError, e:
+            do_keep_alive_ary[0] = False
+            sockfile.discard_write_buffer()
             if is_debug:
               logging.debug('error reading HTTP request at close: %s' % e)
           except WsgiWriteError, e:
+            do_keep_alive_ary[0] = False
+            sockfile.discard_write_buffer()
             if is_debug:
               logging.debug('error writing HTTP response at close: %s' % e)
           except Exception, e:
+            do_keep_alive_ary[0] = False
+            sockfile.discard_write_buffer()
             ReportAppException(sys.exc_info(), which='close')
   finally:
     # Without this, when the function returns, sockfile.__del__ calls
@@ -1208,7 +1225,6 @@ def RunHttpServer(app, server_address=None, listen_queue_size=100):
     if server_address is None:
       server_address = ('127.0.0.1', 6666)
   else:
-    print type(app)
     assert 0, 'unsupported application type for %r' % (app,)
 
   server_socket = coio.nbsocket(socket.AF_INET, socket.SOCK_STREAM)
