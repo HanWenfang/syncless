@@ -81,6 +81,7 @@ import logging
 import re
 import sys
 import socket
+import struct
 import time
 import traceback
 import types
@@ -123,6 +124,8 @@ HTTP_RESPONSE_STATUS_RE = re.compile(r'[2-5]\d\d [A-Z][ -~]*\Z')
 
 SUB_URL_RE = re.compile(r'\A/[-A-Za-z0-9_./,~!@$*()\[\]\';:?&%+=]*\Z')
 """Matches a HTTP sub-URL, as appearing in line 1 of a HTTP request."""
+
+NON_DIGITS_RE = re.compile(r'\D+')
 
 HTTP_1_1_METHODS = ('GET', 'HEAD', 'POST', 'PUT', 'DELETE',
                     'OPTIONS', 'TRACE', 'CONNECT')
@@ -291,6 +294,28 @@ def PrependIterator(value, iterator):
     yield item
 
 
+def IsWebSocketResponse(response_headers):
+  """Return a bool indicating if HTTP response headers are for WebSocket."""
+  retval = False
+  for key, value in response_headers:
+    if key.lower() == 'upgrade':
+      retval = value == 'WebSocket'
+  return retval
+
+
+def GetWebSocketKey(value):
+  """Return an 4-byte digest key from a Sec-WebSocket-Key{1,2} value.
+
+  Raises:
+   ValueError
+  """
+  number = int(NON_DIGITS_RE.sub('', value))
+  spaces = value.count(' ')
+  if number % spaces:
+    raise ValueError('invalid number of spaces in web socket key: %r' % value)
+  return struct.pack('>I', number / spaces)
+
+
 def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
@@ -322,6 +347,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
   try:
     while do_keep_alive_ary[0]:
       do_keep_alive_ary[0] = False
+      special_request_type = None
 
       # This enables the infinite write buffer so we can buffer the HTTP
       # response headers (without a size limit) until the first body byte.
@@ -381,9 +407,24 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           # reference counters increase by slicing?
           req_buf += req_new  # Fast string append if refcount(req_buf) == 1.
           if req_buf[0] not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-            if is_debug:
-              logging.debug('received non-HTTP request: %r' % req_buf[:64])
-            return  # Possibly https request (starts with '\x80')
+            if req_buf.startswith('<'):
+              while len(req_buf) < 32 and '\0' not in req_buf:
+                req_new = sock.recv(32)
+                if not req_new:
+                  break
+                req_buf += req_new
+            if req_buf.startswith('<policy-file-request/>\0'):
+              # Sent by the Flash player used by e.g. web-socket-js
+              # (http://github.com/gimite/web-socket-js/).
+              req_head = 'GET policy-file HTTP/1.0'
+              req_buf = req_buf[req_buf.find('\0') + 1:]
+              special_request_type = 'policy-file'
+              break
+            else:
+              # TODO(pts): Detect and handle SSL (https://).
+              if is_debug:
+                logging.debug('received non-HTTP request: %r' % req_buf[:64])
+              return  # Possibly https request (starts with '\x80')
           req_new = None
       except IOError_all, e:  # Raised in sock.recv above.
         if is_debug and e[0] != errno.ECONNRESET:
@@ -407,9 +448,10 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         RespondWithBad(400, date, server_software, sockfile, 'bad method')
         return  # Don't reuse the connection.
       if not SUB_URL_RE.match(suburl):
-        # This also fails for HTTP proxy URLS http://...
-        RespondWithBad(400, date, server_software, sockfile, 'bad suburl')
-        return  # Don't reuse the connection.
+        if special_request_type != 'policy-file':
+          # This also fails for HTTP proxy URLS http://...
+          RespondWithBad(400, date, server_software, sockfile, 'bad suburl')
+          return  # Don't reuse the connection.
       env['REQUEST_METHOD'] = method
       env['SERVER_PROTOCOL'] = http_version
       if is_debug:
@@ -476,28 +518,31 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
               date, server_software, sockfile, 'missing content')
           return
         env['wsgi.input'] = input = WsgiEmptyInputStream
+        if ('HTTP_SEC_WEBSOCKET_KEY1' in env and
+            'HTTP_SEC_WEBSOCKET_KEY2' in env):
+          content_length = 8
+      elif method not in ('POST', 'PUT'):
+        if content_length:
+          RespondWithBad(400,
+              date, server_software, sockfile, 'unexpected content')
+          return
+        content_length = None
+        del env['CONTENT_LENGTH']
+
+      if content_length:  # TODO(pts): Test this branch.
+        # TODO(pts): Avoid the memcpy() in unread.
+        sockfile.unread(req_buf[:content_length])
+        # This assertion fails here if the client sends multiple very
+        # small HTTP requests without waiting for the first request to be
+        # served.
+        if content_length < sockfile.read_buffer_len:
+          RespondWithBad(400,
+              date, server_software, sockfile, 'next request too early')
+          return
+        env['wsgi.input'] = input = sockfile
+        sockfile.read_limit = content_length - sockfile.read_buffer_len
       else:
-        if method not in ('POST', 'PUT'):
-          if content_length:
-            RespondWithBad(400,
-                date, server_software, sockfile, 'unexpected content')
-            return
-          content_length = None
-          del env['CONTENT_LENGTH']
-        if content_length:  # TODO(pts): Test this branch.
-          # This assertion fails here if the client sends multiple very
-          # small HTTP requests without waiting for the first request to be
-          # served.
-          if content_length < sockfile.read_buffer_len:
-            RespondWithBad(400,
-                date, server_software, sockfile, 'next request too early')
-            return
-          env['wsgi.input'] = input = sockfile
-          # TODO(pts): Avoid the memcpy() in unread.
-          sockfile.unread(req_buf[:content_length])
-          sockfile.read_limit = content_length - sockfile.read_buffer_len
-        else:
-          env['wsgi.input'] = input = WsgiEmptyInputStream
+        env['wsgi.input'] = input = WsgiEmptyInputStream
 
       req_buf = ''  # Save memory.
       is_not_head = method != 'HEAD'
@@ -564,45 +609,92 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
 
       def StartResponse(status, response_headers, exc_info=None):
         """Callback called by wsgi_application."""
-        if not (HTTP_RESPONSE_STATUS_RE.match(status) and status[-1].strip()):
-          raise WsgiResponseSyntaxError('bad HTTP response status: %r' % status)
+        # Just ignore exc_info, because we don't have to re-raise it since
+        # we haven't sent any headers yet.
 
-        # Just set it to None, because we don't have to re-raise it since we
-        # haven't sent any headers yet.
-        exc_info = None
-        if sockfile.write_buffer_len:  # StartResponse called again by an error handler.
+        # StartResponse called again by an error handler: ignore the headers
+        # previously buffered, so we can start generating the error header.
+        if sockfile.write_buffer_len:
           sockfile.discard_write_buffer()
           del res_content_length_ary[:]
 
-        sockfile.write('%s %s\r\n' % (http_version, status))  # HTTP/1.0
-        sockfile.write('Server: %s\r\n' % server_software)
-        sockfile.write('Date: %s\r\n' % date)
-        for key, value in response_headers:
-          key = key.lower()
-          if (key not in ('status', 'server', 'date', 'connection') and
-              not key.startswith('proxy-') and
-              # Apache responds with content-type for HEAD requests.
-              (is_not_head or key not in ('content-length',
-                                          'content-transfer-encoding'))):
-            if key == 'content-length':
-              del res_content_length_ary[:]
-              try:
-                res_content_length_ary.append(int(str(value)))
-                # Number of bytes remaining. Checked and updated only for
-                # non-HEAD respones.
-                res_content_length_ary.append(res_content_length_ary[-1])
-              except ValueError:
-                raise WsgiResponseSyntaxError('bad content-length: %r' % value)
-            elif not HEADER_KEY_RE.match(key):
-              raise WsgiResponseSyntaxError('invalid key: %r' % key)
-            key_capitalized = HEADER_WORD_LOWER_LETTER_RE.sub(
-                lambda match: match.group(0).upper(), key)
-            value = str(value).strip()
-            if not HEADER_VALUE_RE.match(value):
-              raise WsgiResponseSyntaxError('invalid value for key %r: %r' %
-                                            (key_capitalized, value))
-            # TODO(pts): Eliminate duplicate keys (except for set-cookie).
-            sockfile.write('%s: %s\r\n' % (key_capitalized, value))
+        if HTTP_RESPONSE_STATUS_RE.match(status) and status[-1].strip():
+          pass
+        elif (status.startswith('101') and
+              IsWebSocketResponse(response_headers)):
+          # This is non-standard behavior, because handling WebSocket
+          # connections is not specified in the WSGI specification.
+          ws_http_version = max(http_version, 'HTTP/1.1')
+          origin = env.get('HTTP_ORIGIN') or 'http://%s' % env['HTTP_HOST']
+          if env.get('wsgi.url_scheme') == 'https':
+            ws_protocol = 'wss'
+          else:
+            ws_protocol = 'ws'
+          location = '%s://%s%s' % (
+              ws_protocol, env['HTTP_HOST'], env['PATH_INFO'])
+          key1 = env.get('HTTP_SEC_WEBSOCKET_KEY1')  # '2\\;!0=9"  8915i  6Fr\\2 S0 p'
+          key2 = env.get('HTTP_SEC_WEBSOCKET_KEY2')  # "2'_a 7  729  =$ec,0P  1I 13*  R0"
+          if key1 and key2:
+            from hashlib import md5  # Present in both Python 2.5 and 2.6.
+            key3 = sockfile.read(8)
+            ws_head = ['Sec-WebSocket-Origin: %s\r\n' % origin,
+                       'Sec-WebSocket-Location: %s\r\n' % location]
+            ws_digest = md5(GetWebSocketKey(key1) + GetWebSocketKey(key2) +
+                            key3).digest()   # 16 bytes
+          else:  # Old, WebSocket draft 75.
+            # TODO(pts): Flag to disable old (draft 75) connections. Are they
+            # insecure?
+            ws_head = ['WebSocket-Origin: %s\r\n' % origin,
+                       'WebSocket-Location: %s\r\n' % location]
+            ws_digest = ''
+          # TODO(pts): Add more response headers from response_headers.
+          sockfile.write(
+              '%s 101 Web Socket Protocol Handshake\r\n'
+              'Upgrade: WebSocket\r\nConnection: Upgrade\r\n%s\r\n%s' %
+              (ws_http_version, ''.join(ws_head), ws_digest))
+          # TODO(pts): Add methods read_msg and write_msg instead.
+          env['syncless.sockfile'] = sockfile
+          sockfile.flush()
+          sockfile.write_buffer_limit = 0
+          headers_sent_ary[0] = True
+          do_keep_alive_ary[0] = False
+          return WriteNotHead
+        else:
+          raise WsgiResponseSyntaxError('bad HTTP response status: %r' % status)
+
+        if special_request_type:  # e.g. 'policy-file'
+          headers_sent_ary[0] = True
+        else:
+          sockfile.write('%s %s\r\n' % (http_version, status))  # HTTP/1.0
+          sockfile.write('Server: %s\r\n' % server_software)
+          sockfile.write('Date: %s\r\n' % date)
+          for key, value in response_headers:
+            key = key.lower()
+            if (key not in ('status', 'server', 'date', 'connection') and
+                not key.startswith('proxy-') and
+                # Apache responds with content-type for HEAD requests.
+                (is_not_head or key not in ('content-length',
+                                            'content-transfer-encoding'))):
+              if key == 'content-length':
+                del res_content_length_ary[:]
+                try:
+                  res_content_length_ary.append(int(str(value)))
+                  # Number of bytes remaining. Checked and updated only for
+                  # non-HEAD respones.
+                  res_content_length_ary.append(res_content_length_ary[-1])
+                except ValueError:
+                  raise WsgiResponseSyntaxError('bad content-length: %r' % value)
+              elif not HEADER_KEY_RE.match(key):
+                raise WsgiResponseSyntaxError('invalid key: %r' % key)
+              key_capitalized = HEADER_WORD_LOWER_LETTER_RE.sub(
+                  lambda match: match.group(0).upper(), key)
+              value = str(value).strip()
+              if not HEADER_VALUE_RE.match(value):
+                raise WsgiResponseSyntaxError('invalid value for key %r: %r' %
+                                              (key_capitalized, value))
+              # TODO(pts): Eliminate duplicate keys (except for set-cookie).
+              sockfile.write('%s: %s\r\n' % (key_capitalized, value))
+
         # Don't flush yet.
         if is_not_head:
           return WriteNotHead
