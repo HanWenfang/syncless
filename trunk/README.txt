@@ -57,7 +57,8 @@ Features
 * a remote interactive Python console (backdoor) named RemoteConsole for
   debugging, which accepts TCP (telnet) connections, and supports line
   editing (readline) if used with the supplied client
-* WebSocket server support in the WSGI server module
+* WebSocket server API in the WSGI server module
+* HTTP/1.1 request pipelining
 
 Requirements
 ~~~~~~~~~~~~

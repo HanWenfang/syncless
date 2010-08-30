@@ -56,7 +56,7 @@ The convenience function RunHttpServer can be used in __main__ to run a HTTP
 server forever, serving WSGI, BaseHTTPRequestHandler, CherrPy, web.py or
 webapp applications.
 
-WsgiListener takes care of error detection and recovery. The details:
+WsgiListener/WsgiWorker takes care of error detection and recovery. The details:
 
 * WsgiListener won't crash: it catches, reports and recovers from all I/O
   errors, HTTP request parse errors and also the exceptions raised by the
@@ -73,6 +73,11 @@ WsgiListener takes care of error detection and recovery. The details:
   close method whether all data has been sent.
 * WsgiListener prints unbloated exception stack traces when
   logging.root.setLevel(logging.DEBUG) is active.
+
+WsgiWorker supports HTTP keep-alive and HTTP/1.1 request pipelining. Please
+note that the total size of the pipelineable requests must not exceed a
+small limit (about 8192 bytes). If that's exceeded, then later requests will
+blocked until the response is returned for earlier requests.
 
 FYI flush-after-first-body-byte is defined in the WSGI specification. An
 excerpt: The start_response callable must not actually transmit the response
@@ -274,7 +279,7 @@ def RespondWithBad(status, date, server_software, sockfile, reason):
   sockfile.write('HTTP/1.0 %s %s\r\n'
                  'Server: %s\r\n'
                  'Date: %s\r\n'
-                 'Connection: keep-alive\r\n'
+                 'Connection: close\r\n'
                  'Content-Type: text/plain\r\n'
                  'Content-Length: %d\r\n\r\n%s\n' %
                  (status, status_str, server_software, date, len(msg) + 1, msg))
@@ -449,6 +454,10 @@ class WebSocket(object):
 def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
+  #
+  # The implementation of this function is intentionally long: splitting it
+  # up to smaller functions would hurt performance.
+
   if not isinstance(date, str):
     raise TypeError
   if not hasattr(sock, 'makefile_samefd'):  # isinstance(sock, coio.nbsocket)
@@ -512,7 +521,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             # TODO(pts): Support HTTP/0.9 requests without headers.
             i = req_buf.find('\n\n')
             j = req_buf.find('\n\r\n')
-            if i >= 0 and i < j:
+            if i >= 0 and (j < 0 or i < j):
               req_head = req_buf[:i]
               req_buf = req_buf[i + 2:]
               break
@@ -531,8 +540,6 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           if not req_new:
             # The HTTP client has closed the connection before sending the headers.
             return
-          if date is None:
-            date = GetHttpDate(time.time())
           # TODO(pts): Ensure that refcount(req_buf) == 1 -- do the string
           # reference counters increase by slicing?
           req_buf += req_new  # Fast string append if refcount(req_buf) == 1.
@@ -560,6 +567,8 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         if is_debug and e[0] != errno.ECONNRESET:
           logging.debug('error reading HTTP request headers: %s' % e)
         return
+      if date is None:
+        date = GetHttpDate(time.time())
       # TODO(pts): Speed up this splitting?
       req_head = reqhead_continuation_re.sub(
           ', ', req_head.rstrip('\r').replace('\r\n', '\n'))
@@ -662,19 +671,23 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
       if content_length:  # TODO(pts): Test this branch.
         # TODO(pts): Avoid the memcpy() in unread.
         sockfile.unread(req_buf[:content_length])
-        # This assertion fails here if the client sends multiple very
-        # small HTTP requests without waiting for the first request to be
-        # served.
-        if content_length < sockfile.read_buffer_len:
-          RespondWithBad(400,
-              date, server_software, sockfile, 'next request too early')
-          return
+        req_buf = req_buf[content_length:]
         env['wsgi.input'] = input = sockfile
         sockfile.read_limit = content_length - sockfile.read_buffer_len
+        # The way WsgiWorker reads into sockfile in multiple requests
+        # ensures that bytes from the next request are never read into
+        # sockfile's read buffer, thus sockfile.read_limit >= 0 will always
+        # hold, unless there is a bug.
+        assert sockfile.read_limit >= 0, (
+            'BUG: sockfile read buffer bug: '
+            'content_length=%s < read_buffer_len=%s' %
+            (content_length, sockfile.read_buffer_len))
       else:
         env['wsgi.input'] = input = WsgiEmptyInputStream
 
-      req_buf = ''  # Save memory.
+      # Now req_buf contains everything read from sock after the current
+      # HTTP request. We don't reset it, so we can start from it in the next
+      # loop iteration, to support HTTP/1.1 pipelining.
       is_not_head = method != 'HEAD'
       res_content_length_ary = []
       headers_sent_ary[0] = False
@@ -1063,7 +1076,8 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             return
   finally:
     # Without this, when the function returns, sockfile.__del__ calls
-    # sockfile.close calls sockfile.flush, which raises EBADF.
+    # sockfile.close calls sockfile.flush, which raises EBADF, because
+    # sock.close() below has already been called.
     sockfile.discard_write_buffer()
     try:
       sock.close()
@@ -1073,6 +1087,32 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
       logging.debug('connection closed sock=%x' % id(sock))
 
   # Don't add code here, since we have many ``return'' calls above.
+
+
+def PopulateDefaultWsgiEnv(env, server_socket):
+  """Populate the default, initial WSGI environment dict."""
+  env['wsgi.version']      = (1, 0)
+  env['wsgi.multithread']  = True
+  env['wsgi.multiprocess'] = False
+  env['wsgi.run_once']     = False
+  if hasattr(server_socket, 'do_handshake'):
+    env['wsgi.url_scheme']   = 'https'
+    env['HTTPS']             = 'on'     # Apache sets this
+  else:
+    env['wsgi.url_scheme']   = 'http'
+    env['HTTPS']             = 'off'
+  if isinstance(server_socket, tuple):
+    server_ipaddr, server_port = server_socket
+  else:
+    server_ipaddr, server_port = server_socket.getsockname()
+  env['SERVER_PORT'] = str(server_port)
+  env['SERVER_SOFTWARE'] = 'pts-syncless-wsgi'
+  if server_ipaddr and server_ipaddr != '0.0.0.0':
+    # TODO(pts): Do a canonical name lookup.
+    env['SERVER_ADDR'] = env['SERVER_NAME'] = server_ipaddr
+  else:  # Listens on all interfaces.
+    # TODO(pts): Do a canonical name lookup.
+    env['SERVER_ADDR'] = env['SERVER_NAME'] = socket.gethostname()
 
 
 def WsgiListener(server_socket, wsgi_application):
@@ -1097,26 +1137,7 @@ def WsgiListener(server_socket, wsgi_application):
   if not callable(wsgi_application):
     raise TypeError
   env = {}
-  env['wsgi.version']      = (1, 0)
-  env['wsgi.multithread']  = True
-  env['wsgi.multiprocess'] = False
-  env['wsgi.run_once']     = False
-  if hasattr(server_socket, 'do_handshake'):
-    env['wsgi.url_scheme']   = 'https'
-    env['HTTPS']             = 'on'     # Apache sets this
-  else:
-    env['wsgi.url_scheme']   = 'http'
-    env['HTTPS']             = 'off'
-  server_ipaddr, server_port = server_socket.getsockname()
-  env['SERVER_PORT'] = str(server_port)
-  env['SERVER_SOFTWARE'] = 'pts-syncless-wsgi'
-  if server_ipaddr:
-    # TODO(pts): Do a canonical name lookup.
-    env['SERVER_ADDR'] = env['SERVER_NAME'] = server_ipaddr
-  else:  # Listens on all interfaces.
-    # TODO(pts): Do a canonical name lookup.
-    env['SERVER_ADDR'] = env['SERVER_NAME'] = socket.gethostname()
-
+  PoputateDefaultWsgiEnv(env, server_socket)
   try:
     while True:
       accepted_socket, peer_name = server_socket.accept()
