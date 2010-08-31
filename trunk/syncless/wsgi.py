@@ -982,6 +982,8 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             for data in items:
               if data:  # Implement flush-after-first-body-byte.
                 break
+          # TODO(pts): Catch and ignore TypeError in all these conversions.
+          data = str(data)
           if 0 < len(data) <= 65536:
             sockfile.write(data)  # Still buffering it.
             sockfile.flush()
@@ -996,6 +998,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           try:  # Call the WSGI application by iterating over `items'.
             if res_content_length_ary:
               for data in items:
+                data = str(data)
                 sockfile.write(data)
                 res_content_length_ary[1] -= len(data)
                 if res_content_length_ary[1] < 0:
@@ -1011,7 +1014,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
                 return
             else:
               for data in items:
-                sockfile.write(data)
+                sockfile.write(str(data))
           except (WsgiReadError, WsgiWriteError):
             raise
           except Exception, e:

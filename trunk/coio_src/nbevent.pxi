@@ -591,8 +591,11 @@ waiting_token = object()
 # TODO(pts): doc:
 # It is assumed that the user never sets a waiting_tasklet.tempval to
 # event_happened_token.
-cdef object event_happened_token "coio_event_happened_token"
-event_happened_token = object()
+#
+# TODO(pts): override str(coio_event_happened_token)
+cdef object coio_event_happened_token "coio_event_happened_token"
+coio_event_happened_token = object()
+event_happened_token = coio_event_happened_token
 
 # Since this function returns void, exceptions raised (e.g. if <tasklet>arg)
 # will be ignored (by Pyrex?) and printed to stderr as something like:
@@ -600,7 +603,7 @@ event_happened_token = object()
 cdef void HandleCWakeup(int fd, short evtype, void *arg) with gil:
     #os_write(2, <char_constp>'W', 1)
     if (<tasklet>arg).tempval is waiting_token:
-        (<tasklet>arg).tempval = event_happened_token
+        (<tasklet>arg).tempval = coio_event_happened_token
     PyTasklet_Insert(<tasklet>arg)
 
 cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
@@ -611,7 +614,7 @@ cdef void HandleCTimeoutWakeup(int fd, short evtype, void *arg) with gil:
         if evtype == c_EV_TIMEOUT:
             (<tasklet>arg).tempval = None
         else:
-            (<tasklet>arg).tempval = event_happened_token
+            (<tasklet>arg).tempval = coio_event_happened_token
     PyTasklet_Insert(<tasklet>arg)
 
 #cdef char *(*_orig_readline_pointer)(FILE *, FILE *, char *)
@@ -1240,7 +1243,7 @@ cdef class nbfile:
         # !! TODO(pts): Speed: return early if already readable.
         if timeout is None:
             return (coio_c_wait(&self.read_owi.ev, NULL)
-                    is event_happened_token)
+                    is coio_event_happened_token)
         else:
             timeout_double = timeout
             if timeout_double < 0.0:
@@ -1254,7 +1257,7 @@ cdef class nbfile:
                     (timeout_double - <double>tv.tv_sec) * 1000000.0)
             return coio_c_wait_for(
                 self.read_owi.fd, c_EV_READ, HandleCTimeoutWakeup, &tv
-                ) is event_happened_token
+                ) is coio_event_happened_token
 
     def read(nbfile self, int n=-1):
         """Read exactly n bytes (or less on EOF), and return string
@@ -2729,7 +2732,7 @@ else:
 cdef void HandleCSleepWakeup(int fd, short evtype, void *arg) with gil:
     # Set tempval so coio_c_wait doesn't have to call event_del(...).
     if (<tasklet>arg).tempval is waiting_token:
-        (<tasklet>arg).tempval = event_happened_token
+        (<tasklet>arg).tempval = coio_event_happened_token
     PyTasklet_Insert(<tasklet>arg)
 
 
@@ -2751,7 +2754,7 @@ def sleep(double duration):
       scheduled, then cancel the sleep and return waiting_token (a true value).
       (Please don't explicitly check for that.)
     * Otherwise sleep for the whole sleep duration, and return an object
-      (event_happened_token, a true value).
+      (coio_event_happened_token == coio.event_happened_token, a true value).
     """
     cdef timeval tv
     if duration <= 0:
