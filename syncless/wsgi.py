@@ -1137,7 +1137,7 @@ def WsgiListener(server_socket, wsgi_application):
   if not callable(wsgi_application):
     raise TypeError
   env = {}
-  PoputateDefaultWsgiEnv(env, server_socket)
+  PopulateDefaultWsgiEnv(env, server_socket)
   try:
     while True:
       accepted_socket, peer_name = server_socket.accept()
