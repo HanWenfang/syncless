@@ -1168,6 +1168,8 @@ Q27. Does Syncless have unit tests?
 
        $ stackless2.6 ./setup.py build test
 
+     Please note that test coverage is far smaller than 100%: some methods
+     and some classes are not covered at all.
 
 Links
 ~~~~~
