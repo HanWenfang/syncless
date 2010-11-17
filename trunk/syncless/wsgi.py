@@ -204,37 +204,6 @@ class WsgiErrorsStream(object):
       cls.write(msg)
 
 
-class WsgiEmptyInputStream(object):
-  """Empty POST data input stream sent to the WSGI application as
-  env['wsgi.input'].
-
-  The methods read, readline, readlines and __iter__ correspond to the WSGI
-  specification.
-  """
-
-  bytes_read = 0
-
-  @classmethod
-  def read(cls, size):
-    return ''
-
-  @classmethod
-  def readline(cls):
-    return ''
-
-  @classmethod
-  def readlines(cls, hint=None):
-    return []
-
-  @classmethod
-  def __iter__(cls):
-    return iter(())
-
-  @classmethod
-  def discard_to_read_limit(cls):
-    pass
-
-
 class WsgiReadError(IOError):
   """Raised when reading the HTTP request."""
 
@@ -450,8 +419,8 @@ class WebSocket(object):
     else:
       raise TypeError('expected WebSocket message, got %s' % type(msg))
 
-
-def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
+def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
+               do_multirequest):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
   #
@@ -516,6 +485,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
       if is_debug:
         logging.debug('reading HTTP request on sock=%x' % id(sock))
       try:
+        req_buf = ''
         while True:  # Read the HTTP request.
           if req_buf:
             # TODO(pts): Support HTTP/0.9 requests without headers.
@@ -535,8 +505,9 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
               return
           # TODO(pts): Handle read errors (such as ECONNRESET etc.).
           # TODO(pts): Better buffering than += (do we need that?)
-          req_new = sock.recv(8192)
+          req_new = sockfile.read_at_most(8192)
           
+
           if not req_new:
             # The HTTP client has closed the connection before sending the headers.
             return
@@ -546,7 +517,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           if req_buf[0] not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
             if req_buf.startswith('<'):
               while len(req_buf) < 32 and '\0' not in req_buf:
-                req_new = sock.recv(32)
+                req_new = sockfile.read_at_most(32)
                 if not req_new:
                   break
                 req_buf += req_new
@@ -563,7 +534,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
                 logging.debug('received non-HTTP request: %r' % req_buf[:64])
               return  # Possibly https request (starts with '\x80')
           req_new = None
-      except IOError_all, e:  # Raised in sock.recv above.
+      except IOError_all, e:  # Raised in sockfile.read_at_most above.
         if is_debug and e[0] != errno.ECONNRESET:
           logging.debug('error reading HTTP request headers: %s' % e)
         return
@@ -656,7 +627,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           RespondWithBad(400,
               date, server_software, sockfile, 'missing content')
           return
-        env['wsgi.input'] = input = WsgiEmptyInputStream
+        env['wsgi.input'] = input = coio.nblimitreader(None, 0)
         if ('HTTP_SEC_WEBSOCKET_KEY1' in env and
             'HTTP_SEC_WEBSOCKET_KEY2' in env):
           content_length = 8
@@ -668,22 +639,12 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
         content_length = None
         del env['CONTENT_LENGTH']
 
+      sockfile.unread(req_buf)
       if content_length:  # TODO(pts): Test this branch.
         # TODO(pts): Avoid the memcpy() in unread.
-        sockfile.unread(req_buf[:content_length])
-        req_buf = req_buf[content_length:]
-        env['wsgi.input'] = input = sockfile
-        sockfile.read_limit = content_length - sockfile.read_buffer_len
-        # The way WsgiWorker reads into sockfile in multiple requests
-        # ensures that bytes from the next request are never read into
-        # sockfile's read buffer, thus sockfile.read_limit >= 0 will always
-        # hold, unless there is a bug.
-        assert sockfile.read_limit >= 0, (
-            'BUG: sockfile read buffer bug: '
-            'content_length=%s < read_buffer_len=%s' %
-            (content_length, sockfile.read_buffer_len))
+        env['wsgi.input'] = input = coio.nblimitreader(sockfile, content_length)
       else:
-        env['wsgi.input'] = input = WsgiEmptyInputStream
+        env['wsgi.input'] = input = coio.nblimitreader(None, 0)
 
       # Now req_buf contains everything read from sock after the current
       # HTTP request. We don't reset it, so we can start from it in the next
@@ -815,7 +776,6 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
           # TCP connection. TODO(pts): Implement this once there is consensus.
           sockfile.flush()
           sockfile.write_buffer_limit = 0  # Unbuffered.
-          sockfile.read_limit = -1
           headers_sent_ary[0] = True
           do_keep_alive_ary[0] = False
           return WebSocket(sockfile)
@@ -1077,15 +1037,19 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
             sockfile.discard_write_buffer()
             ReportAppException(sys.exc_info(), which='close')
             return
+      # TODO(pts): Implement wsgi_test.py without do_multirequest.
+      if not do_multirequest:  # do_multirequest=False for testing.
+        break
   finally:
     # Without this, when the function returns, sockfile.__del__ calls
     # sockfile.close calls sockfile.flush, which raises EBADF, because
     # sock.close() below has already been called.
     sockfile.discard_write_buffer()
-    try:
-      sock.close()
-    except IOError_all:
-      pass
+    if do_multirequest:
+      try:
+        sock.close()
+      except IOError_all:
+        pass
     if is_debug:
       logging.debug('connection closed sock=%x' % id(sock))
 
@@ -1148,7 +1112,7 @@ def WsgiListener(server_socket, wsgi_application):
       if logging.root.level <= DEBUG:
         logging.debug('connection accepted from=%r' % (peer_name,))
       stackless.tasklet(WsgiWorker)(
-          accepted_socket, peer_name, wsgi_application, env, date)
+          accepted_socket, peer_name, wsgi_application, env, date, True)
       accepted_socket = peer_name = None  # Help the garbage collector.
   finally:
     server_socket.close()
@@ -1307,17 +1271,12 @@ class ConstantReadLineInputStream(object):
   def readline(self):
     if self.lines_rev:
       return self.lines_rev.pop()
-    elif self.body_rfile:
-      return self.body_rfile.readline()
     else:
-      return ''
+      return self.body_rfile.readline()
 
   def read(self, size):
     assert not self.lines_rev
-    if self.body_rfile:
-      return self.body_rfile.read(size)
-    else:
-      return ''
+    return self.body_rfile.read(size)
 
   def close(self):
     # We don't clear self.lines_rev[:], the hacked
@@ -1338,12 +1297,7 @@ class FakeBaseHttpConnection(object):
       assert len(self.request_lines) > 1
       assert self.request_lines[-1] == '\r\n'
       assert self.request_lines[-2].endswith('\r\n')
-      if isinstance(rfile, coio.nbfile):
-        rfile = ConstantReadLineInputStream(self.request_lines, rfile)
-      elif rfile is WsgiEmptyInputStream:
-        rfile = ConstantReadLineInputStream(self.request_lines, None)
-      else:
-        assert 0, rfile
+      rfile = ConstantReadLineInputStream(self.request_lines, rfile)
       self.request_lines = None  # Save memory.
       return rfile
     elif mode.startswith('w'):

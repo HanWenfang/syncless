@@ -25,12 +25,12 @@ def TestApplication(env, start_response):
 TEST_DATE = wsgi.GetHttpDate(1234567890)  # 2009-02-13
 
 
-def CallWsgiWorker(accepted_socket):
+def CallWsgiWorker(accepted_socket, do_multirequest=True):
   env = {}
   wsgi.PopulateDefaultWsgiEnv(env, ('127.0.0.1', 80))
   peer_name = ('127.0.0.1', 2)
-  wsgi.WsgiWorker(accepted_socket, peer_name, TestApplication, env, TEST_DATE)
-
+  wsgi.WsgiWorker(accepted_socket, peer_name, TestApplication, env, TEST_DATE,
+                  do_multirequest)
 
 def ParseHttpResponse(data):
   head = 'Status: '
@@ -57,30 +57,6 @@ def SplitHttpResponses(data):
     List of strings (individual HTTP responses).
   """
   return ['HTTP/1.' + item for item in data.split('HTTP/1.')[1:]]
-
-
-class SingleRecvSocket(object):
-  """A socket which supports 1 recv() + EOF then close, and ignores close()."""
-
-  __slots__ = ['backend']
-  def __init__(self, backend):
-    self.backend = backend
-    assert self.backend
-
-  def recv(self, size):
-    if self.backend is False:  # Got EOF.
-      return ''
-    assert self.backend
-    backend = self.backend
-    self.backend = False
-    return backend.recv(size)
-
-  def close(self):
-    self.backend = None
-
-  def makefile_samefd(self, *args):
-    return self.backend.makefile_samefd(args)
-  
 
 
 class WsgiTest(unittest.TestCase):
@@ -174,9 +150,7 @@ class WsgiTest(unittest.TestCase):
   def testTwoSequentialHTTP11GetFirstRequests(self):
     a, b = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     b.sendall('GET / HTTP/1.1\r\n\r\n')
-    # Using SingleRecvSocket makes use of the fact that the wsgi.WsgiWorker
-    # implementation reads the HTTP request header with sock.recv().
-    CallWsgiWorker(SingleRecvSocket(a))
+    CallWsgiWorker(a, do_multirequest=False)
     head, body = ParseHttpResponse(b.recv(8192))
     self.assertEqual('Keep-Alive', head['Connection'])
     self.AssertHelloResponse(head, body, http_version='1.1')
@@ -190,9 +164,7 @@ class WsgiTest(unittest.TestCase):
   def testTwoSequentialHTTP11PostFirstRequests(self):
     a, b = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     b.sendall('POST /save HTTP/1.1\r\nContent-Length: 7\r\n\r\nfoo\nbar')
-    # Using SingleRecvSocket makes use of the fact that the wsgi.WsgiWorker
-    # implementation reads the HTTP request header with sock.recv().
-    CallWsgiWorker(SingleRecvSocket(a))
+    CallWsgiWorker(a, do_multirequest=False)
     head, body = ParseHttpResponse(b.recv(8192))
     self.assertEqual('Keep-Alive', head['Connection'])
     self.AssertSaveResponse(head, body, http_version='1.1')
@@ -208,8 +180,12 @@ class WsgiTest(unittest.TestCase):
     b.sendall('GET / HTTP/1.1\r\n\r\n'
               'GET /answer?foo=x+y&bar= HTTP/1.0\r\n\r\n'
               'GET /unreached... HTTP/1.1\r\n\r\n')
-    CallWsgiWorker(SingleRecvSocket(a))
+    CallWsgiWorker(a)
     responses = SplitHttpResponses(b.recv(8192))
+    # The WsgiWorker doesn't respond to request 2 (/unreached...), because
+    # the previous request was a HTTP/1.0 request with default Connection:
+    # close (so keep-alive is false).
+    self.assertEqual(2, len(responses))
     head, body = ParseHttpResponse(responses[0])
     self.assertEqual('Keep-Alive', head['Connection'])
     self.AssertHelloResponse(head, body, http_version='1.1')
@@ -217,10 +193,6 @@ class WsgiTest(unittest.TestCase):
     self.assertEqual('close', head['Connection'])
     self.AssertAnswerResponse(head, body, http_version='1.0',
                               is_new_date=True)
-    # The WsgiWorker doesn't respond to request 2 (/unreached...), because
-    # the previous request was a HTTP/1.0 request with default Connection:
-    # close (so keep-alive is false).
-    self.assertEqual(2, len(responses))
 
   def testFourPipelinedHTTP11PostFirstRequests(self):
     a, b = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -228,8 +200,9 @@ class WsgiTest(unittest.TestCase):
               'POST /save HTTP/1.1\r\nContent-Length: 10\r\n\r\nNice!\ngood'
               'GET /answer?foo=x+y&bar= HTTP/1.0\r\n\r\n'
               'GET /unreached... HTTP/1.1\r\n\r\n')
-    CallWsgiWorker(SingleRecvSocket(a))
+    CallWsgiWorker(a)
     responses = SplitHttpResponses(b.recv(8192))
+    self.assertEqual(3, len(responses))
     head, body = ParseHttpResponse(responses[0])
     self.assertEqual('Keep-Alive', head['Connection'])
     self.AssertSaveResponse(head, body, http_version='1.1')
@@ -241,7 +214,6 @@ class WsgiTest(unittest.TestCase):
     self.assertEqual('close', head['Connection'])
     self.AssertAnswerResponse(head, body, http_version='1.0',
                               is_new_date=True)
-    self.assertEqual(3, len(responses))
 
 
 if __name__ == '__main__':

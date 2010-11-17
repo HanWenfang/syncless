@@ -651,13 +651,13 @@ cdef class nbfile
 # Precondition: limit > 0.
 # Precondition: self.c_read_limit < 0 ||
 #               limit <= self.read_eb.off + self.c_read_limit
-cdef object nbfile_readline_with_limit(nbfile self, int limit):
-    cdef int n
-    cdef int got
-    cdef int min_off
+cdef object nbfile_readline_with_limit(nbfile self, Py_ssize_t limit):
+    cdef Py_ssize_t n
+    cdef Py_ssize_t got
+    cdef Py_ssize_t min_off
     cdef char_constp q
     cdef int fd
-    cdef int had_short_read
+    cdef char had_short_read
     #DEBUG assert limit > 0
     #DEBIG assert (self.c_read_limit < 0 ||
     #              limit <= self.read_eb.off + self.c_read_limit)
@@ -716,6 +716,99 @@ cdef object nbfile_readline_with_limit(nbfile self, int limit):
     evbuffer_drain(&self.read_eb, n)
     return buf
 
+cdef object nbfile_read(nbfile self, Py_ssize_t n):
+    cdef Py_ssize_t got
+    cdef object buf
+
+    if n < 0:
+        if self.c_read_limit < 0:  # Read up to EOF.
+            if self.read_eb.totallen == 0:
+                evbuffer_expand(&self.read_eb,
+                                self.c_min_read_buffer_size)
+            while 1:
+                # TODO(pts): Check out-of-memory error everywhere.
+                evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
+                got = coio_c_evbuffer_read(
+                    &self.read_owi, &self.read_eb,
+                    self.read_eb.totallen - self.read_eb.off -
+                    self.read_eb.misalign)
+                if got == 0:  # EOF
+                    break
+            buf = PyString_FromStringAndSize(
+                <char_constp>self.read_eb.buf, self.read_eb.off)
+            evbuffer_drain(&self.read_eb, self.read_eb.off)
+            return buf
+        n = self.c_read_limit
+    if self.read_eb.off >= n:  # Satisfy read from read_eb.
+        if n <= 0:
+            return ''
+        buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
+        evbuffer_drain(&self.read_eb, n)
+        return buf
+
+    # TODO(pts): Speed if self.read_eb.off is at least half of the data
+    # to be read, then pre-read it to a preallocated buf, and memcpy later.
+    # This might not be a good idea if n as very large and most likely we
+    # will be reading much less.
+
+    if self.c_read_limit >= 0:
+        got = self.c_read_limit + self.read_eb.off
+        if n > got:
+            n = got
+        if n <= 0:
+            return ''
+    while self.read_eb.off < n:  # Data not fully in the buffer.
+        # !! Fill the buffer, it might be helpful.
+        # !! Should we always pre-read?
+        got = n - self.read_eb.off
+        if got > 65536 and got > self.read_eb.totallen:
+            # Limit the total number of bytes read to the double of the
+            # read buffer size.
+            # evbuffer_read() does someting similar, also involving
+            # EVBUFFER_MAX_READ == 4096.
+            # !! TODO(pts): Get rid of magic constant 65536.
+            got = self.read_eb.totallen
+        got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, got)
+        if got == 0:  # EOF
+            n = self.read_eb.off
+            break
+        else:
+            if self.c_read_limit >= 0:
+                self.c_read_limit -= got
+    buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
+    evbuffer_drain(&self.read_eb, n)
+    return buf
+
+cdef Py_ssize_t nbfile_discard(nbfile self, Py_ssize_t n):
+    if n <= 0:
+        return 0
+    if self.read_eb.off > 0:
+        if self.read_eb.off >= n:
+            evbuffer_drain(&self.read_eb, n)
+            return 0
+        evbuffer_drain(&self.read_eb, n)  # Discard everything.
+        n -= self.read_eb.off
+    while 1:  # n > 0
+        if self.c_read_limit >= 0 and n > self.c_read_limit:
+            got = self.c_read_limit
+            if got == 0:
+                return n
+        else:
+            got = n
+        if self.read_eb.totallen == 0:
+            # Expand to the next power of 2.
+            evbuffer_expand(&self.read_eb, self.c_min_read_buffer_size)
+        got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, got)
+        if got == 0:  # EOF
+            return n
+        else:
+            n -= got
+            if self.c_read_limit >= 0:
+                self.c_read_limit -= got
+            evbuffer_drain(&self.read_eb, got)
+            if n == 0:
+                return 0
+
 
 cdef class nbfile:
     """A non-blocking file (I/O channel).
@@ -728,6 +821,9 @@ cdef class nbfile:
 
     Please note that changing self.write_buffer_limit doesn't flush the
     write buffer, but it will affect subsequent self.write(...) operations.
+
+    Please don't subclass nbfile -- nblimitreader and maybe others won't
+    work with subclasses.
     """
     # We must keep self.wakeup_ev on the heap, because
     # Stackless scheduling swaps the C stack.
@@ -1172,7 +1268,7 @@ cdef class nbfile:
     def discard_write_buffer(nbfile self):
         evbuffer_drain(&self.write_eb, self.write_eb.off)
 
-    def discard(nbfile self, int n):
+    def discard(nbfile self, n):
         """Read and discard exactly n bytes.
 
         Please note that self.read_owi.fd won't be read past the n bytes specified.
@@ -1186,35 +1282,7 @@ cdef class nbfile:
         Raises:
           self.c_read_exc_cass or IOError: (but not EOFError)
         """
-        cdef int got
-        if n <= 0:
-            return 0
-        if self.read_eb.off > 0:
-            if self.read_eb.off >= n:
-                evbuffer_drain(&self.read_eb, n)
-                return 0
-            evbuffer_drain(&self.read_eb, n)  # Discard everything.
-            n -= self.read_eb.off
-        while 1:  # n > 0
-            if self.c_read_limit >= 0 and n > self.c_read_limit:
-                got = self.c_read_limit
-                if got == 0:
-                    return n
-            else:
-                got = n
-            if self.read_eb.totallen == 0:
-                # Expand to the next power of 2.
-                evbuffer_expand(&self.read_eb, self.c_min_read_buffer_size)
-            got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, got)
-            if got == 0:  # EOF
-                return n
-            else:
-                n -= got
-                if self.c_read_limit >= 0:
-                    self.c_read_limit -= got
-                evbuffer_drain(&self.read_eb, got)
-                if n == 0:
-                    return 0
+        return nbfile_discard(self, n)
 
     def discard_to_read_limit(nbfile self):
         """Discard the read buffer, and discard bytes from read_fd.
@@ -1259,7 +1327,7 @@ cdef class nbfile:
                 self.read_owi.fd, c_EV_READ, HandleCTimeoutWakeup, &tv
                 ) is coio_event_happened_token
 
-    def read(nbfile self, int n=-1):
+    def read(nbfile self, n=-1):
         """Read exactly n bytes (or less on EOF), and return string
 
         Args:
@@ -1270,67 +1338,7 @@ cdef class nbfile:
         Raises:
           self.read_owi.exc_class or IOError: (but not EOFError)
         """
-        cdef int got
-        cdef object buf
-
-        if n < 0:
-            if self.c_read_limit < 0:  # Read up to EOF.
-                if self.read_eb.totallen == 0:
-                    evbuffer_expand(&self.read_eb,
-                                    self.c_min_read_buffer_size)
-                while 1:
-                    # TODO(pts): Check out-of-memory error everywhere.
-                    evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
-                    got = coio_c_evbuffer_read(
-                        &self.read_owi, &self.read_eb,
-                        self.read_eb.totallen - self.read_eb.off -
-                        self.read_eb.misalign)
-                    if got == 0:  # EOF
-                        break
-                buf = PyString_FromStringAndSize(
-                    <char_constp>self.read_eb.buf, self.read_eb.off)
-                evbuffer_drain(&self.read_eb, self.read_eb.off)
-                return buf
-            n = self.c_read_limit
-        if self.read_eb.off >= n:  # Satisfy read from read_eb.
-            if n <= 0:
-                return ''
-            buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
-            evbuffer_drain(&self.read_eb, n)
-            return buf
-
-        # TODO(pts): Speed if self.read_eb.off is at least half of the data
-        # to be read, then pre-read it to a preallocated buf, and memcpy later.
-        # This might not be a good idea if n as very large and most likely we
-        # will be reading much less.
-
-        if self.c_read_limit >= 0:
-            got = self.c_read_limit + self.read_eb.off
-            if n > got:
-                n = got
-            if n <= 0:
-                return ''
-        while self.read_eb.off < n:  # Data not fully in the buffer.
-            # !! Fill the buffer, it might be helpful.
-            # !! Should we always pre-read?
-            got = n - self.read_eb.off
-            if got > 65536 and got > self.read_eb.totallen:
-                # Limit the total number of bytes read to the double of the
-                # read buffer size.
-                # evbuffer_read() does someting similar, also involving
-                # EVBUFFER_MAX_READ == 4096.
-                # !! TODO(pts): Get rid of magic constant 65536.
-                got = self.read_eb.totallen
-            got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, got)
-            if got == 0:  # EOF
-                n = self.read_eb.off
-                break
-            else:
-                if self.c_read_limit >= 0:
-                    self.c_read_limit -= got
-        buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
-        evbuffer_drain(&self.read_eb, n)
-        return buf
+        return nbfile_read(self, n)
 
     def read_at_most(nbfile self, int n):
         """Read at most n bytes and return the string.
@@ -1683,6 +1691,97 @@ cdef class nbfile:
         # TODO(pts): Do we need this? It won't work for streams (like seek, tell)
         if ftruncate(self.read_owi.fd, size) < 0:
             raise (<object>self.write_owi.exc_class)(errno, strerror(errno))
+
+# --- nblimitreader
+
+cdef class nblimitreader:
+    """Class reading from an nbfile, limiting it at the specified position."""
+
+    cdef nbfile f
+    cdef Py_ssize_t limit
+
+    def __init__(nblimitreader self, nbfile f, limit):
+        self.limit = limit
+        assert self.limit >= 0, 'positive limit expected, got %s' % self.limit
+        if self.limit == 0:
+          self.f = None
+        else:
+          self.f = f
+
+    def read(nblimitreader self, size=-1):
+        cdef object buf
+        cdef Py_ssize_t c_size
+        c_size = size
+        if c_size > self.limit or c_size < 0:
+            c_size = self.limit
+        if c_size == 0:
+            return ''
+        buf = nbfile_read(self.f, c_size)
+        c_size = len(buf)
+        if c_size > 0:
+            self.limit -= c_size
+        else:
+            self.limit = 0
+            self.f = None
+        return buf
+
+    def readline(nblimitreader self):
+        cdef object buf
+        cdef Py_ssize_t size
+        if self.limit == 0:
+            return ''
+        buf = nbfile_readline_with_limit(self.f, self.limit)
+        size = len(buf)
+        if size > 0:
+            self.limit -= size
+        else:
+            self.limit = 0
+            self.f = None
+        return buf
+
+    def readlines(nblimitreader self, hint=None):
+        cdef list retval
+        cdef object buf
+        cdef Py_ssize_t size
+        retval = []
+        while self.limit > 0:
+          buf = nbfile_readline_with_limit(self.f, self.limit)
+          size = len(buf)
+          if size > 0:
+              self.limit -= size
+              retval.append(buf)
+          else:
+              self.limit = 0
+              self.f = None
+        return retval
+
+    def __next__(nblimitreader self):
+        cdef object buf
+        cdef Py_ssize_t size
+        if self.limit == 0:
+            raise StopIteration
+        buf = nbfile_readline_with_limit(self.f, self.limit)
+        size = len(buf)
+        if size > 0:
+            self.limit -= size
+            return buf
+        else:
+            self.limit = 0
+            self.f = None
+            raise StopIteration
+
+    def __iter__(nblimitreader self):
+        return self
+
+    def discard_to_read_limit(nblimitreader self):
+        cdef Py_ssize_t size
+        if self.limit != 0:
+            self.limit = nbfile_discard(self.f, self.limit)
+            if self.limit == 0:
+                self.f = None
+        return self.limit
+
+# ---
 
 # !! implement open(...) properly, with modes etc.
 # !! prevent writing to a nonwritable file
