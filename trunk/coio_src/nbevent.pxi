@@ -649,8 +649,6 @@ cdef class nbfile
 # Read from nbfile at most limit characters.
 #
 # Precondition: limit > 0.
-# Precondition: self.c_read_limit < 0 ||
-#               limit <= self.read_eb.off + self.c_read_limit
 cdef object nbfile_readline_with_limit(nbfile self, Py_ssize_t limit):
     cdef Py_ssize_t n
     cdef Py_ssize_t got
@@ -659,8 +657,6 @@ cdef object nbfile_readline_with_limit(nbfile self, Py_ssize_t limit):
     cdef int fd
     cdef char had_short_read
     #DEBUG assert limit > 0
-    #DEBIG assert (self.c_read_limit < 0 ||
-    #              limit <= self.read_eb.off + self.c_read_limit)
     fd = self.read_owi.fd
     had_short_read = 0
     min_off = 0
@@ -681,9 +677,6 @@ cdef object nbfile_readline_with_limit(nbfile self, Py_ssize_t limit):
         else:
             evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
         n = self.read_eb.totallen - self.read_eb.off - self.read_eb.misalign
-        if self.c_read_limit >= 0 and self.c_read_limit < n:
-            n = self.c_read_limit
-
         got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, n)
         if got == 0:  # EOF, return remaining bytes ('' or partial line)
             n = self.read_eb.off
@@ -695,8 +688,6 @@ cdef object nbfile_readline_with_limit(nbfile self, Py_ssize_t limit):
             buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
             evbuffer_drain(&self.read_eb, n)
             return buf
-        if self.c_read_limit >= 0:
-            self.c_read_limit -= got
         if limit <= self.read_eb.off:  # All data already in buffer.
             q = <char_constp>memchr(<void_constp>self.read_eb.buf, c'\n', limit)
             if q != NULL:
@@ -721,24 +712,22 @@ cdef object nbfile_read(nbfile self, Py_ssize_t n):
     cdef object buf
 
     if n < 0:
-        if self.c_read_limit < 0:  # Read up to EOF.
-            if self.read_eb.totallen == 0:
-                evbuffer_expand(&self.read_eb,
-                                self.c_min_read_buffer_size)
-            while 1:
-                # TODO(pts): Check out-of-memory error everywhere.
-                evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
-                got = coio_c_evbuffer_read(
-                    &self.read_owi, &self.read_eb,
-                    self.read_eb.totallen - self.read_eb.off -
-                    self.read_eb.misalign)
-                if got == 0:  # EOF
-                    break
-            buf = PyString_FromStringAndSize(
-                <char_constp>self.read_eb.buf, self.read_eb.off)
-            evbuffer_drain(&self.read_eb, self.read_eb.off)
-            return buf
-        n = self.c_read_limit
+        if self.read_eb.totallen == 0:
+            evbuffer_expand(&self.read_eb,
+                            self.c_min_read_buffer_size)
+        while 1:
+            # TODO(pts): Check out-of-memory error everywhere.
+            evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
+            got = coio_c_evbuffer_read(
+                &self.read_owi, &self.read_eb,
+                self.read_eb.totallen - self.read_eb.off -
+                self.read_eb.misalign)
+            if got == 0:  # EOF
+                break
+        buf = PyString_FromStringAndSize(
+            <char_constp>self.read_eb.buf, self.read_eb.off)
+        evbuffer_drain(&self.read_eb, self.read_eb.off)
+        return buf
     if self.read_eb.off >= n:  # Satisfy read from read_eb.
         if n <= 0:
             return ''
@@ -751,12 +740,6 @@ cdef object nbfile_read(nbfile self, Py_ssize_t n):
     # This might not be a good idea if n as very large and most likely we
     # will be reading much less.
 
-    if self.c_read_limit >= 0:
-        got = self.c_read_limit + self.read_eb.off
-        if n > got:
-            n = got
-        if n <= 0:
-            return ''
     while self.read_eb.off < n:  # Data not fully in the buffer.
         # !! Fill the buffer, it might be helpful.
         # !! Should we always pre-read?
@@ -772,9 +755,6 @@ cdef object nbfile_read(nbfile self, Py_ssize_t n):
         if got == 0:  # EOF
             n = self.read_eb.off
             break
-        else:
-            if self.c_read_limit >= 0:
-                self.c_read_limit -= got
     buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
     evbuffer_drain(&self.read_eb, n)
     return buf
@@ -789,12 +769,7 @@ cdef Py_ssize_t nbfile_discard(nbfile self, Py_ssize_t n):
         evbuffer_drain(&self.read_eb, n)  # Discard everything.
         n -= self.read_eb.off
     while 1:  # n > 0
-        if self.c_read_limit >= 0 and n > self.c_read_limit:
-            got = self.c_read_limit
-            if got == 0:
-                return n
-        else:
-            got = n
+        got = n
         if self.read_eb.totallen == 0:
             # Expand to the next power of 2.
             evbuffer_expand(&self.read_eb, self.c_min_read_buffer_size)
@@ -803,8 +778,6 @@ cdef Py_ssize_t nbfile_discard(nbfile self, Py_ssize_t n):
             return n
         else:
             n -= got
-            if self.c_read_limit >= 0:
-                self.c_read_limit -= got
             evbuffer_drain(&self.read_eb, got)
             if n == 0:
                 return 0
@@ -842,10 +815,6 @@ cdef class nbfile:
     # >=3: use the value for the buffer size in bytes
     cdef int c_write_buffer_limit
     cdef int c_min_read_buffer_size
-    # Maximum number of bytes to be read from self.read_owi.fd, or -1 if
-    # unlimited. Please note that the bytes already read to self.read_eb are
-    # not counted in c_read_limit.
-    cdef int c_read_limit
     cdef evbuffer_s read_eb
     cdef evbuffer_s write_eb
     cdef char c_do_close
@@ -866,7 +835,6 @@ cdef class nbfile:
         assert read_fd >= 0 or mode == 'w'
         assert write_fd >= 0 or mode == 'r'
         assert mode in ('r', 'w', 'r+')
-        self.c_read_limit = -1
         self.c_do_close = do_close
         self.read_owi.exc_class = <UncountedObject*>IOError
         self.write_owi.exc_class = <UncountedObject*>IOError
@@ -1026,21 +994,6 @@ cdef class nbfile:
     property do_close:
         def __get__(nbfile self):
             return self.c_do_close
-
-    property read_limit:
-        # TODO(pts): How is the property docstring propagated?
-        """Maximum number of bytes to read from the file.
-
-        Negative values stand for unlimited. After each read from the file
-        (not from the buffer), this property is decremented accordingly.
-        
-        It is possible to set this property. A nonnegative value activates
-        the limit, a negative value makes it unlimited.
-        """
-        def __get__(nbfile self):
-            return self.c_read_limit
-        def __set__(nbfile self, int new_value):
-            self.c_read_limit = new_value
 
     property read_exc_class:
         def __get__(nbfile self):
@@ -1284,26 +1237,6 @@ cdef class nbfile:
         """
         return nbfile_discard(self, n)
 
-    def discard_to_read_limit(nbfile self):
-        """Discard the read buffer, and discard bytes from read_fd.
-
-        If there is no read limit set up, than no bytes will be discarded
-        from read_fd.
-
-        Returns:
-          The number of bytes not discarded because of EOF.
-        Raises:
-          self.c_read_exc_cass or IOError: (but not EOFError)
-        """
-        if self.read_eb.off > 0:
-            evbuffer_drain(&self.read_eb, self.read_eb.off)
-            #assert self.c_read_limit == 0
-        if self.c_read_limit > 0:
-            # TODO(pts): Speed this up by not doing a Python method call.
-            return self.discard(self.c_read_limit)
-        else:
-            return 0
-
     def wait_for_readable(nbfile self, object timeout=None):
         cdef event_t *wakeup_ev_ptr
         cdef timeval tv
@@ -1331,8 +1264,7 @@ cdef class nbfile:
         """Read exactly n bytes (or less on EOF), and return string
 
         Args:
-          n: Number of bytes to read. Negative values mean: read up to EOF
-            (or up to self.read_limit).
+          n: Number of bytes to read. Negative values mean: read up to EOF.
         Returns:
           String containing the bytes read; an empty string on EOF.
         Raises:
@@ -1360,10 +1292,6 @@ cdef class nbfile:
             evbuffer_drain(&self.read_eb, n)
             # TODO(pts): Maybe read more from fd, if available and flag.
             return buf
-        if self.c_read_limit >= 0 and n > self.c_read_limit:
-            n = self.c_read_limit
-            if n <= 0:
-                return ''
         while 1:
             # TODO(pts): Don't read it to the buffer, read without memcpy.
             #            We'd need the readinto method for that.
@@ -1374,8 +1302,6 @@ cdef class nbfile:
                 buf = PyString_FromStringAndSize(
                     <char_constp>self.read_eb.buf, got)
                 evbuffer_drain(&self.read_eb, got)
-                if self.c_read_limit >= 0:
-                    self.c_read_limit -= got
                 return buf
 
     def read_upto(nbfile self, n):
@@ -1393,9 +1319,6 @@ cdef class nbfile:
         cdef Py_ssize_t c_n
         cdef Py_ssize_t got
         c_n = n
-        if (self.c_read_limit >= 0 and
-            c_n > self.read_eb.off + self.c_read_limit):
-            c_n = self.read_eb.off + self.c_read_limit
         while c_n > <Py_ssize_t>self.read_eb.off:  # Works also for negative values of n.
             if self.read_eb.totallen == 0:
                 evbuffer_expand(&self.read_eb,
@@ -1410,8 +1333,6 @@ cdef class nbfile:
                 self.read_eb.misalign)
             if got == 0:  # EOF
                 break
-            elif self.c_read_limit >= 0:
-                self.c_read_limit -= got
         return self.read_eb.off
 
     def read_more(nbfile self, n):
@@ -1423,8 +1344,6 @@ cdef class nbfile:
         cdef Py_ssize_t got
         cdef Py_ssize_t c_n0
         c_n = n
-        if (self.c_read_limit >= 0 and c_n > self.c_read_limit):
-            c_n = self.c_read_limit
         c_n0 = c_n
         while c_n > 0:  # Works also for negative values of n.
             if self.read_eb.totallen == 0:
@@ -1441,8 +1360,6 @@ cdef class nbfile:
             if got == 0:  # EOF
                 break
             else:
-                if self.c_read_limit >= 0:
-                    self.c_read_limit -= got
                 c_n -= got
         return c_n0 - c_n
 
@@ -1608,15 +1525,11 @@ cdef class nbfile:
         fd = self.read_owi.fd
         had_short_read = 0
         min_off = 0
-        if self.c_read_limit >= 0:
-            if limit < 0 or limit > read_eb.off + self.c_read_limit:
-                limit = read_eb.off + self.c_read_limit
         if limit >= 0:
             if limit == 0:
                 return ''
             return nbfile_readline_with_limit(self, limit)
         #DEBUG assert limit < 0
-        #DEBUG assert self.c_read_limit < 0
         q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n', read_eb.off)
         while q == NULL:
             if had_short_read:
@@ -3362,7 +3275,7 @@ cdef class concurrence_event:
 
 def _thread_worker_function(result_channel, start_lock, list call_info):
     """Function which runs forever in a thread."""
-    while True:
+    while 1:
         start_lock.acquire()
         function, args, kwargs = call_info
         del call_info[:]
