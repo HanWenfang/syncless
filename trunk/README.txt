@@ -1161,6 +1161,13 @@ Q26. Does Syncless support WebSocket connections?
      See http://stackoverflow.com/questions/1253683/websocket-for-html5
      for useful links and information about WebSocket.
 
+Q27. Does Syncless have unit tests?
+
+     Yes, they are test/*_test.py . You can run all of them them and get a
+     summary with
+
+       $ stackless2.6 ./setup.py build test
+
 
 Links
 ~~~~~
@@ -1188,6 +1195,9 @@ Info: gevent.backdoor doesn't support line editing with libreadline
 
 * picoev: libevent/libev replacement: http://developer.cybozu.co.jp/kazuho/2009/08/picoev-a-tiny-e.html
 * WSGI server meinheld http://pypi.python.org/pypi/meinheld/0.3.1
+* fapws3 (very fast WSGI server in C and libev): http://github.com/william-os4y/fapws3
+* nice Python extension writing in C:
+  http://github.com/william-os4y/fapws3/blob/master/fapws/_evwsgi.c
 
 Release procedure
 ~~~~~~~~~~~~~~~~~
@@ -1262,6 +1272,12 @@ Planned features
 * TODO(pts): Add proper doucmentation as .rst.
 * TODO(pts): Get ideas from
   http://code.google.com/p/gevent/wiki/ProjectsUsingGevent
-* TODO(pts): Port gevent-websocket.
+* TODO(pts): Support HTTP pipelining in the WSGI server.
+  HTTP/1.1 conforming servers are required to support pipelining.
+  This does not mean that servers are required to pipeline responses, but
+  that they are required not to fail if a client chooses to pipeline
+  requests.
+* TODO(pts): Compare speed with http://github.com/william-os4y/fapws3
+  only WSGI; WSGI module implemented in C; uses libev; very fast?
 
 __EOF__
