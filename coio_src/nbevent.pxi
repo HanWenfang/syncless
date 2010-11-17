@@ -2938,6 +2938,10 @@ def select(rlist, wlist, xlist, timeout=None):
     Limitation: Exceptional filehandles (non-empty xlist) are not
     supported.
 
+    The built-in select.select() doesn't cooperate nicely with input
+    buffering (e.g. after sys.stdin.readline()), Syncless doesn't
+    do that either.
+
     Please note that because of the slow speed of select(2), this function is
     provided only for completeness and for legacy application compatibility.
     """

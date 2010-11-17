@@ -375,7 +375,7 @@ class WebSocket(object):
   It is assumed that the WebSocket handshake is done before a WebSocket object
   gets created.
 
-  TOOD(pts): Implement this C (Pyrex) for speed.
+  TOOD(pts): Implement this in C (Pyrex) for speed.
   TODO(pts): Implement the close() method.
   """
   __slots__ = ['_rwfile']
@@ -738,7 +738,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date):
               sockfile.write_buffer_limit = 0
               sockfile.write(data[:res_content_length_ary[1]])
               raise WsgiResponseBodyTooLongError
-          if 0 < len(data) <= 65536:
+          if 0 < len(data) <= 65536:  # TODO(pts): Wy do we need this?
             sockfile.write(data)
             sockfile.flush()
             sockfile.write_buffer_limit = 0  # Unbuffered (autoflush).

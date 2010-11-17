@@ -226,6 +226,137 @@ class MyUpload(Command):
 
     sys.stdout.write('Uploaded %s\n' % (file_url,))
 
+# --- Simple unit test framework
+
+import logging
+import os
+import os.path
+import sys
+import traceback
+import time
+
+def is_logging_to_tty():
+  """Return true iff all logging destinations are terminal devices."""
+  if not logging.root.handlers:
+    logging.basicConfig()
+  assert logging.root.handlers
+  for handler in logging.root.handlers:
+    if not (isinstance(handler, logging.StreamHandler) and
+            handler.stream.isatty()):
+      return False
+  return True
+
+def bold(string, is_tty):
+  if not is_tty:
+    return string
+  return '\033[0;1m%s\033[0m' % string
+
+def red(string, is_tty):
+  if not is_tty:
+    return string
+  return '\033[0;1;31m%s\033[0m' % string
+
+def green(string, is_tty):
+  if not is_tty:
+    return string
+  return '\033[0;1;32m%s\033[0m' % string
+
+def run_test(test_file, is_tty):
+  logging.info('running test: ' + bold(test_file, is_tty))
+
+  sys.stdout.flush()
+  sys.stderr.flush()
+  # We use fork to make sure we run all tests with the same interpreter and
+  # same settings.
+  #
+  # TODO(pts): Add support for platforms without fork (like call
+  # sys.executable).
+  pid = os.fork()
+
+  if not pid:  # Child.
+    exit_code = 125
+
+    # Make sure we don't use imported symbols below.
+    exit = os._exit
+    print_exc = traceback.print_exc
+
+    try:
+      try:
+        del sys.argv[1:]
+        import __main__
+        import __builtin__
+        # TODO(pts): Unload all modules from sys.modules.
+        __main__.__dict__.clear()
+        __main__.__builtin__ = __builtin__
+        __main__.__name__ = '__main__'
+        exec open(test_file) in __main__.__dict__
+        # This is not always reached (but SystemExit below may be).
+        exit_code = 0
+      except SystemExit, e:
+        exit_code = e[0]
+      except:
+        exit_code = 126
+        print_exc()
+    finally:
+      exit(exit_code)
+
+  # TODO(pts): Add timeout.
+  pid2, status = os.waitpid(pid, 0)
+  assert pid2 == pid, (pid2, pid)
+  if status:
+    logging.info('test %s %s, exit status: 0x%x' %
+                 (test_file, red('failed', is_tty), status))
+  else:
+    logging.info('test %s %s' % (test_file, green('passed', is_tty)))
+  sys.stdout.flush()
+  sys.stderr.flush()
+  return not status
+
+def run_tests(test_dir, is_tty):
+  test_files = sorted(
+      os.path.join(test_dir, entry) for entry in os.listdir(test_dir)
+      if entry.endswith('_test.py'))
+  tests_failed = []
+  start_at = time.time()
+  for test_file in test_files:
+    if not run_test(test_file, is_tty):
+      tests_failed.append(test_file)
+  duration = time.time() - start_at
+  if tests_failed:
+    logging.info('tests failed: ' + ' '.join(tests_failed))
+    logging.info('%s running tests with %s, %d %s out of %d' %
+                 (red('done', is_tty), sys.executable, len(tests_failed),
+                  red('failure' + 's' * (len(tests_failed) > 1), is_tty),
+                  len(test_files)))
+    return False
+  else:
+    logging.info('%s running tests with %s, all %d %s in %.3f seconds' %
+                 (green('done', is_tty), sys.executable, len(test_files),
+                  green('passed', is_tty), duration))
+    return True
+
+# --- End of the test framework.
+
+class MyTest(Command):
+  """Run unit tests."""
+
+  user_options = []  # Required by setuptools.
+
+  def run(self):
+    logging.BASIC_FORMAT = '[%(created)f] %(levelname)s %(message)s'
+    logging.root.setLevel(logging.DEBUG)
+    logging.info('running tests under interpreter: ' + sys.executable)
+    # Do the test after logging at least 1 line, for safety.
+    is_tty = is_logging_to_tty()
+    if not run_tests(test_dir='test', is_tty=is_tty):
+      raise DistutilsError('some tests failed')
+
+  def initialize_options(self):
+    pass
+
+  def finalize_options(self):
+    pass
+
 
 class MyBuildInstallGreenlet(Command):
   """Command to install greenlet, a non-.egg version."""
@@ -763,6 +894,7 @@ setup(name='syncless',
                   'build_ext_symlinks': MyBuildExtSymlinks,
                   'build_src_symlinks': MyBuildSrcSymlinks,
                   'upload': MyUpload,
+                  'test': MyTest,
                  },
       # Mentioning `syncless' here would cause double loading of syncless.coio from
       # examples/demo.py.
