@@ -19,6 +19,10 @@ def TestApplication(env, start_response):
   if env['PATH_INFO'] == '/save':
     start_response('200 OK', [('Content-Type', 'text/plain')])
     return [env['wsgi.input'].readline().upper()]
+  if env['PATH_INFO'] == 'policy-file':
+    start_response('200 OK', [('Content-Type', 'text/plain')])
+    return 'I hope you like our policy.'
+
   # A run-time error caught by the wsgi moduel if this is reached.
 
 
@@ -119,6 +123,22 @@ class WsgiTest(unittest.TestCase):
     head, body = ParseHttpResponse(b.recv(8192))
     self.assertEqual('close', head['Connection'])
     self.AssertHelloResponse(head, body)
+
+  def testSingleTooLongRequest(self):
+    a, b = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    b.sendall('GET / HTTP/1.0\r\n' + 'Xy: Z\r\n' * 4714)
+    b.shutdown(1)
+    CallWsgiWorker(a)
+    response = b.recv(8192)
+    self.assertEqual('', response)
+
+  def testSinglePolicyFileRequest(self):
+    a, b = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    b.sendall('<policy-file-request/>\0foobar')
+    b.shutdown(1)
+    CallWsgiWorker(a)
+    response = b.recv(8192)
+    self.assertEqual('I hope you like our policy.', response)
 
   def testSinglePostRequest(self):
     a, b = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)

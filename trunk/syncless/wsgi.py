@@ -434,7 +434,6 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
 
   loglevel = logging.root.level
   is_debug = loglevel <= DEBUG
-  req_buf = ''
   do_keep_alive_ary = [True]
   headers_sent_ary = [False]
   server_software = default_env['SERVER_SOFTWARE']
@@ -481,70 +480,70 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
         stackless.schedule(None)
 
       # Read HTTP/1.0 or HTTP/1.1 request. (HTTP/0.9 is not supported.)
-      # req_buf may contain some bytes after the previous request.
       if is_debug:
         logging.debug('reading HTTP request on sock=%x' % id(sock))
       try:
-        req_buf = ''
-        while True:  # Read the HTTP request.
-          if req_buf:
-            # TODO(pts): Support HTTP/0.9 requests without headers.
-            i = req_buf.find('\n\n')
-            j = req_buf.find('\n\r\n')
-            if i >= 0 and (j < 0 or i < j):
-              req_head = req_buf[:i]
-              req_buf = req_buf[i + 2:]
-              break
-            elif j >= 0:
-              req_head = req_buf[:j]
-              req_buf = req_buf[j + 3:]
-              break
-            if len(req_buf) > 32767:
-              # Request too long. Just abort the connection since it's too late to
-              # notify receiver.
-              return
-          # TODO(pts): Handle read errors (such as ECONNRESET etc.).
-          # TODO(pts): Better buffering than += (do we need that?)
-          req_new = sockfile.read_at_most(8192)
-          
-
-          if not req_new:
-            # The HTTP client has closed the connection before sending the headers.
+        if not sockfile.read_upto(1):  # EOF, client has closed connection.
+          return
+        first_byte = sockfile.get_string(0, 1)
+        if first_byte not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
+          if first_byte == '\x80':
+            # TODO(pts): Handle the SSL request.
+            if is_debug:
+              logging.debug('received unexpected SSL (https) request')
             return
-          # TODO(pts): Ensure that refcount(req_buf) == 1 -- do the string
-          # reference counters increase by slicing?
-          req_buf += req_new  # Fast string append if refcount(req_buf) == 1.
-          if req_buf[0] not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-            if req_buf.startswith('<'):
-              while len(req_buf) < 32 and '\0' not in req_buf:
-                req_new = sockfile.read_at_most(32)
-                if not req_new:
-                  break
-                req_buf += req_new
-            if req_buf.startswith('<policy-file-request/>\0'):
+          if first_byte == '<':
+            while (sockfile.read_buffer_len < 32 and
+                   sockfile.find('\0') < 0 and
+                   sockfile.read_more(1)):
+              pass
+            if sockfile.get_string(0, 23) == '<policy-file-request/>\0':
               # Sent by the Flash player used by e.g. web-socket-js
               # (http://github.com/gimite/web-socket-js/).
-              req_head = 'GET policy-file HTTP/1.0'
-              req_buf = req_buf[req_buf.find('\0') + 1:]
+              sockfile.discard(23)
+              # TODO(pts): Insert less than 23 characters here, to avoid
+              # memmove().
+              sockfile.unread('GET policy-file HTTP/1.0\n\n')
               special_request_type = 'policy-file'
-              break
+          if not special_request_type:
+            if is_debug:
+              logging.debug('received non-HTTP request: %r' %
+                            sockfile.get_string(0, 64))
+            return
+        input = coio.nblimitreader(sockfile, 32768)
+        line = input.readline_stripend()
+        if line is None:
+          if is_debug:
+            if not input:
+              logging.debug('HTTP request too long')
             else:
-              # TODO(pts): Detect and handle SSL (https://).
+              logging.debug('EOF in HTTP request line1')
+          return
+        req_line1_items = line.split(' ', 2)
+        req_lines = []
+        while True:
+          line = input.readline_stripend()
+          if line:
+            if len(line) < 5:
               if is_debug:
-                logging.debug('received non-HTTP request: %r' % req_buf[:64])
-              return  # Possibly https request (starts with '\x80')
-          req_new = None
+                logging.debug('HTTP request header line too short')
+              return
+            req_lines.append(line)
+          elif line is None:
+            if is_debug:
+              if not input:
+                logging.debug('HTTP request too long')
+              else:
+                logging.debug('EOF in HTTP request header line')
+            return
+          else:
+            break
       except IOError_all, e:  # Raised in sockfile.read_at_most above.
         if is_debug and e[0] != errno.ECONNRESET:
           logging.debug('error reading HTTP request headers: %s' % e)
         return
       if date is None:
         date = GetHttpDate(time.time())
-      # TODO(pts): Speed up this splitting?
-      req_head = reqhead_continuation_re.sub(
-          ', ', req_head.rstrip('\r').replace('\r\n', '\n'))
-      req_lines = req_head.split('\n')
-      req_line1_items = req_lines.pop(0).split(' ', 2)
       if len(req_line1_items) != 3:
         RespondWithBad(400, date, server_software, sockfile, 'bad line1')
         return  # Don't reuse the connection.
@@ -639,16 +638,12 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
         content_length = None
         del env['CONTENT_LENGTH']
 
-      sockfile.unread(req_buf)
       if content_length:  # TODO(pts): Test this branch.
         # TODO(pts): Avoid the memcpy() in unread.
         env['wsgi.input'] = input = coio.nblimitreader(sockfile, content_length)
       else:
         env['wsgi.input'] = input = coio.nblimitreader(None, 0)
 
-      # Now req_buf contains everything read from sock after the current
-      # HTTP request. We don't reset it, so we can start from it in the next
-      # loop iteration, to support HTTP/1.1 pipelining.
       is_not_head = method != 'HEAD'
       res_content_length_ary = []
       headers_sent_ary[0] = False

@@ -649,6 +649,8 @@ cdef class nbfile
 # Read from nbfile at most limit characters.
 #
 # Precondition: limit > 0.
+#
+# TODO(pts): Rewrite this with brand new buffering.
 cdef object nbfile_readline_with_limit(nbfile self, Py_ssize_t limit):
     cdef Py_ssize_t n
     cdef Py_ssize_t got
@@ -705,6 +707,86 @@ cdef object nbfile_readline_with_limit(nbfile self, Py_ssize_t limit):
     n = q - <char_constp>self.read_eb.buf + 1
     buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, n)
     evbuffer_drain(&self.read_eb, n)
+    return buf
+
+# Read from nbfile at most limit characters, strip '\r\n' and '\n' from the end,
+# return None on EOF or on an incomplete line.
+#
+# Precondition: limit > 0.
+#
+# TODO(pts): Rewrite this with brand new buffering.
+cdef object nbfile_readline_stripend_with_limit(nbfile self, Py_ssize_t limit, Py_ssize_t *delta_out):
+    cdef Py_ssize_t n
+    cdef Py_ssize_t got
+    cdef Py_ssize_t min_off
+    cdef char_constp q
+    cdef int fd
+    cdef char had_short_read
+    #DEBUG assert limit > 0
+    fd = self.read_owi.fd
+    had_short_read = 0
+    min_off = 0
+    if limit <= self.read_eb.off:  # All data already in buffer.
+        q = <char_constp>memchr(<void_constp>self.read_eb.buf, c'\n', limit)
+        if q == NULL:
+            return None
+        limit = q - <char_constp>self.read_eb.buf
+        delta_out[0] = limit
+        got = limit - (limit > 0 and (<char*>self.read_eb.buf)[limit - 1] == c'\r')
+        buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, got)
+        evbuffer_drain(&self.read_eb, limit + 1)
+        return buf
+    q = <char_constp>memchr(<void_constp>self.read_eb.buf, c'\n',
+                            self.read_eb.off)
+    while q == NULL:
+        if had_short_read:
+            evbuffer_expand(&self.read_eb, 1)
+        elif self.read_eb.totallen == 0:
+            evbuffer_expand(&self.read_eb, self.c_min_read_buffer_size)
+        else:
+            evbuffer_expand(&self.read_eb, self.read_eb.totallen >> 1)
+        n = self.read_eb.totallen - self.read_eb.off - self.read_eb.misalign
+        got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, n)
+        if got == 0:  # EOF, return remaining bytes ('' or partial line)
+            n = self.read_eb.off
+            if limit < n:
+                # TODO(pts): Cache EOF, don't coio_c_evbuffer_read(...) again.
+                if limit == 0:
+                    delta_out[0] = 0
+                    return None
+                n = limit
+            if n == 0:
+                delta_out[0] = 0
+                return None
+            n -= 1
+            delta_out[0] = n
+            got = n - (n > 0 and (<char*>self.read_eb.buf)[n - 1] == c'\r')
+            buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, got)
+            evbuffer_drain(&self.read_eb, n + 1)
+            return buf
+        if limit <= self.read_eb.off:  # All data already in buffer.
+            q = <char_constp>memchr(<void_constp>self.read_eb.buf, c'\n', limit)
+            if q == NULL:
+                delta_out[0] = 0
+                return None
+            limit = q - <char_constp>self.read_eb.buf
+            delta_out[0] = limit
+            got = limit - (limit > 0 and (<char*>self.read_eb.buf)[limit - 1] == c'\r')
+            buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, got)
+            evbuffer_drain(&self.read_eb, limit + 1)
+            return buf
+        if got < n:
+            # Most proably we'll get an EOF next time, so we shouldn't
+            # pre-increase our buffer.
+            had_short_read = 1
+        q = <char_constp>memchr(<void_constp>(self.read_eb.buf + min_off),
+                                c'\n', self.read_eb.off - min_off)
+        min_off = self.read_eb.off
+    n = q - <char_constp>self.read_eb.buf
+    delta_out[0] = n
+    got = n - (n > 0 and (<char*>self.read_eb.buf)[n - 1] == c'\r')
+    buf = PyString_FromStringAndSize(<char_constp>self.read_eb.buf, got)
+    evbuffer_drain(&self.read_eb, n + 1)
     return buf
 
 cdef object nbfile_read(nbfile self, Py_ssize_t n):
@@ -1538,8 +1620,6 @@ cdef class nbfile:
                 evbuffer_expand(read_eb, self.c_min_read_buffer_size)
             else:
                 evbuffer_expand(read_eb, read_eb.totallen >> 1)
-            # TODO(pts): fix bug in libevent-1.4.13 evbuffer_expand
-            # need = buf->off + datlen when reallocing.
             n = read_eb.totallen - read_eb.off - read_eb.misalign
 
             got = coio_c_evbuffer_read(&self.read_owi, &self.read_eb, n)
@@ -1621,6 +1701,9 @@ cdef class nblimitreader:
         else:
           self.f = f
 
+    def __len__(nblimitreader self):
+        return self.limit
+
     def read(nblimitreader self, size=-1):
         cdef object buf
         cdef Py_ssize_t c_size
@@ -1647,6 +1730,30 @@ cdef class nblimitreader:
         size = len(buf)
         if size > 0:
             self.limit -= size
+            if self.limit == 0:
+                self.f = None
+        else:
+            self.limit = 0
+            self.f = None
+        return buf
+
+    def readline_stripend(nblimitreader self):
+        """Read line, strip '\\r\\n' or '\\n' from the end.
+
+        Returns:
+          The line read, with '\\r\\n' or '\\n' stripped, or None on EOF or
+          on an incomplete line before EOF.
+        """
+        cdef object buf
+        cdef Py_ssize_t size
+        cdef Py_ssize_t delta
+        if self.limit == 0:
+            return ''
+        buf = nbfile_readline_stripend_with_limit(self.f, self.limit, &delta)
+        if buf:
+            self.limit -= delta
+            if self.limit == 0:
+                self.f = None
         else:
             self.limit = 0
             self.f = None
