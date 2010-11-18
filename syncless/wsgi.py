@@ -122,12 +122,12 @@ from syncless import coio
 HTTP_REQUEST_METHODS_WITH_BODY = ['POST', 'PUT', 'OPTIONS', 'TRACE']
 """HTTP request methods which can have a body (Content-Length)."""
 
-COMMA_SEPARATED_REQHEAD = set(['ACCEPT', 'ACCEPT-CHARSET', 'ACCEPT-ENCODING',
-    'ACCEPT-LANGUAGE', 'ACCEPT-RANGES', 'ALLOW', 'CACHE-CONTROL',
-    'CONNECTION', 'CONTENT-ENCODING', 'CONTENT-LANGUAGE', 'EXPECT',
-    'IF-MATCH', 'IF-NONE-MATCH', 'PRAGMA', 'PROXY-AUTHENTICATE', 'TE',
-    'TRAILER', 'TRANSFER-ENCODING', 'UPGRADE', 'VARY', 'VIA', 'WARNING',
-    'WWW-AUTHENTICATE'])
+COMMA_SEPARATED_REQHEAD = set(['ACCEPT', 'ACCEPT_CHARSET', 'ACCEPT_ENCODING',
+    'ACCEPT_LANGUAGE', 'ACCEPT_RANGES', 'ALLOW', 'CACHE_CONTROL',
+    'CONNECTION', 'CONTENT_ENCODING', 'CONTENT_LANGUAGE', 'EXPECT',
+    'IF_MATCH', 'IF_NONE_MATCH', 'PRAGMA', 'PROXY_AUTHENTICATE', 'TE',
+    'TRAILER', 'TRANSFER_ENCODING', 'UPGRADE', 'VARY', 'VIA', 'WARNING',
+    'WWW_AUTHENTICATE'])
 """HTTP request headers which will be joined by comma + space.
 
 The list was taken from cherrypy.wsgiserver.comma_separated_headers.
@@ -539,23 +539,12 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
 
       content_length = None
       do_req_keep_alive = http_version == 'HTTP/1.1'  # False for HTTP/1.0
-      for line in req_lines:
-        i = line.find(':')
-        if i < 0:
-          RespondWithBad(400, date, server_software,
-                         sockfile, 'bad header line')
-          return
-        j = line.find(': ', i)
-        if j >= 0:
-          value = line[i + 2:]
-        else:
-          value = line[i + 1:]
-        name = line[:i].lower()
-        if name == 'connection':
+      for name_upper, value in req_lines:
+        if name_upper == 'CONNECTION':
           do_req_keep_alive = value.lower() == 'keep-alive'
-        elif name == 'keep-alive':
+        elif name_upper == 'KEEP_ALIVE':
           pass  # TODO(pts): Implement keep-alive timeout.
-        elif name == 'content-length':
+        elif name_upper == 'CONTENT_LENGTH':
           try:
             content_length = int(value)
           except ValueError:
@@ -563,11 +552,10 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
                 date, server_software, sockfile, 'bad content-length')
             return
           env['CONTENT_LENGTH'] = value
-        elif name == 'content-type':
+        elif name_upper == 'CONTENT_TYPE':
           env['CONTENT_TYPE'] = value
-        elif not name.startswith('proxy-'):
-          name_upper = name.upper()
-          key = 'HTTP_' + name_upper.replace('-', '_')
+        elif not name_upper.startswith('PROXY_'):
+          key = 'HTTP_' + name_upper
           if key in env and name_upper in COMMA_SEPARATED_REQHEAD:
             # Fast (linear) version of the quadratic env[key] += ', ' + value.
             s = env[key]
