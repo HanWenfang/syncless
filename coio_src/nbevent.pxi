@@ -102,6 +102,7 @@ cdef extern from "string.h":
     cdef void *memchr(void_constp s, int c, size_t n)
     cdef void *memcpy(void *dest, void_constp src, size_t n)
     cdef void *memmove(void *dest, void_constp src, size_t n)
+    cdef int memcmp(void_constp s1, void_constp s2, size_t n)
 cdef extern from "errno.h":
     cdef extern int errno
     cdef extern char *strerror(int)
@@ -841,7 +842,7 @@ cdef object nbfile_read(nbfile self, Py_ssize_t n):
     evbuffer_drain(&self.read_eb, n)
     return buf
 
-cdef Py_ssize_t nbfile_discard(nbfile self, Py_ssize_t n):
+cdef Py_ssize_t nbfile_discard(nbfile self, Py_ssize_t n) except -1:
     if n <= 0:
         return 0
     if self.read_eb.off > 0:
@@ -864,6 +865,103 @@ cdef Py_ssize_t nbfile_discard(nbfile self, Py_ssize_t n):
             if n == 0:
                 return 0
 
+# * limit is the maximum target number of bytes in the input buffer.
+# * Returns the number of bytes read.
+# * Raises EOFError on EOF.
+cdef Py_ssize_t nbfile_read_more1(nbfile self, Py_ssize_t limit) except -1:
+    cdef Py_ssize_t got
+    cdef evbuffer_s *read_eb
+    read_eb = &self.read_eb
+    if limit <= read_eb.off:
+        raise IndexError  # Request too long.
+    else:
+        if read_eb.totallen == 0:
+            evbuffer_expand(read_eb, self.c_min_read_buffer_size)
+        else:
+            # This expands by at least read_eb.totallen if the buffer is
+            # full (because evbuffer doubles its size at minimum).
+            evbuffer_expand(read_eb, read_eb.totallen >> 1)
+        got = read_eb.totallen - read_eb.off - read_eb.misalign
+        if got > limit - read_eb.off:
+            got = limit - read_eb.off
+        got = coio_c_evbuffer_read(&self.read_owi, read_eb, got)
+    if got == 0:  # EOF
+        raise EOFError
+    return got
+
+# See the docstring of nbfile.read_http_reqhead for documenation.
+cdef object nbfile_read_http_reqhead(nbfile self, Py_ssize_t limit):
+    cdef evbuffer_s *read_eb
+    cdef char c
+    cdef Py_ssize_t i
+    cdef Py_ssize_t j
+    cdef object buf
+    cdef char_constp q
+    cdef list req_lines
+
+    req_lines = []
+    read_eb = &self.read_eb
+    if read_eb.off == 0:
+        nbfile_read_more1(self, limit)
+    c = (<char*>read_eb.buf)[0]
+    if c == c'\x80':
+        return 'ssl', None, None, 'ssl', req_lines
+    elif c == c'<':
+        if limit > 32:
+            limit = 32
+        while 1:
+            q = <char_constp>memchr(<void_constp>read_eb.buf, c'\0', read_eb.off)
+            if q != NULL:
+                break
+            nbfile_read_more1(self, limit)
+        if (read_eb.off >= 23 and
+            0 == memcmp(<void_constp>read_eb.buf,
+                        <void_constp><char*>'<policy-file-request/>\0', 23)):
+            evbuffer_drain(read_eb, 23)
+            return 'GET', 'policy-file', 'HTTP/1.0', 'policy-file', req_lines
+        raise ValueError
+    elif c < c'A' or c > c'Z':
+        raise ValueError
+
+    # Read and split the first line of the the HTTP request.
+    while 1:
+        q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n', read_eb.off)
+        if q != NULL:
+            break
+        nbfile_read_more1(self, limit)
+    i = j = q - <char_constp>read_eb.buf
+    if (<char*>q)[-1] == c'\r':
+        j -= 1
+    buf = PyString_FromStringAndSize(<char_constp>read_eb.buf, j)
+    evbuffer_drain(read_eb, i + 1)
+    limit -= i + 1
+    # This raises a ValueError if there are too few items. Good.
+    # TODO(pts): Use a Python API function for this.
+    method, suburl, http_version = buf.split(' ', 2)
+
+    # Read the request header lines (key--value pairs).
+    # TODO(pts): Add support for HTTP/0.9.
+    while 1:
+        q = <char_constp>memchr(<void_constp>read_eb.buf, c'\n', read_eb.off)
+        if q == NULL:
+            nbfile_read_more1(self, limit)
+        else:
+            i = j = q - <char_constp>read_eb.buf
+            if j > 0 and (<char*>q)[-1] == c'\r':
+                j -= 1
+            if j == 0:  # Received an empty line.
+                evbuffer_drain(read_eb, i + 1)
+                # limit -= i + 1  # Superfluous.
+                break
+            if j < 5:
+                raise ValueError
+            req_lines.append(
+                PyString_FromStringAndSize(<char_constp>read_eb.buf, j))
+            evbuffer_drain(read_eb, i + 1)
+            limit -= i + 1
+
+    return method, suburl, http_version, None, req_lines
+  
 
 cdef class nbfile:
     """A non-blocking file (I/O channel).
@@ -1353,6 +1451,29 @@ cdef class nbfile:
           self.read_owi.exc_class or IOError: (but not EOFError)
         """
         return nbfile_read(self, n)
+
+    def read_http_reqhead(nbfile self, limit):
+        """Read a HTTP request headers (and the first line).
+
+        HTTP/0.9 requests will be rejected with a ValueError.
+
+        Please note that this method is not a validating parser. The caller
+        is encouraged to do some additional consistency checks after this
+        method returns.
+
+        Returns:
+          ('GET', 'policy-file', 'HTTP/1.0', 'policy-file', [])  or
+          ('ssl', None, None, 'ssl', [])  or
+          (method, suburl, http_version, None, req_lines).
+          Here req_lines is a list of HTTP header lines, with the trailing
+          '\\r\\n' or '\\n' stripped.
+        Raises:
+          EOFError: If an EOF was found before the end of the request.
+          IndexError: If the request was too long.
+          ValueError: On a request parse error.
+          IOError: On any other I/O error.
+        """
+        return nbfile_read_http_reqhead(self, limit)
 
     def read_at_most(nbfile self, int n):
         """Read at most n bytes and return the string.
