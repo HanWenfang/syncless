@@ -471,7 +471,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
       env['REMOTE_PORT'] = str(peer_name[1])
       env['wsgi.errors'] = WsgiErrorsStream
       if date is None:  # Reusing a keep-alive socket.
-        items = data = input
+        items = data = input = None
         # For efficiency reasons, we don't check now whether the child has
         # already closed the connection. If so, we'll be notified next time.
 
@@ -483,71 +483,30 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
       if is_debug:
         logging.debug('reading HTTP request on sock=%x' % id(sock))
       try:
-        if not sockfile.read_upto(1):  # EOF, client has closed connection.
-          return
-        first_byte = sockfile.get_string(0, 1)
-        if first_byte not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-          if first_byte == '\x80':
-            # TODO(pts): Handle the SSL request.
-            if is_debug:
-              logging.debug('received unexpected SSL (https) request')
-            return
-          if first_byte == '<':
-            while (sockfile.read_buffer_len < 32 and
-                   sockfile.find('\0') < 0 and
-                   sockfile.read_more(1)):
-              pass
-            if sockfile.get_string(0, 23) == '<policy-file-request/>\0':
-              # Sent by the Flash player used by e.g. web-socket-js
-              # (http://github.com/gimite/web-socket-js/).
-              sockfile.discard(23)
-              # TODO(pts): Insert less than 23 characters here, to avoid
-              # memmove().
-              sockfile.unread('GET policy-file HTTP/1.0\n\n')
-              special_request_type = 'policy-file'
-          if not special_request_type:
-            if is_debug:
-              logging.debug('received non-HTTP request: %r' %
-                            sockfile.get_string(0, 64))
-            return
-        input = coio.nblimitreader(sockfile, 32768)
-        line = input.readline_stripend()
-        if line is None:
-          if is_debug:
-            if not input:
-              logging.debug('HTTP request too long')
-            else:
-              logging.debug('EOF in HTTP request line1')
-          return
-        req_line1_items = line.split(' ', 2)
-        req_lines = []
-        while True:
-          line = input.readline_stripend()
-          if line:
-            if len(line) < 5:
-              if is_debug:
-                logging.debug('HTTP request header line too short')
-              return
-            req_lines.append(line)
-          elif line is None:
-            if is_debug:
-              if not input:
-                logging.debug('HTTP request too long')
-              else:
-                logging.debug('EOF in HTTP request header line')
-            return
-          else:
-            break
+        method, suburl, http_version, special_request_type, req_lines = (
+            sockfile.read_http_reqhead(32768))
+      except IndexError:
+        if is_debug:
+          logging.debug('HTTP request headers too long')
+        return
+      except EOFError:
+        if is_debug:
+          logging.debug('EOF in HTTP request headers')
+        return
+      except ValueError:
+        if is_debug:
+          logging.debug('syntax error parsing HTTP request headers')
+        return
       except IOError_all, e:  # Raised in sockfile.read_at_most above.
         if is_debug and e[0] != errno.ECONNRESET:
           logging.debug('error reading HTTP request headers: %s' % e)
         return
+      if special_request_type == 'ssl':
+        if is_debug:
+          logging.debug('found an uexpectedSSL (http) request')
+        return  # TODO(pts): Process the SSL request. Needs buffering changes.
       if date is None:
         date = GetHttpDate(time.time())
-      if len(req_line1_items) != 3:
-        RespondWithBad(400, date, server_software, sockfile, 'bad line1')
-        return  # Don't reuse the connection.
-      method, suburl, http_version = req_line1_items
       if http_version not in HTTP_VERSIONS:
         RespondWithBad(400, date,
             server_software, sockfile, 'bad HTTP version: %r' % http_version)
@@ -584,7 +543,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
         i = line.find(':')
         if i < 0:
           RespondWithBad(400, date, server_software,
-                                sockfile, 'bad header line')
+                         sockfile, 'bad header line')
           return
         j = line.find(': ', i)
         if j >= 0:

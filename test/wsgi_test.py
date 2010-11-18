@@ -1,6 +1,7 @@
 #! /usr/local/bin/stackless2.6
 # by pts@fazekas.hu at Sat Apr 24 00:25:31 CEST 2010
 
+import errno
 import logging
 import socket
 import sys
@@ -129,7 +130,15 @@ class WsgiTest(unittest.TestCase):
     b.sendall('GET / HTTP/1.0\r\n' + 'Xy: Z\r\n' * 4714)
     b.shutdown(1)
     CallWsgiWorker(a)
-    response = b.recv(8192)
+    try:
+      response = b.recv(8192)
+    except IOError, e:
+      if e.errno != errno.ECONNRESET:
+        raise
+      # Some Linux 2.6.32 systems raise ECONNRESET if the peer is very fast
+      # to close the connection.  The exact reasons why we get ECONNRESET
+      # instead of just an EOF sometimes is unclear to me.
+      response = ''
     self.assertEqual('', response)
 
   def testSinglePolicyFileRequest(self):
