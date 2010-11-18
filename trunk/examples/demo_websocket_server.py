@@ -108,4 +108,5 @@ def WsgiApp(env, start_response):
 if __name__ == '__main__':
   logging.BASIC_FORMAT = '[%(created)f] %(levelname)s %(message)s'
   logging.root.setLevel(logging.DEBUG)
-  wsgi.RunHttpServer(WsgiApp)
+  # Google Chrome seems to block port 6666 for websockets, so we use 16666.
+  wsgi.RunHttpServer(WsgiApp, server_address=('127.0.0.1', 16666))

@@ -895,7 +895,9 @@ cdef object nbfile_read_http_reqhead(nbfile self, Py_ssize_t limit):
     cdef char c
     cdef Py_ssize_t i
     cdef Py_ssize_t j
+    cdef Py_ssize_t k
     cdef object buf
+    cdef char_constp p
     cdef char_constp q
     cdef list req_lines
 
@@ -953,10 +955,34 @@ cdef object nbfile_read_http_reqhead(nbfile self, Py_ssize_t limit):
                 evbuffer_drain(read_eb, i + 1)
                 # limit -= i + 1  # Superfluous.
                 break
-            if j < 5:
+            c = (<char*>read_eb.buf)[0]
+            if <unsigned>c - c'a' <= <unsigned>c'z' - c'a':
+                c -= 32  # Convert to upper case.
+            if j < 5 or c < c'A' or c > c'Z':
                 raise ValueError
-            req_lines.append(
-                PyString_FromStringAndSize(<char_constp>read_eb.buf, j))
+            p = <char_constp>read_eb.buf
+            q = <char_constp>memchr(<void_constp>p, c':', i)
+            if q == NULL:
+                raise ValueError
+            while p != q:
+                c = (<char*>p)[0]
+                if c == c'-':
+                    (<char*>p)[0] = c'_'
+                elif <unsigned>c - c'a' <= <unsigned>c'z' - c'a':
+                    (<char*>p)[0] -= 32  # Convert to upper case.
+                elif (<unsigned>c - c'A' > <unsigned>c'Z' - c'A' and
+                      <unsigned>c - c'0' > <unsigned>c'9' - c'0'):
+                    raise ValueError
+                p += 1
+            p = <char_constp>read_eb.buf
+            k = q - p
+            q += 1
+            if (<char*>q)[0] == c' ':
+              q += 1
+            j -= q - p
+            req_lines.append((
+                PyString_FromStringAndSize(<char_constp>read_eb.buf, k),
+                PyString_FromStringAndSize(q, j)))
             evbuffer_drain(read_eb, i + 1)
             limit -= i + 1
 
@@ -1465,8 +1491,9 @@ cdef class nbfile:
           ('GET', 'policy-file', 'HTTP/1.0', 'policy-file', [])  or
           ('ssl', None, None, 'ssl', [])  or
           (method, suburl, http_version, None, req_lines).
-          Here req_lines is a list of HTTP header lines, with the trailing
-          '\\r\\n' or '\\n' stripped.
+          Here req_lines is a list of HTTP request header (name_upper,
+          value) pairs, where '-' is replaced by '_', and letters converted
+          to upper case in name_upper.
         Raises:
           EOFError: If an EOF was found before the end of the request.
           IndexError: If the request was too long.

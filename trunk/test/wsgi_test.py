@@ -151,7 +151,8 @@ class WsgiTest(unittest.TestCase):
 
   def testSinglePostRequest(self):
     a, b = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-    b.sendall('POST /save HTTP/1.0\r\nContent-Length: 7\r\n\r\nfoo\nbar')
+    b.sendall('POST /save HTTP/1.0\r\nContent-Length: 7\r\n'
+              'X-1: Z\r\n\r\nfoo\nbar')
     b.shutdown(1)
     CallWsgiWorker(a)
     head, body = ParseHttpResponse(b.recv(8192))
