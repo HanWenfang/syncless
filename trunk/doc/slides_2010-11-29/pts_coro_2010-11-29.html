@@ -444,7 +444,7 @@ function onDomReady(event) {
   var bodyHeight = document.body.offsetHeight
   var bodyBackground = window.getComputedStyle(document.body, null).
       getPropertyValue('background-color')
-  if (navigator.userAgent.indexOf(' KHTML/') >= 0) { // !!
+  if (navigator.userAgent.indexOf(' KHTML/') >= 0) {
     // Degraded workaround for Konqueror 4.4.2 (but not for Safari), we have
     // to hard-code these, Konqueror cannot query them yet, it returns 0 for
     // document.body.offsetWidth as well, window.getComputedStyle returns a
@@ -464,9 +464,15 @@ function onDomReady(event) {
   //if (document.body.clientHeight >= 900) {
   //} else if (document.body.clientHeight >= 900) {
   //  document.body.style.fontSize = 
-  window.addEventListener('resize', onResize, false)
-  window.addEventListener('hashchange', onHashChange, false)
-  if (navigator.userAgent.indexOf(' AppleWebKit/') >= 0) {
+  if (window.addEventListener) {
+    window.addEventListener('resize', onResize, false)
+    window.addEventListener('hashchange', onHashChange, false)
+  } else {
+    // Internet Explorer !!
+  }
+  if (!document.addEventListener) {
+    // Internet Explorer !!
+  } else if (navigator.userAgent.indexOf(' AppleWebKit/') >= 0) {
     // Chrome 8.0 and Safari don't send the arrow key events for 'keypress',
     // but they do send them (auto-repeated) on 'keydown'.
     document.addEventListener('keydown', onKeyPress, false)
@@ -488,7 +494,22 @@ function onDomReady(event) {
   document.getElementById('backgroundfiller').style.backgroundColor = bodyBackground
   onHashChange()  // includes goToSlide(document.location.hash) + zooming
 }
-document.addEventListener('DOMContentLoaded', onDomReady, false)
+
+// This is just for Internet Explorer.
+function onReadyStateChange() {
+  if (document.readyState == 'complete') {
+    document.detachEvent('onreadystatechange', onReadyStateChange)
+    onDomReady()
+  }
+}
+
+if (document.addEventListener) {
+  // Mozilla, Chrome, Safari, Opera
+  document.addEventListener('DOMContentLoaded', onDomReady, false)
+} else if (document.attachEvent) {
+  document.attachEvent('onreadystatechange', onReadyStateChange)
+  // Internet Explorer
+}
 window.slideJsOk = true
 </script>
 <style type="text/css">
@@ -527,12 +548,11 @@ div#msg {
   margin:0px;
 }
 /* Helper element for providing a backround for not-tall-enough slides. This
- * is not needed in Chrome (because the body would be high enough), but it
- * is needed in Firefox 3.6.12, Opera and Konqueror 4.4.2 (not needed but
- * harmless in Chrome 8.0 and Safari).
+ * is needed in Chrome 8.0, Firefox 3.6.12, Konqueror 4.4.2, Safari and Opera
+ * in standards-compliant mode. (Chrome doesn't need it in quirks mode.)
  */
 div#backgroundfiller {
-  position:fixed; /* !! */
+  position:fixed;
   background:#00ff00;  /* for debugging, change thise to green */
   top:20px;  /* overwritten in onDomReady from body.margin-top */
   left:20px;  /* overwritten in onDomReady from body.margin-top */
