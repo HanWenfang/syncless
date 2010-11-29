@@ -865,15 +865,15 @@ in Python with coroutines</div></div>
 <div class="slide">
 <h1>How to run Ticker and Repeater in parallel?</h1>
 
-<pre class=sh_python>line_count_ary = [0]
+<p>View the full code listings for this presentation <a href="http://code.google.com/p/syncless/source/browse/#svn/trunk/doc/examples_2010-11-29">here</a>.
 
+<pre class=sh_python>line_count_ary = [0]
 def Ticker():
   i = 0
   while True:
     i += 1
     print 'Tick %d with %d lines.' % (i, line_count_ary[0])
     Sleep(3)
-
 def Repeater():
   print 'Hi, please type and press Enter.'
   while True:
