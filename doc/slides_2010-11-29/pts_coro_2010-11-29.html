@@ -1,5 +1,5 @@
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
-            "http://www.w3.org/TR/html4/loose.dtd">
+    "http://www.w3.org/TR/html4/loose.dtd">
 <html><head>
 <meta http-equiv="content-type" content="text/html; charset=UTF-8">
 <title>13371 concurrent TCP connections in Python with coroutines</title>
@@ -8,28 +8,27 @@
 <script type="text/javascript" src="sh_javascript.min.js"></script>
 <link type="text/css" rel="stylesheet" href="sh_dull.min.css">
 <script type="text/javascript">
-// This file has been tested only on Chrome and Firefox 3.6. It will most
-// probably not work on Internet Explorer or Opera.
+// This file has been tested and found working on Chrome 8.0, Firefox 3.6
+// and 3.6.12, Opera 10.23, Safari and Konqueror 4.2.
 //
 // doc: http://code.jquery.com/jquery-1.4.4.js
 //
-// Syntax highlighing files were downloaded from:
+// Syntax highlighing files were downloaded from (and then patched):
 //
 // * http://shjs.sourceforge.net/lang/sh_python.min.js
+// * http://shjs.sourceforge.net/lang/sh_javascript.min.js
 // * http://shjs.sourceforge.net/sh_main.min.js
 // * http://shjs.sourceforge.net/css/sh_nedit.min.css
 //
 // TODO(pts): Add a CSS reset.
 // TODO(pts): Revisit portability MARKs.
 // TODO(pts): Make the slide title always stay on top when scrolling down.
-// TODO(pts): Auto-repeat the left and right keys in Firefox 3.6.12 (not in
-//            3.6)
-// TODO(pts): Detect firefox almost-full-screen.
 //
 // The slide layout is optimized for 1024x768, the browser running in full
 // screen mode (F11). Chrome can do that, but Firefox adds a border of about
 // 10 pixels at the top of the page. The user may zoom in or out, but the
-// layout calculations here assume that a 100% zoom is active.
+// layout calculations here assume that a 100% zoom is active. Internet
+// Explorer 8 displays its bottom toolbar even in full screen mode (F11).
 //
 // 1024x768 has been chosen so it will work on laptop screens at 1366x768.
 //
@@ -64,12 +63,25 @@ var CHAR_TO_KEY = {
     88:  KEY_V,  // With Shift.
 }
 
-// Example: getStylePx(document.body, 'margin-top')
-function getStylePx(element, name) {
-  var s = window.getComputedStyle(element, null).getPropertyValue(name)
+function getBackgroundColor(element) {
+  // Internet Explorer has element.currentStyle, other browsers (Firefox,
+  // Chrome, Safari, Opera and Konqueror) have window.getComputedStyle().
+  return element.currentStyle ? element.currentStyle.backgroundColor :
+         window.getComputedStyle(document.body, null).
+         getPropertyValue('background-color')
+}
+
+// Example: getMarginTopPx(document.body)
+function getMarginTopPx(element) {
+  var s = element.currentStyle ? element.currentStyle.marginTop :
+          window.getComputedStyle(document.body, null).
+          getPropertyValue('margin-top')
   if (typeof s != 'string')
     throw new Error('missing style ' + name + ' for ' + element)
-  if (s.substr(-2) != 'px')
+  // Internet Explorer doesn't support s.substr(-2) (it would return the whole
+  // string), other browsers (Chrome, Firefox, Safari, Opera and Konqueror) do
+  // support this.
+  if (s.substr(s.length - 2) != 'px')
     throw new Error('style should end with px: ' + s)
   return parseInt(s, 10)  // This ignores 'px' at the end.
 }
@@ -259,11 +271,17 @@ function onKeyPress(event) {
     // the charCode.
     keyCode = CHAR_TO_KEY[event.charCode]
   }
+  // Internet Explorer 8 supports returnValue, all other browsers (Chrome,
+  // Firefox, Safari, Opera and Konqueror) support event.preventDefault.
+  // This would be a neat trick to call preventDefault() below, but it doesn't
+  // work in Firefox 3.6.
+  // var preventDefault = event.preventDefault ||
+  //     function() { event.returnValue = false }
   if (keyCode == KEY_DOWN &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     // For preventDefault(), see:
     // http://www.webdevelopment2.com/the-secret-of-cancelling-and-stopping-events-using-javascript/
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     // alert(document.body.scrollTop)
     // document.body.scrollTop += 20
     // Chrome uses document.body.scrollTop (the other is 0), Konqueror uses
@@ -272,55 +290,61 @@ function onKeyPress(event) {
     window.scroll(0, y + 20)
   } else if (keyCode == KEY_UP &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     var y = document.body.scrollTop || document.documentElement.scrollTop
     window.scroll(0, y - 20)
   } else if (keyCode == KEY_HOME &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     window.scroll(0, 0)
   } else if (keyCode == KEY_END &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     window.scroll(0, document.body.offsetHeight)
   } else if (keyCode == KEY_RIGHT &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     moveSlide(1)
   } else if (keyCode == KEY_LEFT &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     moveSlide(-1)
   } else if (keyCode == KEY_PAGEDOWN &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     var y = document.body.scrollTop || document.documentElement.scrollTop
     window.scroll(0, y + (document.body.clientHeight -
-        getStylePx(document.body, 'margin-top')))  // 20px
+        getMarginTopPx(document.body)))  // 20px
   } else if (keyCode == KEY_PAGEUP &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     var y = document.body.scrollTop || document.documentElement.scrollTop
     window.scroll(0, y - (document.body.clientHeight -
-        getStylePx(document.body, 'margin-top')))  // 20px
+        getMarginTopPx(document.body)))  // 20px
   } else if (keyCode == KEY_F &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     var eRulers = document.getElementById('rulers')
     eRulers.style.display =
         (eRulers.style.display || 'none') == 'none' ? 'block' : 'none'
   } else if (keyCode == KEY_F &&  // Alt-<F>
       event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-    event.preventDefault()
-    var hasChanged = zoom(
-        window.innerWidth >= 1280 && window.innerHeight >= 960)
+    // Unfortunately this doesn't cancel the default menu popup in
+    // Internet Explorer 8. I can't find a way to cancel it.
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
+    // Internet Explorer 8 provides document.documentElement.clientWidth, all
+    // other browsers (Chrome, Firefox, Safari, Opera and Konqueror) provide
+    // window.innerWidth (and possibly the other one as well).
+    var width = window.innerWidth || document.documentElement.clientWidth
+    var height = window.innerHeight || document.documentElement.clientHeight
+    var hasChanged = zoom(width >= 1280 && height >= 960)
     var eRulers = document.getElementById('rulers')
     eRulers.style.display =
         hasChanged || (eRulers.style.display || 'none') == 'none' ?
         'block' : 'none'
   } else if (keyCode == KEY_V && !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     var msgElement = document.getElementById('msg')
-    event.preventDefault()
+    event.preventDefault ? event.preventDefault() : (event.returnValue = false)
     // display is empty by default ('none' is the default for msgElement)
     if ((msgElement.style.display || 'none') == 'none') {
       msgElement.innerHTML = ''
@@ -342,14 +366,35 @@ function onKeyPress(event) {
   }
 }
 
+
 // containerElement can be document.body etc. Containment is recursive.
 function fixPercentHeights(containerElement, fullHeight) {
-  var elements = containerElement.getElementsByClassName('percentheight')
-  for (var i = 0; i < elements.length; ++i) {
-    var percent = elements[i].style.lineHeight
-    if (percent.substr(-1) == '%')
-      elements[i].style.height =
+  // document.body.clientHeight == window.innerHeight (if no margins)
+  if (fullHeight == null)
+    fullHeight = window.innerHeight || document.documentElement.clientHeight
+
+  function fixPercentHeight(element) {
+    var percent = element.style.lineHeight
+    if (percent.substr(percent.length - 1) == '%')
+      element.style.height =
           Math.round(parseFloat(percent) * fullHeight / 100) + 'px'
+  }
+
+  if (containerElement.getElementsByClassName) {
+    // Internet Explorer 9 and all other browsers (Chrome, Firefox, Safari,
+    // Opera and Konqueror).
+    var elements = containerElement.getElementsByClassName('percentheight')
+    for (var i = 0; i < elements.length; ++i) {
+      if (elements[i].tagName == 'DIV')
+        fixPercentHeight(elements[i])
+    }
+  } else {
+    // Slower but working implementation for Internet Explorer 8.
+    var elements = containerElement.getElementsByTagName('DIV')
+    for (var i = 0; i < elements.length; ++i) {
+      if (elements[i].className == 'percentheight')
+        fixPercentHeight(elements[i])
+    }
   }
 }
 
@@ -362,7 +407,8 @@ function onResize() {
   // use it. (But i was not valid in onDomReady.)
   document.getElementById('backgroundfiller').style.width =
       document.body.offsetWidth + 'px'
-  fixPercentHeights(document.body, window.innerHeight)
+  var height = window.innerHeight || document.documentElement.clientHeight
+  fixPercentHeights(document.body)
 }
 
 var prevHash
@@ -437,41 +483,40 @@ function zoom(doZoomIn) {
   return hasChanged
 }
 
-
 function onDomReady(event) {
-  var marginTop = null
   var bodyWidth = document.body.offsetWidth
   var bodyHeight = document.body.offsetHeight
-  var bodyBackground = window.getComputedStyle(document.body, null).
-      getPropertyValue('background-color')
+  var bodyBackground = getBackgroundColor(document.body)
+  var marginTop = getMarginTopPx(document.body)
   if (navigator.userAgent.indexOf(' KHTML/') >= 0) {
     // Degraded workaround for Konqueror 4.4.2 (but not for Safari), we have
     // to hard-code these, Konqueror cannot query them yet, it returns 0 for
-    // document.body.offsetWidth as well, window.getComputedStyle returns a
+    // document.body.offsetWidth as well, window.getComputedStyle() returns a
     // bogus (default) value.
+    // TODO(pts): Try the 'load' event.
     marginTop = 20  // MARK This value duplicates the CSS body.margin-top.
     bodyBackground = '#ffffff'
     bodyWidth = window.innerWidth - 2 * marginTop
     bodyHeight = window.innerHeight - 2 * marginTop
   }
-  fixPercentHeights(document.body, window.innerHeight)
+  fixPercentHeights(document.body)
   // onDomReady is called before images get loaded.
   // konqueror has onDomReady as well
   // addMessage('READY' + document.body.clientHeight + ',' + document.body.style.marginTop)
-  sh_highlightDocument()
-  // document.body.clientHeight == window.innerHeight (if no margins)
+  if (window.sh_highlightDocument) {
+    // Run the syntax highlighting using shjs (http://shjs.sf.net/)
+    window.sh_highlightDocument()
+  }
   var height = document.body.clientHeight
-  //if (document.body.clientHeight >= 900) {
-  //} else if (document.body.clientHeight >= 900) {
-  //  document.body.style.fontSize = 
   if (window.addEventListener) {
     window.addEventListener('resize', onResize, false)
     window.addEventListener('hashchange', onHashChange, false)
-  } else {
-    // Internet Explorer !!
+  } else {  // Internet Explorer 8
+    window.attachEvent('onresize', onResize)
+    window.attachEvent('onhashchange', onHashChange)
   }
   if (!document.addEventListener) {
-    // Internet Explorer !!
+    document.attachEvent('onkeydown', onKeyPress)
   } else if (navigator.userAgent.indexOf(' AppleWebKit/') >= 0) {
     // Chrome 8.0 and Safari don't send the arrow key events for 'keypress',
     // but they do send them (auto-repeated) on 'keydown'.
@@ -482,8 +527,6 @@ function onDomReady(event) {
     // https://developer.mozilla.org/en/DOM/Event/UIEvent/KeyEvent
     document.addEventListener('keypress', onKeyPress, false)
   }
-  if (marginTop == null)
-    marginTop = getStylePx(document.body, 'margin-top')
   document.getElementById('bottomcover').style.height = marginTop + 'px'
   document.getElementById('slidecount').style.bottom = marginTop + 'px'
   document.getElementById('slidecount').style.right = marginTop + 'px'
@@ -506,9 +549,8 @@ function onReadyStateChange() {
 if (document.addEventListener) {
   // Mozilla, Chrome, Safari, Opera
   document.addEventListener('DOMContentLoaded', onDomReady, false)
-} else if (document.attachEvent) {
+} else if (document.attachEvent) {  // Internet Explorer 8
   document.attachEvent('onreadystatechange', onReadyStateChange)
-  // Internet Explorer
 }
 window.slideJsOk = true
 </script>
@@ -608,7 +650,7 @@ div.slide dl div {
 }
 div.slide tt {
   font-size:90%;
-  font-family: DejaVu Sans Mono, Bitstream Vera Mono, Lucia Sans Mono, Consolas, Courier;  
+  font-family: DejaVu Sans Mono, Bitstream Vera Mono, Lucida Console, Lucida Sans Mono, Consolas, Courier New;
 }
 div.slide b {
   font-weight:bold;
@@ -618,7 +660,7 @@ div.slide code {
   font-size:90%;
   background:#ffffbb;
   color:#333333;
-  font-family: DejaVu Sans Mono, Bitstream Vera Mono, Lucia Sans Mono, Consolas, Courier;  
+  font-family: DejaVu Sans Mono, Bitstream Vera Mono, Lucida Console, Lucida Sans Mono, Consolas, Courier New;
 }
 div.slide pre {
   overflow-x:auto;
@@ -627,7 +669,7 @@ div.slide pre {
   padding:1px;
   margin-top:1em;
   margin-bottom:1em;
-  font-family: DejaVu Sans Mono, Bitstream Vera Mono, Lucia Sans Mono, Consolas, Courier;  
+  font-family: DejaVu Sans Mono, Bitstream Vera Mono, Lucida Console, Lucida Sans Mono, Consolas, Courier;  
   font-size:75%;
 }
 div.slide pre.small {
@@ -656,13 +698,13 @@ div.slide a {
 }
 div.slide ul > li:before {
   color:#7777ff;
-  content:"\25fc ";
+  content:"\25a0";
   display:inline-block;
-  margin-left:-1.2em;
-  width:1.2em;
-  font-family: Arial;  /* TODO(pts): Which font? Why is it not sharp? */
-  font-size:80%;
+  margin-left:-0.9em;
+  width:0.9em;
+  font-family: Arial;  /* Arial has this character -- which other font too? */
   line-height:0pt;
+  font-size:110%;
 }
 div.slide div.showtitle {
   margin-left:auto;
@@ -753,9 +795,6 @@ div#rulers > div {
 <div class="slide" style="display:block">
 <noscript><p class=browsererror>Please enable JavaScript in your browser and reload this page
 to view the slides.</p></noscript>
-<p>View these slides in Firefox 3.6 or later (with JavaScript enabled)
-or Chrome 8.0 or later. Use full screen mode (F11).
-Use the arrow keys to navigate.</p>
 <script type="text/javascript">
 var ib
 if (!window.slideJsOk) {
