@@ -47,6 +47,7 @@ var KEY_PAGEDOWN = 34
 var KEY_PAGEUP = 33
 var KEY_R = 82
 var KEY_F = 70
+var KEY_V = 86
 var KEY_RIGHT = 39
 var KEY_UP = 38
 
@@ -182,6 +183,23 @@ function addMessage(msg) {
   msgElement.appendChild(document.createTextNode(msg))
 }
 
+function addMessageBr(msg) {
+  var msgElement = document.getElementById('msg')
+  msgElement.style.display = 'block'
+  msgElement.appendChild(document.createTextNode(msg))
+  msgElement.appendChild(document.createElement('br'))
+}
+
+function addValueBr(dict, key) {
+  var msgElement = document.getElementById('msg')
+  msgElement.style.display = 'block'
+  var value = dict[key]
+  if (typeof value == 'string')
+    value = '\'' + value.replace(/\\/g, '\\\\').replace(/'/g, '\\\'') + '\''
+  msgElement.appendChild(document.createTextNode(key + '=' + value))
+  msgElement.appendChild(document.createElement('br'))
+}
+
 function onKeyPress(event) {
   if (!event) event = window.event
   if (event.keyCode == KEY_DOWN &&
@@ -235,6 +253,26 @@ function onKeyPress(event) {
     eRulers.style.display =
         hasChanged || (eRulers.style.display || 'none') == 'none' ?
         'block' : 'none'
+  } else if (event.keyCode == KEY_V &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+     var msgElement = document.getElementById('msg')
+    event.preventDefault()
+    // display is empty by default ('none' is the default for msgElement)
+    if ((msgElement.style.display || 'none') == 'none') {
+      msgElement.innerHTML = ''
+      addValueBr(navigator, 'appName')
+      addValueBr(navigator, 'appCodeName')
+      addValueBr(navigator, 'appVersion')
+      addValueBr(navigator, 'onLine')
+      addValueBr(navigator, 'platform')
+      addValueBr(navigator, 'product')
+      addValueBr(navigator, 'productSub')
+      addValueBr(navigator, 'userAgent')
+      addValueBr(navigator, 'vendor')
+      addValueBr(navigator, 'vendorSub')
+    } else {
+      msgElement.style.display = 'none'
+    }
   } else {
     // addMessage(',kc=' + event.keyCode)
   }
@@ -382,7 +420,7 @@ div#msg {
  */
 div#backgroundfiller {
   position:fixed;
-  background:green;
+  background:#000000;  /* for debugging, change thise to green */
   top:20px;  /* overwritten in onDomReady from body.margin-top */
   left:20px;  /* overwritten in onDomReady from body.margin-top */
   height:100%;
@@ -579,7 +617,12 @@ div#rulers > div {
 <div id="slidecount"></div>
 <div id="bottomcover""></div>
 
-<div class="slide">
+<div class="slide" style="display:block">
+<noscript><p>Please enable JavaScript in your browser and reload this page
+to view all the slides.</p></noscript>
+<p>View these slides in Firefox 3.6 or later (with JavaScript enabled)
+or Chrome 8.0 or later. Use full screen mode (F11).
+Use the arrow keys to navigate.</p>
 <div style="height:20%"></div>
 <div class="showtitle"><div>13371 concurrent TCP connections<br>
 in Python with coroutines</div></div>
