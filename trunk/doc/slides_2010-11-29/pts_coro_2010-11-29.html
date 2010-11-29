@@ -1,3 +1,5 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+            "http://www.w3.org/TR/html4/loose.dtd">
 <html><head>
 <meta http-equiv="content-type" content="text/html; charset=UTF-8">
 <title>13371 concurrent TCP connections in Python with coroutines</title>
@@ -18,7 +20,7 @@
 // * http://shjs.sourceforge.net/css/sh_nedit.min.css
 //
 // TODO(pts): Add a CSS reset.
-// TODO(pts): Get the font sizes right (make the main font twice as big?)
+// TODO(pts): Revisit portability MARKs.
 // TODO(pts): Make the slide title always stay on top when scrolling down.
 // TODO(pts): Auto-repeat the left and right keys in Firefox 3.6.12 (not in
 //            3.6)
@@ -38,6 +40,10 @@
 // for 1280x1024 displays (except that it's about 74 pixels shorter
 // vertically). The layout would be a bit different though, because `px'
 // dimensions and images are not resized.
+//
+// The doctype above has enables standards compliant mode (which affects all
+// major browsers) in most browsers, see
+// http://en.wikipedia.org/wiki/Quirks_mode
 
 var KEY_DOWN = 40
 var KEY_END = 35
@@ -258,19 +264,25 @@ function onKeyPress(event) {
     // For preventDefault(), see:
     // http://www.webdevelopment2.com/the-secret-of-cancelling-and-stopping-events-using-javascript/
     event.preventDefault()
-    document.body.scrollTop += 20
+    // alert(document.body.scrollTop)
+    // document.body.scrollTop += 20
+    // Chrome uses document.body.scrollTop (the other is 0), Konqueror uses
+    // document.documentElement.scrollTop (the other is 0), Firefox has both.
+    var y = document.body.scrollTop || document.documentElement.scrollTop
+    window.scroll(0, y + 20)
   } else if (keyCode == KEY_UP &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
-    document.body.scrollTop -= 20
+    var y = document.body.scrollTop || document.documentElement.scrollTop
+    window.scroll(0, y - 20)
   } else if (keyCode == KEY_HOME &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
-    document.body.scrollTop = 0
+    window.scroll(0, 0)
   } else if (keyCode == KEY_END &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
-    document.body.scrollTop = document.body.offsetHeight
+    window.scroll(0, document.body.offsetHeight)
   } else if (keyCode == KEY_RIGHT &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
@@ -282,13 +294,15 @@ function onKeyPress(event) {
   } else if (keyCode == KEY_PAGEDOWN &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
-    document.body.scrollTop += document.body.clientHeight -
-        getStylePx(document.body, 'margin-top')  // 20px
+    var y = document.body.scrollTop || document.documentElement.scrollTop
+    window.scroll(0, y + (document.body.clientHeight -
+        getStylePx(document.body, 'margin-top')))  // 20px
   } else if (keyCode == KEY_PAGEUP &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
-    document.body.scrollTop -= document.body.clientHeight -
-        getStylePx(document.body, 'margin-top')  // 20px
+    var y = document.body.scrollTop || document.documentElement.scrollTop
+    window.scroll(0, y - (document.body.clientHeight -
+        getStylePx(document.body, 'margin-top')))  // 20px
   } else if (keyCode == KEY_F &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
@@ -324,16 +338,31 @@ function onKeyPress(event) {
       msgElement.style.display = 'none'
     }
   } else {
-    addMessage(';kc=' + keyCode + ',cc=' + event.charCode)
+    // addMessage(';kc=' + keyCode + ',cc=' + event.charCode)
+  }
+}
+
+// containerElement can be document.body etc. Containment is recursive.
+function fixPercentHeights(containerElement, fullHeight) {
+  var elements = containerElement.getElementsByClassName('percentheight')
+  for (var i = 0; i < elements.length; ++i) {
+    var percent = elements[i].style.lineHeight
+    if (percent.substr(-1) == '%')
+      elements[i].style.height =
+          Math.round(parseFloat(percent) * fullHeight / 100) + 'px'
   }
 }
 
 function onResize() {
   // In Firefox 3.6, we get multiple resize events on F11 (full screen),
-  // because the resize is animated.
-  // TODO(pts): Maybe change the font size, too.
-  addMessage('R')
-  document.getElementById('backgroundfiller').style.width = document.body.offsetWidth
+  // because the resize is animated. Chrome also seems to send multiple
+  // resize event on a manual resize. We don't care.
+  //
+  // In KHTML, document.body.offsetWidth is valid at this point, so we can
+  // use it. (But i was not valid in onDomReady.)
+  document.getElementById('backgroundfiller').style.width =
+      document.body.offsetWidth + 'px'
+  fixPercentHeights(document.body, window.innerHeight)
 }
 
 var prevHash
@@ -408,17 +437,24 @@ function zoom(doZoomIn) {
   return hasChanged
 }
 
+
 function onDomReady(event) {
-  addMessage('A')
   var marginTop = null
-  if (navigator.userAgent.indexOf(' KHTML/')) {
-    // Fix for Konqueror 4.4.2 (but not for Safari) to make the the body
-    // (white background) high enough.
-    document.body.style.height = '100%'
-    // We have to hard-code it, Konqueror cannot query it,
-    // window.getComputedStyle returns a bogus (default) value.
-    marginTop = 20
+  var bodyWidth = document.body.offsetWidth
+  var bodyHeight = document.body.offsetHeight
+  var bodyBackground = window.getComputedStyle(document.body, null).
+      getPropertyValue('background-color')
+  if (navigator.userAgent.indexOf(' KHTML/') >= 0) { // !!
+    // Degraded workaround for Konqueror 4.4.2 (but not for Safari), we have
+    // to hard-code these, Konqueror cannot query them yet, it returns 0 for
+    // document.body.offsetWidth as well, window.getComputedStyle returns a
+    // bogus (default) value.
+    marginTop = 20  // MARK This value duplicates the CSS body.margin-top.
+    bodyBackground = '#ffffff'
+    bodyWidth = window.innerWidth - 2 * marginTop
+    bodyHeight = window.innerHeight - 2 * marginTop
   }
+  fixPercentHeights(document.body, window.innerHeight)
   // onDomReady is called before images get loaded.
   // konqueror has onDomReady as well
   // addMessage('READY' + document.body.clientHeight + ',' + document.body.style.marginTop)
@@ -430,24 +466,27 @@ function onDomReady(event) {
   //  document.body.style.fontSize = 
   window.addEventListener('resize', onResize, false)
   window.addEventListener('hashchange', onHashChange, false)
-  // In Firefox 3.6.12, we wouldn't get any auto-repeats if we registered for
-  // 'keydown' instead of 'keypress'. See more in
-  // https://developer.mozilla.org/en/DOM/Event/UIEvent/KeyEvent
-  document.addEventListener('keypress', onKeyPress, false)
-  // document.addEventListener('keydown', onKeyPress, false)
+  if (navigator.userAgent.indexOf(' AppleWebKit/') >= 0) {
+    // Chrome 8.0 and Safari don't send the arrow key events for 'keypress',
+    // but they do send them (auto-repeated) on 'keydown'.
+    document.addEventListener('keydown', onKeyPress, false)
+  } else {
+    // In Firefox 3.6.12, we wouldn't get any auto-repeats if we registered
+    // for 'keydown' instead of 'keypress'. See more in
+    // https://developer.mozilla.org/en/DOM/Event/UIEvent/KeyEvent
+    document.addEventListener('keypress', onKeyPress, false)
+  }
   if (marginTop == null)
     marginTop = getStylePx(document.body, 'margin-top')
-  var backgroundColor = window.getComputedStyle(document.body, null).getPropertyValue('background-color')
-  document.getElementById('bottomcover').style.height = marginTop
-  document.getElementById('slidecount').style.bottom = marginTop
-  document.getElementById('slidecount').style.right = marginTop
-  document.getElementById('backgroundfiller').style.top = marginTop
-  document.getElementById('backgroundfiller').style.left = marginTop
+  document.getElementById('bottomcover').style.height = marginTop + 'px'
+  document.getElementById('slidecount').style.bottom = marginTop + 'px'
+  document.getElementById('slidecount').style.right = marginTop + 'px'
+  document.getElementById('backgroundfiller').style.top = marginTop + 'px'
+  document.getElementById('backgroundfiller').style.left = marginTop + 'px'
   // About 2 * marginTop less than 100%.
-  document.getElementById('backgroundfiller').style.width = document.body.offsetWidth
-  document.getElementById('backgroundfiller').style.backgroundColor = backgroundColor
+  document.getElementById('backgroundfiller').style.width = bodyWidth + 'px'
+  document.getElementById('backgroundfiller').style.backgroundColor = bodyBackground
   onHashChange()  // includes goToSlide(document.location.hash) + zooming
-  addMessage('B')
 }
 document.addEventListener('DOMContentLoaded', onDomReady, false)
 window.slideJsOk = true
@@ -487,13 +526,14 @@ div#msg {
   padding:.3em;
   margin:0px;
 }
-/* Helper element for providing a backround for not-tall-enough slides.
- * This is not needed in Chrome (because the body would be high enough),
- * but it is needed in Firefox 3.6.
+/* Helper element for providing a backround for not-tall-enough slides. This
+ * is not needed in Chrome (because the body would be high enough), but it
+ * is needed in Firefox 3.6.12, Opera and Konqueror 4.4.2 (not needed but
+ * harmless in Chrome 8.0 and Safari).
  */
 div#backgroundfiller {
   position:fixed; /* !! */
-  background:#000000;  /* for debugging, change thise to green */
+  background:#00ff00;  /* for debugging, change thise to green */
   top:20px;  /* overwritten in onDomReady from body.margin-top */
   left:20px;  /* overwritten in onDomReady from body.margin-top */
   height:100%;
@@ -518,7 +558,7 @@ body {
   /* All sub-element font sizes must be specified in %, so if we change
    * document.body.style.fontSize, then they will get updated.
    */
-  // font-size:100%;
+  font-size:100%;
 }
 div.slide {
   overflow:auto;  /* makes the bottom margin of the last p show */
@@ -617,7 +657,7 @@ div.slide div.showtitle {
 }
 div.slide div.showtitle > div {
   background:#7777ff;
-  color:ffffff;
+  color:#ffffff;
   text-align:center;
   padding:.34em;
   /*line-height:115%;*/
@@ -625,7 +665,7 @@ div.slide div.showtitle > div {
 }
 div.slide > h1 {
   background:#7777ff;
-  color:ffffff;
+  color:#ffffff;
   margin-top:-1px;  /* negate the padding-top:1px of the div.slide */
   margin-bottom:0.3em;
   margin-left:0em;
@@ -704,11 +744,10 @@ if (!window.slideJsOk) {
   document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Firefox or Chrome), because this browser (' + ib + ') is known to not to work with this document.</p>')
 }
 </script>
-<div style="height:20%"></div>
+<div class="percentheight" style="line-height:10%"></div>
 <div class="showtitle"><div>13371 concurrent TCP connections<br>
 in Python with coroutines</div></div>
-
-<div style="height:30%"></div>
+<div class="percentheight" style="line-height:20%"></div>
 <div style="text-align:center">Péter Szabó, <tt>pts@google.com</tt><br>
 <p>Zürich, 2010-11-29</div>
 
