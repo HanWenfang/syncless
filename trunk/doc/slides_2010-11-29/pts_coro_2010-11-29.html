@@ -51,6 +51,13 @@ var KEY_V = 86
 var KEY_RIGHT = 39
 var KEY_UP = 38
 
+var CHAR_TO_KEY = {
+    102: KEY_F,
+    70:  KEY_F,  // With Shift (no need to set special charCode for Ctrl).
+    118: KEY_V,
+    88:  KEY_V,  // With Shift.
+}
+
 // Example: getStylePx(document.body, 'margin-top')
 function getStylePx(element, name) {
   var s = window.getComputedStyle(element, null).getPropertyValue(name)
@@ -200,51 +207,95 @@ function addValueBr(dict, key) {
   msgElement.appendChild(document.createElement('br'))
 }
 
+// Returns false if the browser is incompatible, otherwise returns the name
+// of the browser (possibly a version number).
+function getIncompatibleBrowser() {
+  var userAgent = navigator.userAgent
+  // Safari is compatible:
+  //   appName='Netscape'
+  //   appCodeName='Mozilla'
+  //   appVersion='5.0 (Macintosh; U; Intel Mac OS X 10_5_8; en-us) AppleWebKit/533.17.8 (KHTML, like Gecko) Version/5.0.1 Safari/533.17.8'
+  //   onLine=true
+  //   platform='MacIntel'
+  //   product='Gecko'
+  //   productSub='20030107'
+  //   userAgent='Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_5_8; en-us) AppleWebKit/533.17.8 (KHTML, like Gecko) Version/5.0.1 Safari/533.17.8'
+  //   vendor='Apple Computer, Inc.'
+  //   vendorSub=''
+  // Konqueror is almost compatible
+  //   degradedly worked around bug: cannot compute marinTop
+  //   worked around bug: wrong keyCode sent for 'keypress' events
+  //   appName='Netscape'
+  //   appCodeName='Mozilla'
+  //   appVersion='5.0 (compatible; Konqueror/4.4; Linux) KHTML/4.4.2 (like Gecko)
+  //   Kubuntu'
+  //   onLine=undefined
+  //   platform='Linux x86_64'
+  //   product='Gecko'
+  //   productSub='20030107'
+  //   userAgent='Mozilla/5.0 (compatible; Konqueror/4.4; Linux) KHTML/4.4.2 (like
+  //   Gecko) Kubuntu'
+  //   vendor='KDE'
+  //   vendorSub=''
+  //   if (userAgent.indexOf(' KHTML/') >= 0)
+  //     return 'Konqueror'
+  return false
+}
+
 function onKeyPress(event) {
   if (!event) event = window.event
-  if (event.keyCode == KEY_DOWN &&
+  var keyCode = event.keyCode
+  if ((keyCode == 0 ||  // Firefox 3.6.12
+       keyCode == event.charCode  // Konqueror 4.4.2
+      ) && CHAR_TO_KEY[event.charCode]) {
+    // Firefox 3.6.12 and Konqueror 4.4.2 send keyCode == 0 for keypress
+    // (but not for keyup) events on letters, so we get the keyCode based on
+    // the charCode.
+    keyCode = CHAR_TO_KEY[event.charCode]
+  }
+  if (keyCode == KEY_DOWN &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     // For preventDefault(), see:
     // http://www.webdevelopment2.com/the-secret-of-cancelling-and-stopping-events-using-javascript/
     event.preventDefault()
     document.body.scrollTop += 20
-  } else if (event.keyCode == KEY_UP &&
+  } else if (keyCode == KEY_UP &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
     document.body.scrollTop -= 20
-  } else if (event.keyCode == KEY_HOME &&
+  } else if (keyCode == KEY_HOME &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
     document.body.scrollTop = 0
-  } else if (event.keyCode == KEY_END &&
+  } else if (keyCode == KEY_END &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
     document.body.scrollTop = document.body.offsetHeight
-  } else if (event.keyCode == KEY_RIGHT &&
+  } else if (keyCode == KEY_RIGHT &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
     moveSlide(1)
-  } else if (event.keyCode == KEY_LEFT &&
+  } else if (keyCode == KEY_LEFT &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
     moveSlide(-1)
-  } else if (event.keyCode == KEY_PAGEDOWN &&
+  } else if (keyCode == KEY_PAGEDOWN &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
     document.body.scrollTop += document.body.clientHeight -
         getStylePx(document.body, 'margin-top')  // 20px
-  } else if (event.keyCode == KEY_PAGEUP &&
+  } else if (keyCode == KEY_PAGEUP &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
     document.body.scrollTop -= document.body.clientHeight -
         getStylePx(document.body, 'margin-top')  // 20px
-  } else if (event.keyCode == KEY_F &&
+  } else if (keyCode == KEY_F &&
       !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
     var eRulers = document.getElementById('rulers')
     eRulers.style.display =
         (eRulers.style.display || 'none') == 'none' ? 'block' : 'none'
-  } else if (event.keyCode == KEY_F &&  // Alt-<F>
+  } else if (keyCode == KEY_F &&  // Alt-<F>
       event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
     event.preventDefault()
     var hasChanged = zoom(
@@ -253,9 +304,8 @@ function onKeyPress(event) {
     eRulers.style.display =
         hasChanged || (eRulers.style.display || 'none') == 'none' ?
         'block' : 'none'
-  } else if (event.keyCode == KEY_V &&
-      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
-     var msgElement = document.getElementById('msg')
+  } else if (keyCode == KEY_V && !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    var msgElement = document.getElementById('msg')
     event.preventDefault()
     // display is empty by default ('none' is the default for msgElement)
     if ((msgElement.style.display || 'none') == 'none') {
@@ -274,7 +324,7 @@ function onKeyPress(event) {
       msgElement.style.display = 'none'
     }
   } else {
-    // addMessage(',kc=' + event.keyCode)
+    addMessage(';kc=' + keyCode + ',cc=' + event.charCode)
   }
 }
 
@@ -282,6 +332,7 @@ function onResize() {
   // In Firefox 3.6, we get multiple resize events on F11 (full screen),
   // because the resize is animated.
   // TODO(pts): Maybe change the font size, too.
+  addMessage('R')
   document.getElementById('backgroundfiller').style.width = document.body.offsetWidth
 }
 
@@ -358,7 +409,18 @@ function zoom(doZoomIn) {
 }
 
 function onDomReady(event) {
+  addMessage('A')
+  var marginTop = null
+  if (navigator.userAgent.indexOf(' KHTML/')) {
+    // Fix for Konqueror 4.4.2 (but not for Safari) to make the the body
+    // (white background) high enough.
+    document.body.style.height = '100%'
+    // We have to hard-code it, Konqueror cannot query it,
+    // window.getComputedStyle returns a bogus (default) value.
+    marginTop = 20
+  }
   // onDomReady is called before images get loaded.
+  // konqueror has onDomReady as well
   // addMessage('READY' + document.body.clientHeight + ',' + document.body.style.marginTop)
   sh_highlightDocument()
   // document.body.clientHeight == window.innerHeight (if no margins)
@@ -368,8 +430,13 @@ function onDomReady(event) {
   //  document.body.style.fontSize = 
   window.addEventListener('resize', onResize, false)
   window.addEventListener('hashchange', onHashChange, false)
-  document.addEventListener('keydown', onKeyPress, false)
-  var marginTop = getStylePx(document.body, 'margin-top')
+  // In Firefox 3.6.12, we wouldn't get any auto-repeats if we registered for
+  // 'keydown' instead of 'keypress'. See more in
+  // https://developer.mozilla.org/en/DOM/Event/UIEvent/KeyEvent
+  document.addEventListener('keypress', onKeyPress, false)
+  // document.addEventListener('keydown', onKeyPress, false)
+  if (marginTop == null)
+    marginTop = getStylePx(document.body, 'margin-top')
   var backgroundColor = window.getComputedStyle(document.body, null).getPropertyValue('background-color')
   document.getElementById('bottomcover').style.height = marginTop
   document.getElementById('slidecount').style.bottom = marginTop
@@ -380,10 +447,16 @@ function onDomReady(event) {
   document.getElementById('backgroundfiller').style.width = document.body.offsetWidth
   document.getElementById('backgroundfiller').style.backgroundColor = backgroundColor
   onHashChange()  // includes goToSlide(document.location.hash) + zooming
+  addMessage('B')
 }
 document.addEventListener('DOMContentLoaded', onDomReady, false)
+window.slideJsOk = true
 </script>
 <style type="text/css">
+div.slide p.browsererror {
+  border:3px solid red;
+  padding:2px;
+}
 div#bottomcover {
   position:fixed;
   bottom:0px;
@@ -419,7 +492,7 @@ div#msg {
  * but it is needed in Firefox 3.6.
  */
 div#backgroundfiller {
-  position:fixed;
+  position:fixed; /* !! */
   background:#000000;  /* for debugging, change thise to green */
   top:20px;  /* overwritten in onDomReady from body.margin-top */
   left:20px;  /* overwritten in onDomReady from body.margin-top */
@@ -445,7 +518,7 @@ body {
   /* All sub-element font sizes must be specified in %, so if we change
    * document.body.style.fontSize, then they will get updated.
    */
-  font-size:100%;
+  // font-size:100%;
 }
 div.slide {
   overflow:auto;  /* makes the bottom margin of the last p show */
@@ -618,11 +691,19 @@ div#rulers > div {
 <div id="bottomcover""></div>
 
 <div class="slide" style="display:block">
-<noscript><p>Please enable JavaScript in your browser and reload this page
-to view all the slides.</p></noscript>
+<noscript><p class=browsererror>Please enable JavaScript in your browser and reload this page
+to view the slides.</p></noscript>
 <p>View these slides in Firefox 3.6 or later (with JavaScript enabled)
 or Chrome 8.0 or later. Use full screen mode (F11).
 Use the arrow keys to navigate.</p>
+<script type="text/javascript">
+var ib
+if (!window.slideJsOk) {
+  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Firefox or Chrome), because this browser does not seem to be able to run the required JavaScript properly.</p>')
+} else if ((ib = getIncompatibleBrowser()) != false) {
+  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Firefox or Chrome), because this browser (' + ib + ') is known to not to work with this document.</p>')
+}
+</script>
 <div style="height:20%"></div>
 <div class="showtitle"><div>13371 concurrent TCP connections<br>
 in Python with coroutines</div></div>
