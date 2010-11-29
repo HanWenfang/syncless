@@ -8,9 +8,12 @@
 <script type="text/javascript" src="sh_javascript.min.js"></script>
 <link type="text/css" rel="stylesheet" href="sh_dull.min.css">
 <script type="text/javascript">
-// This file has been tested and found working on Chrome 8.0, Firefox 3.6
-// and 3.6.12, Opera 10.23, Safari, Konqueror 4.4.2 and Internet Explorer 8
-// (in both IE7 and IE8 mode).
+// The HTML, JavaScript and CSS in this file has been tested and found
+// working on Chrome 8.0, Firefox 3.6 and 3.6.12, Opera 10.23, Safari,
+// Konqueror 4.4.2 and Internet Explorer 8 (in both IE7 and IE8 mode).
+//
+// The recommended browser for projecting is Google Chrome 8.0 or later, in
+// full screen mode (F11), with Alt-<F> pressed to zoom in if necessary.
 //
 // doc: http://code.jquery.com/jquery-1.4.4.js
 //
@@ -22,7 +25,6 @@
 // * http://shjs.sourceforge.net/css/sh_nedit.min.css
 //
 // TODO(pts): Add a CSS reset.
-// TODO(pts): Revisit portability MARKs.
 // TODO(pts): Make the slide title always stay on top when scrolling down.
 //
 // The slide layout is optimized for 1024x768, the browser running in full
@@ -44,6 +46,60 @@
 // The doctype above has enables standards compliant mode (which affects all
 // major browsers) in most browsers, see
 // http://en.wikipedia.org/wiki/Quirks_mode
+//
+// Browser compatibility (all using standards compliant mode):
+//
+// Safari is compatible:
+//   appName='Netscape'
+//   appCodeName='Mozilla'
+//   appVersion='5.0 (Macintosh; U; Intel Mac OS X 10_5_8; en-us) AppleWebKit/533.17.8 (KHTML, like Gecko) Version/5.0.1 Safari/533.17.8'
+//   onLine=true
+//   platform='MacIntel'
+//   product='Gecko'
+//   productSub='20030107'
+//   userAgent='Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_5_8; en-us) AppleWebKit/533.17.8 (KHTML, like Gecko) Version/5.0.1 Safari/533.17.8'
+//   vendor='Apple Computer, Inc.'
+//   vendorSub=''
+// Internet Explorer 8 is compatible
+//   appName='Microsoft Internet Explorer'
+//   appCodeName='Mozilla'
+//   appVersion='4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0)'
+//   onLine=true
+//   platform='Win32'
+//   product=undefined
+//   productSub=undefined
+//   userAgent='Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0)'
+//   vendor=undefined
+//   vendorSub=undefined
+// Internet Explorer 7 (most specifically: Internet Explorer 8 in Internet Explorer 7 mode, with Google Developer Tools)
+// is almost compatible:
+//   gracefully degraded (ignored): doesn't support div.showtitle centering
+//   gracefully degraded: doesn't support our special colorful bullets
+//   appName='Microsoft Internet Explorer'
+//   appCodeName='Mozilla'
+//   appVersion='4.0 (compatible; MSIE 7.0; Windows NT 5.1)'
+//   onLine=true
+//   platform='Win32'
+//   product=undefined
+//   productSub=undefined
+//   userAgent='Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)'
+//   vendor=undefined
+//   vendorSub=undefined
+// Konqueror is almost compatible
+//   degradedly worked around bug: cannot compute marinTop
+//   worked around bug: wrong keyCode sent for 'keypress' events
+//   appName='Netscape'
+//   appCodeName='Mozilla'
+//   appVersion='5.0 (compatible; Konqueror/4.4; Linux) KHTML/4.4.2 (like Gecko)
+//   Kubuntu'
+//   onLine=undefined
+//   platform='Linux x86_64'
+//   product='Gecko'
+//   productSub='20030107'
+//   userAgent='Mozilla/5.0 (compatible; Konqueror/4.4; Linux) KHTML/4.4.2 (like
+//   Gecko) Kubuntu'
+//   vendor='KDE'
+//   vendorSub=''
 
 var KEY_DOWN = 40
 var KEY_END = 35
@@ -227,57 +283,6 @@ function addValueBr(dict, key) {
   msgElement.appendChild(document.createElement('br'))
 }
 
-  // Safari is compatible:
-  //   appName='Netscape'
-  //   appCodeName='Mozilla'
-  //   appVersion='5.0 (Macintosh; U; Intel Mac OS X 10_5_8; en-us) AppleWebKit/533.17.8 (KHTML, like Gecko) Version/5.0.1 Safari/533.17.8'
-  //   onLine=true
-  //   platform='MacIntel'
-  //   product='Gecko'
-  //   productSub='20030107'
-  //   userAgent='Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_5_8; en-us) AppleWebKit/533.17.8 (KHTML, like Gecko) Version/5.0.1 Safari/533.17.8'
-  //   vendor='Apple Computer, Inc.'
-  //   vendorSub=''
-  // Internet Explorer 8 is compatible
-  //   appName='Microsoft Internet Explorer'
-  //   appCodeName='Mozilla'
-  //   appVersion='4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0)'
-  //   onLine=true
-  //   platform='Win32'
-  //   product=undefined
-  //   productSub=undefined
-  //   userAgent='Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0)'
-  //   vendor=undefined
-  //   vendorSub=undefined
-  // Internet Explorer 7 (most specifically: Internet Explorer 8 in Internet Explorer 7 mode, with Google Developer Tools)
-  // is almost compatible:
-  //   gracefully degraded (ignored): doesn't support div.showtitle centering
-  //   gracefully degraded: doesn't support our special colorful bullets
-  //   appName='Microsoft Internet Explorer'
-  //   appCodeName='Mozilla'
-  //   appVersion='4.0 (compatible; MSIE 7.0; Windows NT 5.1)'
-  //   onLine=true
-  //   platform='Win32'
-  //   product=undefined
-  //   productSub=undefined
-  //   userAgent='Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)'
-  //   vendor=undefined
-  //   vendorSub=undefined
-  // Konqueror is almost compatible
-  //   degradedly worked around bug: cannot compute marinTop
-  //   worked around bug: wrong keyCode sent for 'keypress' events
-  //   appName='Netscape'
-  //   appCodeName='Mozilla'
-  //   appVersion='5.0 (compatible; Konqueror/4.4; Linux) KHTML/4.4.2 (like Gecko)
-  //   Kubuntu'
-  //   onLine=undefined
-  //   platform='Linux x86_64'
-  //   product='Gecko'
-  //   productSub='20030107'
-  //   userAgent='Mozilla/5.0 (compatible; Konqueror/4.4; Linux) KHTML/4.4.2 (like
-  //   Gecko) Kubuntu'
-  //   vendor='KDE'
-  //   vendorSub=''
 
 function onKeyPress(event) {
   if (!event) event = window.event
@@ -512,17 +517,6 @@ function onDomReady(event) {
   var bodyHeight = document.body.offsetHeight
   var bodyBackground = getBackgroundColor(document.body)
   var marginTop = getMarginTopPx(document.body)
-  if (navigator.userAgent.indexOf(' KHTML/') >= 0) {
-    // Degraded workaround for Konqueror 4.4.2 (but not for Safari), we have
-    // to hard-code these, Konqueror cannot query them yet, it returns 0 for
-    // document.body.offsetWidth as well, window.getComputedStyle() returns a
-    // bogus (default) value.
-    // TODO(pts): Try the 'load' event.
-    marginTop = 20  // MARK This value duplicates the CSS body.margin-top.
-    bodyBackground = '#ffffff'
-    bodyWidth = window.innerWidth - 2 * marginTop
-    bodyHeight = window.innerHeight - 2 * marginTop
-  }
   fixPercentHeights(document.body)
   // onDomReady is called before images get loaded.
   // konqueror has onDomReady as well
@@ -570,10 +564,17 @@ function onReadyStateChange() {
   }
 }
 
-if (document.addEventListener) {
-  // Mozilla, Chrome, Safari, Opera
+if (navigator.userAgent.indexOf(' KHTML/') >= 0) {  // Konqueror 4.4.2.
+  // Although Konqueror supports the 'DOMContentLoaded' event (see below),
+  // we fall back to the slower 'load' instead, because with
+  // 'DOMContentLoaded' metrics like document.body.offsetHeight are not yet
+  // initialized (but window.innerHeight is), and they return bogus default
+  // values -- but with 'load', they'll return their appropriate values.
+  document.addEventListener('load', onDomReady, false)
+} else if (document.addEventListener) {
+  // Chrome, Mozilla, Safari, Opera.
   document.addEventListener('DOMContentLoaded', onDomReady, false)
-} else if (document.attachEvent) {  // Internet Explorer 8
+} else if (document.attachEvent) {  // Internet Explorer 8.
   document.attachEvent('onreadystatechange', onReadyStateChange)
 }
 window.slideJsOk = true
