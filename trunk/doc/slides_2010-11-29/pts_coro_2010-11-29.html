@@ -9,7 +9,8 @@
 <link type="text/css" rel="stylesheet" href="sh_dull.min.css">
 <script type="text/javascript">
 // This file has been tested and found working on Chrome 8.0, Firefox 3.6
-// and 3.6.12, Opera 10.23, Safari and Konqueror 4.2.
+// and 3.6.12, Opera 10.23, Safari, Konqueror 4.4.2 and Internet Explorer 8
+// (in both IE7 and IE8 mode).
 //
 // doc: http://code.jquery.com/jquery-1.4.4.js
 //
@@ -61,6 +62,7 @@ var CHAR_TO_KEY = {
     70:  KEY_F,  // With Shift (no need to set special charCode for Ctrl).
     118: KEY_V,
     88:  KEY_V,  // With Shift.
+    0: 0   // Dummy, with no trailing comma for Internet Explorer 7.
 }
 
 function getBackgroundColor(element) {
@@ -225,10 +227,6 @@ function addValueBr(dict, key) {
   msgElement.appendChild(document.createElement('br'))
 }
 
-// Returns false if the browser is incompatible, otherwise returns the name
-// of the browser (possibly a version number).
-function getIncompatibleBrowser() {
-  var userAgent = navigator.userAgent
   // Safari is compatible:
   //   appName='Netscape'
   //   appCodeName='Mozilla'
@@ -240,6 +238,31 @@ function getIncompatibleBrowser() {
   //   userAgent='Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10_5_8; en-us) AppleWebKit/533.17.8 (KHTML, like Gecko) Version/5.0.1 Safari/533.17.8'
   //   vendor='Apple Computer, Inc.'
   //   vendorSub=''
+  // Internet Explorer 8 is compatible
+  //   appName='Microsoft Internet Explorer'
+  //   appCodeName='Mozilla'
+  //   appVersion='4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0)'
+  //   onLine=true
+  //   platform='Win32'
+  //   product=undefined
+  //   productSub=undefined
+  //   userAgent='Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0)'
+  //   vendor=undefined
+  //   vendorSub=undefined
+  // Internet Explorer 7 (most specifically: Internet Explorer 8 in Internet Explorer 7 mode, with Google Developer Tools)
+  // is almost compatible:
+  //   gracefully degraded (ignored): doesn't support div.showtitle centering
+  //   gracefully degraded: doesn't support our special colorful bullets
+  //   appName='Microsoft Internet Explorer'
+  //   appCodeName='Mozilla'
+  //   appVersion='4.0 (compatible; MSIE 7.0; Windows NT 5.1)'
+  //   onLine=true
+  //   platform='Win32'
+  //   product=undefined
+  //   productSub=undefined
+  //   userAgent='Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 5.1)'
+  //   vendor=undefined
+  //   vendorSub=undefined
   // Konqueror is almost compatible
   //   degradedly worked around bug: cannot compute marinTop
   //   worked around bug: wrong keyCode sent for 'keypress' events
@@ -255,10 +278,6 @@ function getIncompatibleBrowser() {
   //   Gecko) Kubuntu'
   //   vendor='KDE'
   //   vendorSub=''
-  //   if (userAgent.indexOf(' KHTML/') >= 0)
-  //     return 'Konqueror'
-  return false
-}
 
 function onKeyPress(event) {
   if (!event) event = window.event
@@ -484,6 +503,11 @@ function zoom(doZoomIn) {
 }
 
 function onDomReady(event) {
+  // Fallback on the bullet sizes (they are still too small, but at least
+  // they are visible).
+  // TODO(pts): Add large bullets (by changing the li.font-size).
+  if (navigator.userAgent.lastIndexOf(' MSIE 7.') >= 0)
+    document.body.className = 'simplebullet'
   var bodyWidth = document.body.offsetWidth
   var bodyHeight = document.body.offsetHeight
   var bodyBackground = getBackgroundColor(document.body)
@@ -684,6 +708,10 @@ div.slide ul > li {
   list-style-type:none;
   list-style-position:outside;
 }
+body.simplebullet div.slide ul > li {
+  list-style-type:square;
+  list-style-position:outside;
+}
 div.slide ul {
   padding-left:2em;
   padding-right:1em;
@@ -798,8 +826,8 @@ to view the slides.</p></noscript>
 <script type="text/javascript">
 var ib
 if (!window.slideJsOk) {
-  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Firefox or Chrome), because this browser does not seem to be able to run the required JavaScript properly.</p>')
-} else if ((ib = getIncompatibleBrowser()) != false) {
+  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Chrome, Firefox, Safari, Opera, Konqueror or Internet Explorer), because this browser does not seem to be able to run the required JavaScript properly.</p>')
+} else if (0) {
   document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Firefox or Chrome), because this browser (' + ib + ') is known to not to work with this document.</p>')
 }
 </script>
