@@ -1,0 +1,1117 @@
+<html><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<title>13371 concurrent TCP connections in Python with coroutines</title>
+<script type="text/javascript" src="sh_main.min.js"></script>
+<script type="text/javascript" src="sh_python.min.js"></script>
+<script type="text/javascript" src="sh_javascript.min.js"></script>
+<link type="text/css" rel="stylesheet" href="sh_dull.min.css">
+<script type="text/javascript">
+// This file has been tested only on Chrome and Firefox 3.6. It will most
+// probably not work on Internet Explorer or Opera.
+//
+// doc: http://code.jquery.com/jquery-1.4.4.js
+//
+// Syntax highlighing files were downloaded from:
+//
+// * http://shjs.sourceforge.net/lang/sh_python.min.js
+// * http://shjs.sourceforge.net/sh_main.min.js
+// * http://shjs.sourceforge.net/css/sh_nedit.min.css
+//
+// TODO(pts): Add a CSS reset.
+// TODO(pts): Get the font sizes right (make the main font twice as big?)
+// TODO(pts): Make the slide title always stay on top when scrolling down.
+// TODO(pts): Auto-repeat the left and right keys in Firefox 3.6.12 (not in
+//            3.6)
+// TODO(pts): Detect firefox almost-full-screen.
+//
+// The slide layout is optimized for 1024x768, the browser running in full
+// screen mode (F11). Chrome can do that, but Firefox adds a border of about
+// 10 pixels at the top of the page. The user may zoom in or out, but the
+// layout calculations here assume that a 100% zoom is active.
+//
+// 1024x768 has been chosen so it will work on laptop screens at 1366x768.
+//
+// If the available screen height is at least 1280px horizontally, and 960px
+// vertically (corresponding to the aspect ratio 1024:768), then the
+// Alt-<F> keypress can be used to toggle the +25% font zoom mode
+// (document.body.style.fontSize = '125%'), which yields a similar layout
+// for 1280x1024 displays (except that it's about 74 pixels shorter
+// vertically). The layout would be a bit different though, because `px'
+// dimensions and images are not resized.
+
+var KEY_DOWN = 40
+var KEY_END = 35
+var KEY_HOME = 36
+var KEY_LEFT = 37
+var KEY_PAGEDOWN = 34
+var KEY_PAGEUP = 33
+var KEY_R = 82
+var KEY_F = 70
+var KEY_RIGHT = 39
+var KEY_UP = 38
+
+// Example: getStylePx(document.body, 'margin-top')
+function getStylePx(element, name) {
+  var s = window.getComputedStyle(element, null).getPropertyValue(name)
+  if (typeof s != 'string')
+    throw new Error('missing style ' + name + ' for ' + element)
+  if (s.substr(-2) != 'px')
+    throw new Error('style should end with px: ' + s)
+  return parseInt(s, 10)  // This ignores 'px' at the end.
+}
+
+function countSlides() {
+  var c = document.body.childNodes
+  var i
+  var element
+  var slideCount = 0
+  for (i = 0; i < c.length; ++i) {
+    element = c[i]
+    if (element.nodeName == 'DIV' &&
+        (' ' + element.className + ' ').indexOf(' slide ') >= 0)
+      ++slideCount
+  }
+  return slideCount
+}
+
+function goToSlide(targetSlide) {
+  if (typeof targetSlide == 'string') {
+    if (targetSlide.substr(0, 1) == '#')
+      targetSlide = targetSlide.substr(1)  // Ignores everything after the num.
+    targetSlide = parseInt(targetSlide, 10)
+  }
+  if (!targetSlide || targetSlide < 1)
+    targetSlide = 1
+  targetSlide = targetSlide | 0  // Convert to integer.
+  var c = document.body.childNodes
+  var i
+  var element
+  var slideCount = 0
+  var currentSlide = 0
+  for (i = 0; i < c.length; ++i) {
+    element = c[i]
+    if (element.nodeName == 'DIV' &&
+        (' ' + element.className + ' ').indexOf(' slide ') >= 0) {
+      if (++slideCount == targetSlide) {
+        element.style.display = 'block'
+        currentSlide = targetSlide
+      } else {
+        element.style.display = 'none'
+      }
+    }
+  }
+  if (currentSlide != targetSlide) {  // Go to slide 1 as a fallback.
+    currentSlide = targetSlide = 1
+    slideCount = 0
+    for (i = 0; i < c.length; ++i) {
+      element = c[i]
+      if (element.nodeName == 'DIV' &&
+          (' ' + element.className + ' ').indexOf(' slide ') >= 0) {
+        if (currentSlide != targetSlide)
+          ++currentSlide
+        ++slideCount
+        element.style.display = (slideCount == targetSlide) ? 'block': 'none'
+      }
+    }
+  }
+  setSlideNumbers(currentSlide, slideCount)
+}
+
+function setSlideNumbers(currentSlide, slideCount) {
+  document.getElementById('slidecount').innerHTML =
+      currentSlide + ' / ' + slideCount
+  silentSetHash(
+      currentSlide + (document.location.hash.match(/[^#0-9].*/) || [''])[0])
+}
+
+function moveSlide(delta) {
+  if (delta == 0)
+    return true
+  var c = document.body.childNodes
+  var i
+  var isFound = false
+  var element
+  var currentSlide = 0
+  for (i = 0; i < c.length; ++i) {
+    element = c[i]
+    if (element.nodeName == 'DIV' &&
+        (' ' + element.className + ' ').indexOf(' slide ') >= 0) {
+      ++currentSlide
+      if (element.style.display && element.style.display != 'none') {
+        isFound = true
+        break
+      }
+    }
+  }
+  if (!isFound)
+    return false
+  var element0 = element
+  while (delta > 0 && i < c.length) {
+    for (++i; i < c.length; ++i) {
+      element = c[i]
+      if (element.nodeName == 'DIV' &&
+          (' ' + element.className + ' ').indexOf(' slide ') >= 0) {
+        --delta
+        ++currentSlide
+        break
+      }
+    }
+  }
+  while (delta < 0 && i >= 0) {
+    for (--i; i >= 0; --i) {
+      element = c[i]
+      if (element.nodeName == 'DIV' &&
+          (' ' + element.className + ' ').indexOf(' slide ') >= 0) {
+        ++delta
+        --currentSlide
+        break
+      }
+    }
+  }
+  if (delta)
+    return false
+  element0.style.display = 'none'
+  element.style.display = 'block'
+  document.body.scrollTop = 0
+  setSlideNumbers(currentSlide, countSlides())
+}
+
+function addMessage(msg) {
+  var msgElement = document.getElementById('msg')
+  msgElement.style.display = 'block'
+  msgElement.appendChild(document.createTextNode(msg))
+}
+
+function onKeyPress(event) {
+  if (!event) event = window.event
+  if (event.keyCode == KEY_DOWN &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    // For preventDefault(), see:
+    // http://www.webdevelopment2.com/the-secret-of-cancelling-and-stopping-events-using-javascript/
+    event.preventDefault()
+    document.body.scrollTop += 20
+  } else if (event.keyCode == KEY_UP &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    event.preventDefault()
+    document.body.scrollTop -= 20
+  } else if (event.keyCode == KEY_HOME &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    event.preventDefault()
+    document.body.scrollTop = 0
+  } else if (event.keyCode == KEY_END &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    event.preventDefault()
+    document.body.scrollTop = document.body.offsetHeight
+  } else if (event.keyCode == KEY_RIGHT &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    event.preventDefault()
+    moveSlide(1)
+  } else if (event.keyCode == KEY_LEFT &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    event.preventDefault()
+    moveSlide(-1)
+  } else if (event.keyCode == KEY_PAGEDOWN &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    event.preventDefault()
+    document.body.scrollTop += document.body.clientHeight -
+        getStylePx(document.body, 'margin-top')  // 20px
+  } else if (event.keyCode == KEY_PAGEUP &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    event.preventDefault()
+    document.body.scrollTop -= document.body.clientHeight -
+        getStylePx(document.body, 'margin-top')  // 20px
+  } else if (event.keyCode == KEY_F &&
+      !event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    event.preventDefault()
+    var eRulers = document.getElementById('rulers')
+    eRulers.style.display =
+        (eRulers.style.display || 'none') == 'none' ? 'block' : 'none'
+  } else if (event.keyCode == KEY_F &&  // Alt-<F>
+      event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey) {
+    event.preventDefault()
+    var hasChanged = zoom(
+        window.innerWidth >= 1280 && window.innerHeight >= 960)
+    var eRulers = document.getElementById('rulers')
+    eRulers.style.display =
+        hasChanged || (eRulers.style.display || 'none') == 'none' ?
+        'block' : 'none'
+  } else {
+    // addMessage(',kc=' + event.keyCode)
+  }
+}
+
+function onResize() {
+  // In Firefox 3.6, we get multiple resize events on F11 (full screen),
+  // because the resize is animated.
+  // TODO(pts): Maybe change the font size, too.
+  document.getElementById('backgroundfiller').style.width = document.body.offsetWidth
+}
+
+var prevHash
+
+function silentSetHash(hash) {
+  prevHash = hash
+  if (document.location.hash != prevHash &&
+      document.location.hash != '#' + prevHash)
+    document.location.hash = prevHash
+}
+
+function onHashChange() {
+  var hash = document.location.hash
+  if (hash == prevHash) {
+  } else if (hash == '#' + prevHash) {
+    prevHash = hash
+  } else {
+    prevHash = hash
+    goToSlide(hash)
+    zoom(hash.indexOf('z') >= 0)
+  }
+}
+
+// Zoom in or out.
+//
+// If doZoomIn is true, set body font size to 125%, otherwise set body font
+// size to 150%.
+//
+// Return true iff the body font size has changed.
+function zoom(doZoomIn) {
+  var hasChanged = true
+  if (doZoomIn) {
+    var eRulers = document.getElementById('rulers')
+    var i, eRuler
+    for (i = 0; i < eRulers.childNodes.length; ++i) {
+      var eRuler = eRulers.childNodes[i]
+      if (eRuler.nodeName == 'DIV')
+        eRuler.style.backgroundColor = '#00ff00'
+    }
+    document.getElementById('hruler').style.width = '1280px'
+    document.getElementById('vruler').style.height = '1024px'  // not 960
+    document.getElementById('vmid').style.display = 'block'
+    if (document.body.style.fontSize == '125%') {
+      hasChanged = false
+    } else {
+      document.body.style.fontSize = '125%'
+    }
+    if (document.location.hash.indexOf('z') < 0)
+      silentSetHash(document.location.hash + 'z')
+  } else {
+    var eRulers = document.getElementById('rulers')
+    var i, eRuler
+    for (i = 0; i < eRulers.childNodes.length; ++i) {
+      var eRuler = eRulers.childNodes[i]
+      if (eRuler.nodeName == 'DIV')
+        eRuler.style.backgroundColor = '#ff0000'
+    }
+    document.getElementById('hruler').style.width = '1024px'
+    document.getElementById('vruler').style.height = '768px'
+    document.getElementById('vmid').style.display = 'none'
+    prevHash = document.location.hash.replace(/z/g, '')
+    if (!document.body.style.fontSize) {
+      hasChanged = false
+      document.body.style.fontSize = '100%'
+    } else if (document.body.style.fontSize == '100%') {
+      hasChanged = false
+    } else {
+      document.body.style.fontSize = '100%'
+    }
+    silentSetHash(document.location.hash.replace(/z/g, ''))
+  }
+  return hasChanged
+}
+
+function onDomReady(event) {
+  // onDomReady is called before images get loaded.
+  // addMessage('READY' + document.body.clientHeight + ',' + document.body.style.marginTop)
+  sh_highlightDocument()
+  // document.body.clientHeight == window.innerHeight (if no margins)
+  var height = document.body.clientHeight
+  //if (document.body.clientHeight >= 900) {
+  //} else if (document.body.clientHeight >= 900) {
+  //  document.body.style.fontSize = 
+  window.addEventListener('resize', onResize, false)
+  window.addEventListener('hashchange', onHashChange, false)
+  document.addEventListener('keydown', onKeyPress, false)
+  var marginTop = getStylePx(document.body, 'margin-top')
+  var backgroundColor = window.getComputedStyle(document.body, null).getPropertyValue('background-color')
+  document.getElementById('bottomcover').style.height = marginTop
+  document.getElementById('slidecount').style.bottom = marginTop
+  document.getElementById('slidecount').style.right = marginTop
+  document.getElementById('backgroundfiller').style.top = marginTop
+  document.getElementById('backgroundfiller').style.left = marginTop
+  // About 2 * marginTop less than 100%.
+  document.getElementById('backgroundfiller').style.width = document.body.offsetWidth
+  document.getElementById('backgroundfiller').style.backgroundColor = backgroundColor
+  onHashChange()  // includes goToSlide(document.location.hash) + zooming
+}
+document.addEventListener('DOMContentLoaded', onDomReady, false)
+</script>
+<style type="text/css">
+div#bottomcover {
+  position:fixed;
+  bottom:0px;
+  left:0px;
+  background:#000000;
+  width:100%;
+  height:20px;  /* overwritten in onDomReady from body.margin-top */
+}
+div#slidecount {
+  position:fixed;
+  bottom:20px;  /* overwritten in onDomReady from body.margin-top */
+  right:20px;  /* overwritten in onDomReady from body.margin-top */
+  width:auto;
+  background:#ffffff;
+  padding:.15em;   /* padding affected by background */
+  padding-top:0em;
+  padding-right:.25em;
+  margin:0em;  /* margin not affected by background */
+  margin-top:.15em;
+}
+div#msg {
+  position:fixed;
+  display:none;
+  bottom:20px;  /* overwritten in onDomReady from body.margin-top */
+  left:20px;  /* overwritten in onDomReady from body.margin-top */
+  width:auto;
+  background:#ffa500;
+  padding:.3em;
+  margin:0px;
+}
+/* Helper element for providing a backround for not-tall-enough slides.
+ * This is not needed in Chrome (because the body would be high enough),
+ * but it is needed in Firefox 3.6.
+ */
+div#backgroundfiller {
+  position:fixed;
+  background:green;
+  top:20px;  /* overwritten in onDomReady from body.margin-top */
+  left:20px;  /* overwritten in onDomReady from body.margin-top */
+  height:100%;
+  width:100%;  /* overwritten in onDomReady from body.offsetWidth */
+  z-index:-1;
+}
+html {
+  border:none;
+  margin:0px;
+  padding:0px;
+  overflow:hidden;  /* hide scrollbar; removes vertical scrolling in Chrome, so we'll add our KeyboardEvent handler below */
+  font-size:32px;
+  font-family: Arial;
+  background:#000000;
+  color:#000000;
+}
+body {
+  border:none;
+  background:#ffffff;
+  margin:20px;  /* the margin-top value is copied elsewhere by onDomReady */
+  padding:0px;
+  /* All sub-element font sizes must be specified in %, so if we change
+   * document.body.style.fontSize, then they will get updated.
+   */
+  font-size:100%;
+}
+div.slide {
+  overflow:auto;  /* makes the bottom margin of the last p show */
+  display:none;
+  background:#ffffff;
+  padding:0em;
+  padding-top:1px;  /* hack to disable collapsing of margins with the next p, see also http://www.webmasterworld.com/css/3530816.htm */
+}
+div.slide p {
+  margin-top:0.6em;
+  margin-bottom:0.6em;  /* adds extra black border at bottom */
+  padding:0px;
+}
+div.slide dl {
+  margin-top:0.6em;
+  margin-bottom:0.6em;
+  padding:0px;
+}
+div.slide dl.mid {
+  margin-top:0.4em;
+  margin-bottom:0.4em;
+  padding:0px;
+}
+div.slide dl div {
+  margin-left:1em;
+  margin-right:1em;
+}
+div.slide tt {
+  font-size:90%;
+  font-family: DejaVu Sans Mono, Bitstream Vera Mono, Lucia Sans Mono, Consolas, Courier;  
+}
+div.slide b {
+  font-weight:bold;
+  color:#225555;
+}
+div.slide code {
+  font-size:90%;
+  background:#ffffbb;
+  color:#333333;
+  font-family: DejaVu Sans Mono, Bitstream Vera Mono, Lucia Sans Mono, Consolas, Courier;  
+}
+div.slide pre {
+  overflow-x:auto;
+  background:#ffffbb;
+  border:1px solid #000000;
+  padding:1px;
+  margin-top:1em;
+  margin-bottom:1em;
+  font-family: DejaVu Sans Mono, Bitstream Vera Mono, Lucia Sans Mono, Consolas, Courier;  
+  font-size:75%;
+}
+div.slide pre.small {
+  font-size:62.5%;
+}
+
+div.slide li {
+  margin-top:0.5em;
+  margin-bottom:0.5em;
+}
+div.slide ul > li {
+  list-style-type:none;
+  list-style-position:outside;
+}
+div.slide ul {
+  padding-left:2em;
+  padding-right:1em;
+  margin-left:0px;
+}
+div.slide ol {
+  padding-left:2em;
+  margin-left:0px;
+}
+div.slide a {
+  color:#3333ff;
+}
+div.slide ul > li:before {
+  color:#7777ff;
+  content:"\25fc ";
+  display:inline-block;
+  margin-left:-1.2em;
+  width:1.2em;
+  font-family: Arial;  /* TODO(pts): Which font? Why is it not sharp? */
+  font-size:80%;
+  line-height:0pt;
+}
+div.slide div.showtitle {
+  margin-left:auto;
+  margin-right:auto;
+  /* display:table + font-size:...% in the same div interact badly on the
+   * baselineskip if the fontSize % of the body is changed (e.g. in zoom()),
+   * even if line-height:115% is specified (the default), then the line
+   * height doesn't get updated in Chrome 8. So our solution is to put the
+   * font-size:140% in a sub-div, see below.
+   */
+  display:table;
+}
+div.slide div.showtitle > div {
+  background:#7777ff;
+  color:ffffff;
+  text-align:center;
+  padding:.34em;
+  /*line-height:115%;*/
+  font-size:140%;
+}
+div.slide > h1 {
+  background:#7777ff;
+  color:ffffff;
+  margin-top:-1px;  /* negate the padding-top:1px of the div.slide */
+  margin-bottom:0.3em;
+  margin-left:0em;
+  margin-right:0em;
+  padding-left:.34em;
+  padding-right:.34em;
+  padding-top:.2em;
+  padding-bottom:.2em;
+  font-size:140%;
+  font-weight:bold;
+}
+div.slide > div {
+  margin-left:0.6em;
+  margin-right:0.6em;
+}
+div.slide > dl {
+  margin-left:0.6em;
+  margin-right:0.6em;
+}
+div.slide > p {
+  margin-left:0.6em;
+  margin-right:0.6em;
+}
+div.slide > pre {
+  margin-left:1em;
+  margin-right:1em;
+}
+div.slide pre.small {
+  /* 1.2em == 1em * 75%/62.5% */
+  margin:1.2em;
+}
+div.slide > ol {
+  padding-left:2.6em;
+  padding-right:0.6em;
+}
+div.slide > ul {
+  padding-left:2.6em;
+  padding-right:0.6em;
+}
+div#rulers {
+  position:fixed;
+  display:none;
+  background:#ffffff;  /* does not make any difference, sub-divs do */
+}
+div#rulers > div {
+  position:fixed;
+  background:#ff0000;
+  z-index:2;
+}
+</style>
+</head><body>
+<div id=rulers>
+<div id=hruler style="top:0;left:0;width:1024px;height:8px"></div>
+<div id=vruler style="top:0;left:0;width:8px;height:768px"></div>
+<div id=hend style="top:8px;right:0;width:8px;height:8px"></div>
+<div id=vmid style="top:952px;left:8px;width:8px;height:8px"></div>
+<div id=vend style="bottom:0;left:8px;width:8px;height:8px"></div>
+</div>
+
+<div id="backgroundfiller"></div>
+<div id="msg"></div>
+<div id="slidecount"></div>
+<div id="bottomcover""></div>
+
+<div class="slide">
+<div style="height:20%"></div>
+<div class="showtitle"><div>13371 concurrent TCP connections<br>
+in Python with coroutines</div></div>
+
+<div style="height:30%"></div>
+<div style="text-align:center">Péter Szabó, <tt>pts@google.com</tt><br>
+<p>Zürich, 2010-11-29</div>
+
+</div>
+
+<div class="slide">
+<h1>Who needs 13371 concurrent connections?</h1>
+<ul>
+<li>server with <b>long-living,</b> low volume connections
+<ul>
+<li>for chat rooms
+<li>for web&ndash;IRC gateways
+<li>for publish/subscribe messaging
+<li>for online multiplayer games (e.g. MUDs, second life)
+</ul>
+<li>low-traffic custom sites or services on <b>low-memory</b> servers
+<li>peer-to-peer clients (e.g. the bittorrent reference impl.)
+<li>session-aware proxies
+</ul>
+<p>Coroutines are also useful for just a dozen connections:
+<ul>
+<li>file transfer and backup clients
+<li>automated stock and forex trading
+</ul>
+</div>
+
+<div class="slide">
+<h1>How to run Ticker and Repeater in parallel?</h1>
+
+<pre class=sh_python>line_count_ary = [0]
+
+def Ticker():
+  i = 0
+  while True:
+    i += 1
+    print 'Tick %d with %d lines.' % (i, line_count_ary[0])
+    Sleep(3)
+
+def Repeater():
+  print 'Hi, please type and press Enter.'
+  while True:
+    line = ReadLine()
+    if not line:
+      break
+    line_count_ary[0] += 1
+    print 'You typed %r.' % line
+  print 'End of input.'
+
+AddTask(Repeater)
+Ticker()</pre>
+</div>
+
+<div class="slide">
+<h1>Entities executing in parallel</h1>
+<ul>
+<li>actor (Erlang, Scala)
+<li>process
+<li>thread
+<li>callback
+<li>coroutine
+<ul>
+  <li>generator (Python function doing <code>yield</code>)
+  <li>greenlet (Python with extension <code>import greenlet</code>)
+  <li>tasklet (Stackless Python)
+  <li>Task (C#), goroutine (Go), callcc (Ruby, Lisp)
+</ul>
+</div>
+
+<div class="slide">
+<h1>Synchronous I/O with threads</h1>
+<ol>
+<li>Create and start a thread for each I/O operation you want to run in
+    parallel.
+<li>Do synchronous, blocking I/O operations, i.e. let the thread wait
+    (block) until it can read or write. Other threads can make progress in
+    the meantime.
+</ol>
+
+<p>Can't have more than a few thousand threads because:
+
+<ul>
+<li>Their stack consumes too much RAM.
+<li>They are slow to create.
+<li>They use system resources even when they are inactive.
+</ul>
+</div>
+
+<div class="slide">
+<h1>Asynchronous I/O with callbacks</h1>
+<ol>
+<li>Use only a single thread or one thread per CPU core available.
+<li>Do asynchronous I/O operations: for each I/O operation, supply your
+    callback function, to be called when the operation completes or can be
+    completed without waiting.
+<li>Use an I/O framework (e.g. libevent, libev or glib) to manage your
+    pending callbacks.
+</ol>
+
+<p>Disadvantage: the control flow of your code gets obfuscated.</p>
+</div>
+
+<div class="slide">
+<h1>I/O with callbacks hides the control flow</h1>
+
+<pre class=sh_python>line_count_ary = [0]
+def Ticker():
+  i_ary = [0]
+  def Callback():  # This was a while loop with a pre-test.
+    i_ary[0] += 1
+    print 'Tick %d with %d lines.' % (i_ary[0], line_count_ary[0])
+    Sleep(3, Callback)
+  Callback()
+def Repeater():
+  print 'Hi, please type and press Enter.'
+  def Callback(line):  # This was a while loop with a post-test.
+    if line:
+      print 'You typed %r.' % line
+      line_count_ary[0] += 1
+      ReadLine(Callback)
+    else:
+      print 'End of input.'
+  ReadLine(Callback)
+
+SetNonBlocking(STDIN_FD); AddTask(Ticker); AddTask(Repeater)
+MainLoop()</pre>
+</div>
+
+<div class="slide">
+<h1>The same in JavaScript with node.js</h1>
+
+<pre class="sh_javascript small">var line_count = 0
+function ticker() {
+  var i = 0
+  function callback() {
+    i += 1
+    console.log('Tick ' + i + ' with ' + line_count + ' lines.')
+    setTimeout(callback, 3000)
+  }
+  callback()
+}
+function repeater() {
+  var stdin = process.openStdin()
+  console.log('Hi, please type and press Enter.')
+  function callback(line) {
+    if (line.length) {
+      ++line_count
+      console.log('You typed ' + util.inspect(line) + '.')
+      readLine(stdin, callback)
+    } else {
+      console.log('End of input.')
+    }
+  }
+  readLine(stdin, callback)
+}
+process.nextTick(ticker)
+process.nextTick(repeater)</pre>
+</div>
+
+<div class="slide">
+<h1>But we have to implement input buffering</h1>
+<pre class="sh_javascript small">function readLine(readStream, callback) {
+  if (!('buf' in readStream))
+    readStream.buf = []
+  function onData(data) {
+    data = data.toString('UTF-8')
+    readStream.buf.push(data)
+    if (data.indexOf('\n') < 0)
+      return
+    readStream.buf = readStream.buf.join('').split('\n').reverse()
+    while (readStream.buf.length > 1)
+      callback(readStream.buf.pop() + '\n')
+    readStream.removeListener('data', onData)
+    readStream.removeListener('end', onEnd)
+  }
+  function onEnd() {
+    readStream.removeListener('data', onData)
+    readStream.removeListener('end', onEnd)
+    var data = readStream.buf.join('')
+    readStream.buf = null
+    callback(data)
+  }
+  readStream.on('data', onData)
+  readStream.on('end', onEnd)
+}</pre>
+</div>
+
+<div class="slide">
+<h1>What is a coroutine?</h1>
+<ul>
+<li><b>coroutine</b> = <b>continuation:</b>
+<ul>
+<li>a static snapshot of execution position
+<li>list of stack frames of nested function calls,
+    including the instruction pointer and the registers
+</ul>
+<li><b>thread:</b> an execution unit scheduled by the operating system which
+is or will be running a coroutine
+<li><b>process:</b> a bunch of threads which share the same virtual address
+space, filehandles, signal handlers, permissions etc.
+</ul>
+</div>
+
+<div class="slide">
+<h1>Most threads are waiting</h1>
+<dl class=mid>AcceptConnections()
+<div>nbsocket.accept()
+<div>waiting for fd 3 becoming readable
+</div></div></dl>
+
+<dl class=mid>HandleHttpProxyConnection()
+<div>ReadHttpRequest()
+<div>nbfile.readline()
+<div>nbsocket.recv()
+<div>waiting for fd 4 becoming readable
+</div></div></div></div></dl>
+
+<dl class=mid>HandleHttpProxyConnection()
+<div>WriteHttpResponseHeader()
+<div>nbfile.write()
+<div>nbsocket.send()
+<div>waiting for fd 5 becoming writable
+</div></div></div></div></dl>
+
+<dl class=mid>CleanCachePeriodically()
+<div>sleep()
+<div>sleeping until timestamp 123456789.01 is reached
+</div></div></dl>
+
+</div>
+
+
+<div class="slide">
+<h1>Asynchronous I/O with coroutines</h1>
+<ol>
+<li>Create a coroutine for each task (e.g. active incoming HTTP
+    request, timeout). Create millions if needed.
+<li>Put all filehandles to <b>non-blocking mode.</b>
+<li>Pick a coroutine, run it in the current thread until it would block
+    on I/O. Repeat for other non-blocked coroutines.
+<li>When all coroutines would block on I/O, wait for I/O progress
+    (with <code>select()</code>, <code>poll()</code>, <code>kqueue()</code>,
+    <code>epoll_wait()</code>), and continue with the corresponding
+    coroutine.
+</ol>
+
+<p>Get nice code control flow (just like with threads) and good performance.
+</div>
+
+<div class="slide">
+<h1>Same application code, with coroutines</h1>
+
+<pre class=sh_python>line_count_ary = [0]
+
+def Ticker():
+  i = 0
+  while True:
+    i += 1
+    print 'Tick %d with %d lines.' % (i, line_count_ary[0])
+    Sleep(3)
+
+def Repeater():
+  print 'Hi, please type and press Enter.'
+  while True:
+    line = ReadLine()
+    if not line:
+      break
+    line_count_ary[0] += 1
+    print 'You typed %r.' % line
+  print 'End of input.'
+
+AddTask(Repeater)
+Ticker()</pre>
+</div>
+
+<div class="slide">
+<h1>I/O libraries for Python</h1>
+<ul>
+<li><b>process:</b> (multiprocessing)
+<li><b>thread:</b> (threadpool)
+<li><b>callback:</b> Twisted, Tornado, (node.js), Orbited, circuits, asyncore
+<li><b>generator:</b> monocle, Chiral,
+    DieselWeb, MultiTask, FriendlyFlow, Weightless, Fibra, Cogen
+<li><b>greenlet:</b> gevent, Eventlet, Syncless, (Concurrence)
+<li><b>tasklet:</b> Syncless, Concurrence, (Eventlet)
+</ul>
+<p>See feature comparisons of these <a href="http://ptspts.blogspot.com/2010/05/feature-comparison-of-python-non.html">here</a>
+and <a href="http://nichol.as/asynchronous-servers-in-python">here</a>.
+
+<p>(C)Python has the <b>global interpreter lock</b>, so 1 Python
+process can use at most 1 CPU core for running Python code.
+</div>
+
+<div class="slide">
+<h1>Generators and iterators in Python</h1>
+
+<pre class=sh_python>def SquaresUpto(n):  # A generator.
+  i = 1
+  while i * i <= n:
+    yield i * i
+    i += 1
+
+def CubesUpto(n):  # Another generator.
+  i = 1
+  while i * i * i <= n:
+    yield i * i * i
+    i += 1
+
+def Double(iter):  # Another generator.
+  for i in iter:
+    yield 2 * i
+
+my_iter = SquaresUpto(100)  # An iterator from an generator.
+for i in my_iter:
+  print i
+#: [2, 16, 54, 128]
+print list(Double(CubesUpto(100)))</pre>
+</div>
+
+<div class="slide">
+<h1>Advanced generator example</h1>
+
+<pre class="sh_python small">def Merge(iter1, iter2):
+  i1 = i2 = None
+  while True:
+    if iter1 is not None and i1 is None:
+      try:
+        i1 = iter1.next()  # Run iter1 until it yields something (i1).
+      except StopIteration:
+        iter1 = None
+    if iter2 is not None and i2 is None:
+      try:
+        i2 = iter2.next()
+      except StopIteration:
+        iter2 = None
+    if i1 is None and i2 is None:
+      break  # Can't `return' from a itererator.
+    elif i2 is None or i1 < i2:
+      yield i1
+      i1 = None
+    else:
+      yield i2
+      i2 = None
+
+#: [1, 1, 4, 8, 9, 16, 25, 27, 36, 49, 64, 64, 81, 100]
+print list(Merge(SquaresUpto(100), CubesUpto(100)))
+</div>
+
+<div class="slide">
+<h1>Emulating coroutines with generators</h1>
+
+<ul>
+<li>The generator remembers a stack frame: local variables + where to
+    resume at the next <code>.next()</code> (good).
+<li>The generator remembers only one stack frame (bad).
+<li>How to implement this? <code>ReadHttpRequest()</code> calls
+    <code>readline()</code>, which calls
+    <code>recv()</code>, which would have to wait for input, so the whole
+    traceback (all 3 stack frames) have to be suspended.
+<li>Solution: Make each stack frame a separate generator, and connect them,
+    e.g. as soon as <code>recv()</code> is done, call
+    <code>readline_iter.next(new_data)</code>.
+<li>Example application code: <code>new_data = yield f.readline()</code>
+<li>The framework code is much more complicated.
+</ul>
+</div>
+
+<div class="slide">
+<h1>Application code with generators</h1>
+<pre class=sh_python>line_count_ary = [0]
+def Ticker():  # A generator.
+  i = 0
+  while True:
+    i += 1
+    print 'Tick %d with %d lines.' % (i, line_count_ary[0])
+    yield Sleep(3)
+def Repeater():  # A generator.
+  print 'Hi, please type and press Enter.'
+  while True:
+    line = yield ReadLine()
+    if not line:
+      break
+    line_count_ary[0] += 1
+    print 'You typed %r.' % line
+  print 'End of input.'
+SetNonBlocking(STDIN_FD)
+AddTask(Ticker)
+AddTask(Repeater)
+MainLoop()</pre>
+</div>
+
+<div class="slide">
+<h1>Input buffering with generators</h1>
+<pre class=sh_python>stdin_read = []
+def ReadLine():  # A generator.
+  while True:
+    try:
+      got = os.read(STDIN_FD, 1024)
+      if not got or '\n' in got: break
+      stdin_read.append(got)
+    except OSError, e:
+      if e[0] != errno.EAGAIN: raise
+      yield WaitForEvent({'read': STDIN_FD})
+  if got:
+    i = got.find('\n') + 1
+    stdin_read.append(got[:i])
+    line = ''.join(stdin_read)
+    del stdin_read[:]
+    if i < len(got):
+      stdin_read.append(got[i:])
+  else:  # EOF on stdin
+    line = ''.join(stdin_read)
+    del stdin_read[:]
+  raise StopIteration(line)  # Disadvantage: can't use `return'.
+</pre>
+</div>
+
+
+<div class="slide">
+<h1>Why generators?</h1>
+
+<p>Advantages for using generators to emulate coroutines:</p>
+<ul>
+<li>pure Python solution for Python 2.5 or later
+</ul>
+<p>Disadvantages:</p>
+<ul>
+<li>where to <code>yield</code> are where not to
+<ul>
+<li>works fine in C# because of type checking
+<li>if callee changes, all callers have to be updated
+</ul>
+<li><code>raise StopIteration(...)</code> instead of <code>return</code>
+<li>speed
+<li>syntax cruft: some frameworks require decorators around generators
+</ul>
+</div>
+
+<div class="slide">
+<h1>Context switching</h1>
+<p>How is execution context switching from one coroutine to another implemented
+in Python?
+<ul>
+<li><b>generator:</b> save the <code>locals()</code> dict and the bytecode
+instruction pointer
+<li><b>greenlet:</b> copy and overwrite the C stack
+<ul>
+<li>slow (O(n)) if the stack is long
+<li>safe because Python object pointers point to the heap
+</ul>
+<li>Stackless Python <b>hard switching</b>: copy the C stack (like in
+    greenlet, but the C stack is shorter)
+<li>Stackless Python <b>soft switching</b>: just change one pointer (works
+    is the call stack contains only pure Python frames)
+</ul>
+</div>
+
+<div class="slide">
+<h1>Waiting for I/O progress opportunity</h1>
+<p>The <code>select()</code> Unix system call (and its Windows equivalents):
+<ul>
+<li>needs 3 lists of file descriptors (fds): read, write and except
+<li>(except is useless, leave it empty)
+<li>needs a timeout value, or infinity
+<li>returns as soon as at least one of the specified fds are
+    readable or writable, respectively, or the timeout has been reached
+<li>returns the list of fds which are (maybe) readable and writable
+<li>can be used (together with <code>read()</code> and <code>write()</code>
+    and the non-blocking I/O mode)
+    to make progress on multiple I/O channels in a single thread
+<li>has faster, system specific alternatives (e.g. <code>poll()</code>,
+    <code>kqueue()</code>, <code>epoll_wait()</code>)
+</ul>
+</div>
+
+<div class="slide">
+<h1>A coroutine-based I/O library</h1>
+<ul>
+<li>manages coroutine creation, context switching and error handling
+<li>uses <code>select()</code> (or its alternatives) to figure out which
+    blocked coroutines become ready to run
+<li>puts all fds it manages to non-blocking mode
+<li>provides convenient and compatible alternatives of the <code>file</code>
+    and <code>socket</code> classes (vs callback-based I/O libraries, which
+    provide a different interface)
+<li>switches to another coroutine in its I/O methods when the current
+    coroutine has to wait for blocking I/O
+</div>
+
+<div class="slide">
+<h1>Usability</h1>
+<p>To make the I/O library easy to use for the programmer:
+<ul>
+<li>provide an asynchronous DNS resolver
+<li>provide compatible drop-in replacements for <code>file</code>,
+    <code>socket</code>, <code>SSL.SSLSocket</code> etc. with proper error
+    reporting and timeout handling
+<li>provide monkey-patching for any 3rd party pure Python library at runtime
+    to make it use your drop-in replacements
+<li>make sure it works with greenlet (easier to install than Stackless Python)
+<li>provide a WSGI server
+<li>write the documentation in Python <code>.rst</code> format, and upload it
+    to the web in HTML
+</ul>
+</div>
+
+<div class="slide">
+<h1>Performance</h1>
+<p>To increase performance of the coroutine-based I/O library:</p>
+<ul>
+<li>replace <code>select()</code> with a system-specific alternative
+    (<code>epoll_wait()</code> on Linux, <code>kqueue()</code> on FreeBSD or
+    the Mac etc.)
+<li>write event notification code in C (instead of Python)
+<li>put timeouts to a binary heap instead of a list
+<li>or use an library like libev or libevent2 for low-level I/O event
+    notifications
+<li>write I/O buffering code (including <code>readline</code>) in C (Pyrex)
+<li>write as much parsing code (e.g. HTTP request parsing) as possible in
+    C (Pyrex)
+</ul>
+</div>
+
+
+<div class="slide">
+<p style="text-align:center;font-size:900%;margin-top:20%">?
+</div>
+
+<!-- TODO(pts): Add code with greenlet-based main loop -->
+
+</body></html>
