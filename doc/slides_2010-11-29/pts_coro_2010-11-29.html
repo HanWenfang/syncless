@@ -211,6 +211,9 @@ function setSlideNumbers(currentSlide, slideCount) {
 function moveSlide(delta) {
   if (delta == 0)
     return true
+  var usearrow = document.getElementById('usearrow')
+  if (usearrow)
+    usearrow.style.visibility = 'hidden'
   var c = document.body.childNodes
   var i
   var isFound = false
@@ -580,6 +583,9 @@ if (navigator.userAgent.indexOf(' KHTML/') >= 0) {  // Konqueror 4.4.2.
 window.slideJsOk = true
 </script>
 <style type="text/css">
+div.slide p#usearrow {
+  color:#777777;
+}
 div.slide p.browsererror {
   border:3px solid red;
   padding:2px;
@@ -828,11 +834,15 @@ to view the slides.</p></noscript>
 var ib
 if (!window.slideJsOk) {
   document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Chrome, Firefox, Safari, Opera, Konqueror or Internet Explorer), because this browser does not seem to be able to run the required JavaScript properly.</p>')
-} else if (0) {
-  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Firefox or Chrome), because this browser (' + ib + ') is known to not to work with this document.</p>')
+} else if (navigator.userAgent.indexOf('MSIE 6.') >= 0 ||
+           navigator.userAgent.indexOf('MSIE 5.') >= 0 ||
+           navigator.userAgent.indexOf('MSIE 4.') >= 0) {
+  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Chrome, Firefox, Safari, Opera, Konqueror), because your Internet Explorer is too old (at least IE7 is needed, and IE8 is recommended).</p>')
+} else {
+  document.write('<p id=usearrow>Use the arrow keys to navigate this presentation.</p>')
 }
 </script>
-<div class="percentheight" style="line-height:10%"></div>
+<div class="percentheight" style="line-height:5%"></div>
 <div class="showtitle"><div>13371 concurrent TCP connections<br>
 in Python with coroutines</div></div>
 <div class="percentheight" style="line-height:20%"></div>
