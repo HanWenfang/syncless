@@ -670,17 +670,26 @@ div.slide p {
   margin-bottom:0.6em;  /* adds extra black border at bottom */
   padding:0px;
 }
-div.slide dl {
+div.slide div.big {
   margin-top:0.6em;
   margin-bottom:0.6em;
   padding:0px;
 }
-div.slide dl.mid {
+div.slide div.mid {
   margin-top:0.4em;
   margin-bottom:0.4em;
+  margin-left:0.6em;
+  margin-right:0.6em;
   padding:0px;
 }
-div.slide dl div {
+div.slide div.big div {
+  margin-left:1em;
+  margin-right:1em;
+  margin-left:0.6em;
+  margin-right:0.6em;
+  padding:0px;
+}
+div.slide div.mid div {
   margin-left:1em;
   margin-right:1em;
 }
@@ -783,10 +792,8 @@ div.slide > div {
   margin-left:0.6em;
   margin-right:0.6em;
 }
-div.slide > dl {
   margin-left:0.6em;
   margin-right:0.6em;
-}
 div.slide > p {
   margin-left:0.6em;
   margin-right:0.6em;
@@ -830,22 +837,23 @@ div#rulers > div {
 <div id="backgroundfiller"></div>
 <div id="msg"></div>
 <div id="slidecount"></div>
-<div id="bottomcover""></div>
+<div id="bottomcover"></div>
 
 <div class="slide" style="display:block">
 <noscript><p class=browsererror>Please enable JavaScript in your browser and reload this page
 to view the slides.</p></noscript>
-<script type="text/javascript">
+<script type="text/javascript"><!--
 var ib
 if (!window.slideJsOk) {
-  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Chrome, Firefox, Safari, Opera, Konqueror or Internet Explorer), because this browser does not seem to be able to run the required JavaScript properly.</p>')
+  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Chrome, Firefox, Safari, Opera, Konqueror or Internet Explorer), because this browser does not seem to be able to run the required JavaScript properly.<' + '/p>')
 } else if (navigator.userAgent.indexOf('MSIE 6.') >= 0 ||
            navigator.userAgent.indexOf('MSIE 5.') >= 0 ||
            navigator.userAgent.indexOf('MSIE 4.') >= 0) {
-  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Chrome, Firefox, Safari, Opera, Konqueror), because your Internet Explorer is too old (at least IE7 is needed, and IE8 is recommended).</p>')
+  document.write('<p class=browsererror>Please view this document in a different web browser (e.g. Chrome, Firefox, Safari, Opera, Konqueror), because your Internet Explorer is too old (at least IE7 is needed, and IE8 is recommended).<' + '/p>')
 } else {
-  document.write('<p id=usearrow>Use the arrow keys to navigate this presentation.</p>')
+  document.write('<p id=usearrow>Use the arrow keys to navigate this presentation.<' + '/p>')
 }
+// -->
 </script>
 <div class="percentheight" style="line-height:5%"></div>
 <div class="showtitle"><div>13371 concurrent TCP connections<br>
@@ -916,6 +924,7 @@ Ticker()</pre>
   <li>greenlet (Python with extension <code>import greenlet</code>)
   <li>tasklet (Stackless Python)
   <li>Task (C#), goroutine (Go), callcc (Ruby, Lisp)
+</ul>
 </ul>
 </div>
 
@@ -1055,29 +1064,29 @@ space, filehandles, signal handlers, permissions etc.
 
 <div class="slide">
 <h1>Most threads are waiting</h1>
-<dl class=mid>AcceptConnections()
+<div class=mid>AcceptConnections()
 <div>nbsocket.accept()
 <div>waiting for fd 3 becoming readable
-</div></div></dl>
+</div></div></div>
 
-<dl class=mid>HandleHttpProxyConnection()
+<div class=mid>HandleHttpProxyConnection()
 <div>ReadHttpRequest()
 <div>nbfile.readline()
 <div>nbsocket.recv()
 <div>waiting for fd 4 becoming readable
-</div></div></div></div></dl>
+</div></div></div></div></div>
 
-<dl class=mid>HandleHttpProxyConnection()
+<div class=mid>HandleHttpProxyConnection()
 <div>WriteHttpResponseHeader()
 <div>nbfile.write()
 <div>nbsocket.send()
 <div>waiting for fd 5 becoming writable
-</div></div></div></div></dl>
+</div></div></div></div></div>
 
-<dl class=mid>CleanCachePeriodically()
+<div class=mid>CleanCachePeriodically()
 <div>sleep()
 <div>sleeping until timestamp 123456789.01 is reached
-</div></div></dl>
+</div></div></div>
 
 </div>
 
@@ -1195,7 +1204,7 @@ print list(Double(CubesUpto(100)))</pre>
       i2 = None
 
 #: [1, 1, 4, 8, 9, 16, 25, 27, 36, 49, 64, 64, 81, 100]
-print list(Merge(SquaresUpto(100), CubesUpto(100)))
+print list(Merge(SquaresUpto(100), CubesUpto(100)))</pre>
 </div>
 
 <div class="slide">
@@ -1337,6 +1346,7 @@ instruction pointer
     provide a different interface)
 <li>switches to another coroutine in its I/O methods when the current
     coroutine has to wait for blocking I/O
+</ul>
 </div>
 
 <div class="slide">
