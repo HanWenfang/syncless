@@ -122,23 +122,24 @@ var CHAR_TO_KEY = {
 }
 
 function getBackgroundColor(element) {
-  // Internet Explorer has element.currentStyle, other browsers (Firefox,
-  // Chrome, Safari, Opera and Konqueror) have window.getComputedStyle().
+  // Cross-browser: Internet Explorer has element.currentStyle, other
+  // browsers (Firefox, Chrome, Safari, Opera and Konqueror) have
+  // window.getComputedStyle().
   return element.currentStyle ? element.currentStyle.backgroundColor :
-         window.getComputedStyle(document.body, null).
+         window.getComputedStyle(element, null).
          getPropertyValue('background-color')
 }
 
 // Example: getMarginTopPx(document.body)
 function getMarginTopPx(element) {
   var s = element.currentStyle ? element.currentStyle.marginTop :
-          window.getComputedStyle(document.body, null).
+          window.getComputedStyle(element, null).
           getPropertyValue('margin-top')
   if (typeof s != 'string')
     throw new Error('missing style ' + name + ' for ' + element)
-  // Internet Explorer doesn't support s.substr(-2) (it would return the whole
-  // string), other browsers (Chrome, Firefox, Safari, Opera and Konqueror) do
-  // support this.
+  // Cross-browser: Internet Explorer doesn't support s.substr(-2) (it would
+  // return the whole string), other browsers (Chrome, Firefox, Safari,
+  // Opera and Konqueror) do support this.
   if (s.substr(s.length - 2) != 'px')
     throw new Error('style should end with px: ' + s)
   return parseInt(s, 10)  // This ignores 'px' at the end.
@@ -290,18 +291,19 @@ function addValueBr(dict, key) {
 function onKeyPress(event) {
   if (!event) event = window.event
   var keyCode = event.keyCode
-  if ((keyCode == 0 ||  // Firefox 3.6.12
-       keyCode == event.charCode  // Konqueror 4.4.2
+  if ((keyCode == 0 ||  // Cross-browser: Firefox 3.6.12
+       keyCode == event.charCode  // Cross-browser: Konqueror 4.4.2
       ) && CHAR_TO_KEY[event.charCode]) {
-    // Firefox 3.6.12 and Konqueror 4.4.2 send keyCode == 0 for keypress
-    // (but not for keyup) events on letters, so we get the keyCode based on
-    // the charCode.
+    // Cross-browser: Firefox 3.6.12 and Konqueror 4.4.2 send keyCode == 0
+    // for keypress (but not for keyup) events on letters, so we get the
+    // keyCode based on the charCode.
     keyCode = CHAR_TO_KEY[event.charCode]
   }
-  // Internet Explorer 8 supports returnValue, all other browsers (Chrome,
-  // Firefox, Safari, Opera and Konqueror) support event.preventDefault.
-  // This would be a neat trick to call preventDefault() below, but it doesn't
-  // work in Firefox 3.6.
+  // Cross-browser: Internet Explorer 8 supports returnValue, all other
+  // browsers (Chrome, Firefox, Safari, Opera and Konqueror) support
+  // event.preventDefault. This would be a neat trick to call
+  // preventDefault() below, but it doesn't work in Firefox 3.6.
+  //
   // var preventDefault = event.preventDefault ||
   //     function() { event.returnValue = false }
   if (keyCode == KEY_DOWN &&
@@ -309,10 +311,9 @@ function onKeyPress(event) {
     // For preventDefault(), see:
     // http://www.webdevelopment2.com/the-secret-of-cancelling-and-stopping-events-using-javascript/
     event.preventDefault ? event.preventDefault() : (event.returnValue = false)
-    // alert(document.body.scrollTop)
-    // document.body.scrollTop += 20
-    // Chrome uses document.body.scrollTop (the other is 0), Konqueror uses
-    // document.documentElement.scrollTop (the other is 0), Firefox has both.
+    // Cross-browser: Chrome uses document.body.scrollTop (the other is 0),
+    // Konqueror uses document.documentElement.scrollTop (the other is 0),
+    // Firefox has both.
     var y = document.body.scrollTop || document.documentElement.scrollTop
     window.scroll(0, y + 20)
   } else if (keyCode == KEY_UP &&
@@ -359,9 +360,10 @@ function onKeyPress(event) {
     // Unfortunately this doesn't cancel the default menu popup in
     // Internet Explorer 8. I can't find a way to cancel it.
     event.preventDefault ? event.preventDefault() : (event.returnValue = false)
-    // Internet Explorer 8 provides document.documentElement.clientWidth, all
-    // other browsers (Chrome, Firefox, Safari, Opera and Konqueror) provide
-    // window.innerWidth (and possibly the other one as well).
+    // Cross-browser: Internet Explorer 8 provides
+    // document.documentElement.clientWidth, all other browsers (Chrome,
+    // Firefox, Safari, Opera and Konqueror) provide window.innerWidth (and
+    // possibly the other one as well).
     var width = window.innerWidth || document.documentElement.clientWidth
     var height = window.innerHeight || document.documentElement.clientHeight
     var hasChanged = zoom(width >= 1280 && height >= 960)
@@ -408,15 +410,16 @@ function fixPercentHeights(containerElement, fullHeight) {
   }
 
   if (containerElement.getElementsByClassName) {
-    // Internet Explorer 9 and all other browsers (Chrome, Firefox, Safari,
-    // Opera and Konqueror).
+    // Cross-browser: Internet Explorer 9 and all other browsers (Chrome,
+    // Firefox, Safari, Opera and Konqueror).
     var elements = containerElement.getElementsByClassName('percentheight')
     for (var i = 0; i < elements.length; ++i) {
       if (elements[i].tagName == 'DIV')
         fixPercentHeight(elements[i])
     }
   } else {
-    // Slower but working implementation for Internet Explorer 8.
+    // Cross-browser: Slower but working implementation for Internet
+    // Explorer 8.
     var elements = containerElement.getElementsByTagName('DIV')
     for (var i = 0; i < elements.length; ++i) {
       if (elements[i].className == 'percentheight')
@@ -426,9 +429,9 @@ function fixPercentHeights(containerElement, fullHeight) {
 }
 
 function onResize() {
-  // In Firefox 3.6, we get multiple resize events on F11 (full screen),
-  // because the resize is animated. Chrome also seems to send multiple
-  // resize event on a manual resize. We don't care.
+  // Cross-browser: In Firefox 3.6, we get multiple resize events on F11
+  // (full screen), because the resize is animated. Chrome also seems to
+  // send multiple resize event on a manual resize. We don't care.
   //
   // In KHTML, document.body.offsetWidth is valid at this point, so we can
   // use it. (But i was not valid in onDomReady.)
@@ -510,7 +513,7 @@ function zoom(doZoomIn) {
   return hasChanged
 }
 
-function onDomReady(event) {
+function onDomReady() {
   // Fallback on the bullet sizes (they are still too small, but at least
   // they are visible).
   // TODO(pts): Add large bullets (by changing the li.font-size).
@@ -532,19 +535,19 @@ function onDomReady(event) {
   if (window.addEventListener) {
     window.addEventListener('resize', onResize, false)
     window.addEventListener('hashchange', onHashChange, false)
-  } else {  // Internet Explorer 8
+  } else {  // Cross-browser: Internet Explorer 8
     window.attachEvent('onresize', onResize)
     window.attachEvent('onhashchange', onHashChange)
   }
   if (!document.addEventListener) {
     document.attachEvent('onkeydown', onKeyPress)
   } else if (navigator.userAgent.indexOf(' AppleWebKit/') >= 0) {
-    // Chrome 8.0 and Safari don't send the arrow key events for 'keypress',
-    // but they do send them (auto-repeated) on 'keydown'.
+    // Cross-browser: Chrome 8.0 and Safari don't send the arrow key events
+    // for 'keypress', but they do send them (auto-repeated) on 'keydown'.
     document.addEventListener('keydown', onKeyPress, false)
   } else {
-    // In Firefox 3.6.12, we wouldn't get any auto-repeats if we registered
-    // for 'keydown' instead of 'keypress'. See more in
+    // Cross-browser: In Firefox 3.6.12, we wouldn't get any auto-repeats if
+    // we registered for 'keydown' instead of 'keypress'. See more in
     // https://developer.mozilla.org/en/DOM/Event/UIEvent/KeyEvent
     document.addEventListener('keypress', onKeyPress, false)
   }
@@ -559,7 +562,7 @@ function onDomReady(event) {
   onHashChange()  // includes goToSlide(document.location.hash) + zooming
 }
 
-// This is just for Internet Explorer.
+// Cross-browser: This is just for Internet Explorer.
 function onReadyStateChange() {
   if (document.readyState == 'complete') {
     document.detachEvent('onreadystatechange', onReadyStateChange)
@@ -567,6 +570,7 @@ function onReadyStateChange() {
   }
 }
 
+// Cross-browser:
 if (navigator.userAgent.indexOf(' KHTML/') >= 0) {  // Konqueror 4.4.2.
   // Although Konqueror supports the 'DOMContentLoaded' event (see below),
   // we fall back to the slower 'load' instead, because with
@@ -620,9 +624,10 @@ div#msg {
   padding:.3em;
   margin:0px;
 }
-/* Helper element for providing a backround for not-tall-enough slides. This
- * is needed in Chrome 8.0, Firefox 3.6.12, Konqueror 4.4.2, Safari and Opera
- * in standards-compliant mode. (Chrome doesn't need it in quirks mode.)
+/* Cross-browser: Helper element for providing a backround for
+ * not-tall-enough slides. This is needed in Chrome 8.0, Firefox 3.6.12,
+ * Konqueror 4.4.2, Safari and Opera in standards-compliant mode. (Chrome
+ * doesn't need it in quirks mode.)
  */
 div#backgroundfiller {
   position:fixed;
