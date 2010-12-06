@@ -29,6 +29,7 @@ from twisted.internet.posixbase import PosixReactorBase
 from twisted.internet.main import installReactor
 from twisted.python import log
 from twisted.internet.interfaces import IReactorFDSet
+from twisted.python.runtime import platform
 from twisted.python.runtime import platformType
 
 # We don't want to import anything from syncless at the top-level (so the
@@ -144,6 +145,13 @@ class SynclessReactor(PosixReactorBase):
     def getWriters(self):
         return [self._selectables[fd] for fd in self._writes]
 
+
+    def _handleSigchld(self, signum, frame, _threadSupport=platform.supportsThreads()):
+        from twisted.internet.process import reapAllProcesses
+        if _threadSupport:
+            self.callFromThread(reapAllProcesses)
+        else:
+            self.callLater(0, reapAllProcesses)
 
     def _handleSignals(self):
         import signal
