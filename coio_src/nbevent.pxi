@@ -111,6 +111,7 @@ cdef extern from "errno.h":
         EINPROGRESS
         EALREADY
         EIO
+        EISCONN
 cdef extern from "fcntl.h":
     cdef int fcntl2 "fcntl"(int fd, int cmd)
     cdef int fcntl3 "fcntl"(int fd, int cmd, long arg)
@@ -2191,15 +2192,17 @@ cdef class nbsocket:
 
     def connect(nbsocket self, object address):
         cdef timeval tv
+        cdef int c_err
         # Do a non-blocking DNS lookup if needed.
         # There is no need to predeclare c_gethostbyname in Pyrex.
         address = c_gethostbyname(address, self.realsock.family)
 
         while 1:
             err = self.realsock.connect_ex(address)
-            if err:
+            c_err = err  # It's 0 on success.
+            if c_err and c_err != EISCONN:  # EISCONN is for the Mac OS X (Snow Leopard, 10.6.5)
                 # We might get EALREADY occasionally for some slow connects.
-                if err != EAGAIN and err != EINPROGRESS and err != EALREADY:
+                if c_err != EAGAIN and c_err != EINPROGRESS and c_err != EALREADY:
                     raise socket_error(err, strerror(err))
 
                 # Workaround for Linux 2.6.31-20 for the delayed non-blocking
@@ -2216,14 +2219,16 @@ cdef class nbsocket:
 
     def connect_ex(nbsocket self, object address):
         cdef timeval tv
+        cdef int c_err
         # Do a non-blocking DNS lookup if needed.
         address = c_gethostbyname(address, self.realsock.family)
 
         while 1:
             err = self.realsock.connect_ex(address)
+            c_err = err  # It's 0 on success.
             # We might get EALREADY occasionally for some slow connects.
-            if err != EAGAIN and err != EINPROGRESS and err != EALREADY:
-                return err  # Inclusing `0' for success.
+            if c_err != EAGAIN and c_err != EINPROGRESS and c_err != EALREADY and c_err != EISCONN:
+                return err  # Including 0 for success.
 
             # Workaround for Linux 2.6.31-20 for the delayed non-blocking
             # select() problem.
@@ -2649,6 +2654,7 @@ cdef class nbsslsocket:
 
     def connect(nbsslsocket self, object address):
         cdef timeval tv
+        cdef int c_err
         if self._sslobj:
             raise ValueError('attempt to connect already-connected SSLSocket!')
                     
@@ -2658,8 +2664,9 @@ cdef class nbsslsocket:
 
         while 1:
             err = self.realsock.connect_ex(address)
-            if err:
-                if err != EAGAIN and err != EINPROGRESS:
+            c_err = err  # It's 0 on success.
+            if c_err and c_err != EISCONN:
+                if c_err != EAGAIN and c_err != EINPROGRESS:
                     raise socket_error(err, strerror(err))
 
                 # Workaround for Linux 2.6.31-20 for the delayed non-blocking
