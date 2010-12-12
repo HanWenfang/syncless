@@ -120,6 +120,7 @@ cdef extern from "fcntl.h":
     int F_SETFL
 cdef extern from "signal.h":
     int SIGINT
+    int SIGUSR1
     int SIGUSR2
     int kill(int pid, int signum)
     int getpid()
@@ -547,6 +548,11 @@ cdef void HandleCSigInt(int fd, short evtype, void *arg) with gil:
     except TaskletExit, e:
        pass
 
+cdef void HandleCSigUsr1(int fd, short evtype, void *arg) with gil:
+    # Should an exception occur, Pyrex will print it to stderr, and ignore it.
+    from syncless import remote_console
+    remote_console.ConsoleSignalHandler()
+
 cdef event_t sigint_ev
 sigint_ev.ev_flags = 0
 
@@ -561,16 +567,25 @@ cdef void _setup_sigint():
     event_add(&sigint_ev, NULL)
 
 
+cdef event_t sigusr1_ev
+sigusr1_ev.ev_flags = 0
+
+# Set up a RemoteConsole activation handler for SIGUSR2. Please note that this
+# is safe, because that RemoteConsole accepts connections only from the same
+# UID on 127.0.0.1
+cdef void _setup_sigusr1():
+    event_set(&sigusr1_ev, SIGUSR1, c_EV_SIGNAL | c_EV_PERSIST,
+              HandleCSigUsr1, NULL)
+    sigusr1_ev.ev_flags |= EVLIST_INTERNAL
+    event_add(&sigusr1_ev, NULL)
+
 cdef event_t sigusr2_ev
 sigusr2_ev.ev_flags = 0
 
-# Set up a null handler for SIGUSR2 so cancel_main_loop_wait() can send this
-# signal.
+# Set up a null handler for SIGUSR2.
 cdef void _setup_sigusr2():
     event_set(&sigusr2_ev, SIGUSR2, c_EV_SIGNAL | c_EV_PERSIST,
               <event_handler>coio_c_nop, NULL)
-    # Make loop() exit immediately of only EVLIST_INTERNAL events
-    # were added. Add EVLIST_INTERNAL after event_set.
     sigusr2_ev.ev_flags |= EVLIST_INTERNAL
     event_add(&sigusr2_ev, NULL)
 
@@ -1898,6 +1913,7 @@ cdef class nblimitreader:
         cdef Py_ssize_t delta
         if self.limit == 0:
             return ''
+        delta = 0
         buf = nbfile_readline_stripend_with_limit(self.f, self.limit, &delta)
         if buf:
             self.limit -= delta
@@ -3013,6 +3029,10 @@ cdef void HandleCSleepWakeup(int fd, short evtype, void *arg) with gil:
 def sleep(double duration):
     """Non-blocking drop-in replacement for time.sleep.
 
+    Please note that sleep() (unlike time.sleep()) is not aborted by a signal.
+
+    Return value:
+
     * If sleeping_tasklet.raise_exception(...) or sleeping_tasklet.kill()
       was called while sleeping, then cancel the sleep and raise that
       exception.
@@ -3378,6 +3398,9 @@ cdef class signal_event:
         if signum == SIGINT and sigint_ev.ev_flags != 0:
             event_del(&sigint_ev)
             sigint_ev.ev_flags = 0
+        if signum == SIGUSR1 and sigusr1_ev.ev_flags != 0:
+            event_del(&sigusr1_ev)
+            sigusr1_ev.ev_flags = 0
         # Prevent automatic __dealloc__. So we don't have to def __dealloc__.
         Py_INCREF(self)
         Py_INCREF(handler)
@@ -3414,6 +3437,14 @@ def signal(int signum, object handler):
     """
     cdef event_t *ev
     signum_obj = signum
+
+    if signum == SIGUSR1:
+        event_del(&sigusr1_ev)
+        sigusr1_ev.ev_flags = 0
+    elif signum == SIGUSR2:
+        event_del(&sigusr2_ev)
+        sigusr2_ev.ev_flags = 0
+
     # TODO(pts): Make Pyrex call `get' as a PyDictObject.
     signal_event_obj = signal_events.get(signum_obj)
     if signal_event_obj is None:
