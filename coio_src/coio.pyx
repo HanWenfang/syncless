@@ -17,6 +17,7 @@ elif coio_event_init() != 0:
   raise OSError(EIO, 'event_init failed')
 
 _setup_sigint()
+_setup_sigusr1()
 _setup_sigusr2()
 
 # Don't publish it, as a safety for read-only.

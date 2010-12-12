@@ -7,6 +7,17 @@ This client supports command editing (with the readline module) if connecting
 to a RemoteConsole server. This is the most important feature over pure
 telnet(1).
 
+This client doesn't need Syncless to be installed on the client machine.
+
+The pid:<pid> startup mode of this client client works without a
+RemoteConsole server if <pid> is the process ID of a Python process running
+a Syncless application. Example client invocation:
+
+  $ python -m syncless.backdoor_client pid:12345
+
+To use the pid:<pid> startup mode, the server must run with the same UID as
+the backdoor_client, even if backdoor_client is running as root.
+
 Example startup of the RemoteConsole server:
 
   $ python -m syncless.remote_console 5454
@@ -25,10 +36,13 @@ TODO(pts): See more on http://code.google.com/p/syncless/wiki/Console .
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
+import re
 import os
 import select
+import signal
 import socket
 import sys
+import time
 import types
 
 class ReadBuffer(object):
@@ -123,6 +137,7 @@ def CopyBetweenSocketAndStdinAndStdout(sock):
     return 3
   return 0
 
+
 def BackdoorClient(sock):
   """Runs the backdoor client, returns on EOF, doesn't close sock."""
 
@@ -203,17 +218,56 @@ def main(argv):
                                        argv[1] == '--help'):
     print >>sys.stderr, (
         'Usage: %s [[<host>] <tcp-port>]\n'
+        'Usage: %s pid:<pid>\n'
         'Default <host> is 127.0.0.1, other useful: 0.0.0.0.\n'
-        'Default <tcp-port> is 5454.' % argv[0])
+        'Default <tcp-port> is 5454.' % [argv[0], argv[0]])
     sys.exit(1)
-  if len(argv) > 2:
-    host = argv[1]
+  pid = host = port = None
+  if len(argv) == 2 and argv[1].startswith('pid:'):
+    pid = int(argv[1][4:])
+    assert pid > 1
+    print >>sys.stderr, 'info: connecting to PID %d' % pid
+    count = None
+    while True:
+      # TODO(pts): Prevent listing of CLOSE_WAIT TCP ports on the Mac OS X,
+      # which is slow.
+      #
+      # This has been tested on Linux and the Mac OS X. `lsof' would display
+      # filename + ' (deleted)' (on Linux) or '/private' + filename (on Mac
+      # OS X).
+      f = os.popen('exec lsof -a -n -p%d -b -w -d 0-1999999999' % pid)
+      try:
+        data = f.read()
+      finally:
+        f.close()
+      matches = re.findall(
+          r'/syncless[.]console[.]port[.]([1-9]\d{0,4})\s', data)
+      assert len(matches) < 2, 'multiple syncless console ports found'
+      if matches:
+        host = '127.0.0.1'
+        port = int(matches[0])
+        break
+      if count is None:
+        print >>sys.stderr, 'info: sending SIGUSR1 to PID %d' % pid
+        try:
+          os.kill(pid, signal.SIGUSR1)
+        except OSError, e:
+          if e[0] != errno.EPERM:
+            raise
+          assert 0, 'no permission to send signal -- do UIDs match?'
+        count = 30
+      assert count, 'PID %d is not responding, giving up'
+      count -= 1
+      time.sleep(0.1)
   else:
-    host = '127.0.0.1'
-  if len(argv) > 1:
-    port = int(argv[-1])
-  else:
-    port = 5454
+    if len(argv) > 2:
+      host = argv[1]
+    else:
+      host = '127.0.0.1'
+    if len(argv) > 1:
+      port = int(argv[-1])
+    else:
+      port = 5454
   sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
   print >>sys.stderr, 'info: connecting to backdoor %r' % ((host, port),)
   try:

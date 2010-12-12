@@ -21,12 +21,22 @@ Although snycless.remote_console can be used as a script alone (see
 console connections, it's even more useful as part of a real server
 application, for debugging, e.g.
 
-  import stackless
   from syncless import coio
   from syncless import remote_console
-  stackless.tasklet(remote_console.RemoteConsoleListener)('127.0.0.1', 5454)
+  coio.stackless.tasklet(
+      remote_console.RemoteConsoleListener)('127.0.0.1', 5454)
   for i in xrange(100):
     coio.sleep(1)
+
+Or, even better, all Syncless applications start a RemoteConsole
+automatically when they receive a SIGUSR1 (without further configuration).
+Use syncless/backdoor_client.py to send this SIGUSR1, and connect to the
+RemoteConsole of any Syncless application. Please note that this automatice
+RemoteConsole creation is safe, because it accepts connections on 127.0.0.1,
+and only from the same UID. To disable this functionality, call
+
+  from syncless import coio
+  coio.signal(signal.SIGUSR1, None)
 
 Then, a client connection (see ``Example client connection'' above) can
 examine the state of the server, e.g.
@@ -47,10 +57,10 @@ TODO(pts): See more on http://code.google.com/p/syncless/wiki/Console .
 """
 
 import code
+import errno
 import logging
 import os
 import socket
-import stackless
 import sys
 import types
 from syncless import coio
@@ -178,8 +188,33 @@ class RemoteConsole(code.InteractiveConsole):
       pass
 
 
-def RemoteConsoleHandler(sock, saddr):
+def HasTcpPeerUid(peer_name, uid):
+  """Return true if the specified UID as the specified TCP peer open.
+  
+  Root (UID 0) is also accepted instead of uid.
+  
+  Please note that multiple users might have the same TCP peer open. This
+  function returns True if uid is one of them.
+  """
+  if peer_name[0] != '127.0.0.1':
+    return False
+  f = coio.popen(
+      'exec lsof -a -n -i4TCP@127.0.0.1:%d -u%d' % (peer_name[1], uid))
+  try:
+    data = f.read()
+  finally:
+    status = f.close()
+  return not status and ('TCP 127.0.0.1:%d->' % peer_name[1]) in data
+
+
+def RemoteConsoleHandler(sock, saddr, do_check_uid):
   """Handle a RemoteConsole client connection."""
+  # Please note that we can't allow anyone else other than os.geteuid(), not
+  # even root, because lsof(1) used by HasTcpPeerUid cannot list other user's
+  # files, so HasTcpPeerUid would return false anyway.
+  if do_check_uid and not HasTcpPeerUid(saddr, os.geteuid()):
+    sock.close()
+    return
   # Set the buffer size to 0 (autoflush).
   if hasattr(sock, 'makefile_samefd'):
     f = sock.makefile_samefd('r+', 0)
@@ -217,8 +252,37 @@ def RemoteConsoleListener(bind_addr, bind_port):
   server_socket.listen(16)
   while True:
     sock, saddr = server_socket.accept()
-    stackless.tasklet(RemoteConsoleHandler)(sock, saddr)
+    coio.stackless.tasklet(RemoteConsoleHandler)(
+        sock, saddr, do_check_uid=False)
     sock = saddr = None  # Save memory, allow early close.
+
+def SilentConsoleListener(server_socket):
+  while True:
+    sock, saddr = server_socket.accept()
+    coio.stackless.tasklet(RemoteConsoleHandler)(
+        sock, saddr, do_check_uid=True)
+    sock = saddr = None  # Save memory, allow early close.
+
+console_signal_server = []
+
+def ConsoleSignalHandler(signum=None):
+  """This is called by coio on SIGUSR1."""
+  if not console_signal_server:
+    console_server_socket = coio.nbsocket(socket.AF_INET, socket.SOCK_STREAM)
+    console_server_socket.bind(('127.0.0.1', 0))
+    console_server_socket.listen(16)
+    filename = '/tmp/syncless.console.port.%s' % (
+        console_server_socket.getsockname()[1])
+    f = open(filename, 'a')
+    try:
+      os.unlink(filename)
+    except OSError, e:
+      if e[0] != errno.ENOENT:  # It's OK if the file was missing.
+        raise
+    coio.stackless.tasklet(SilentConsoleListener)(console_server_socket)
+    console_signal_server[:] = [console_server_socket, f]
+    # We just don't close f, so `lsof' would display filename + ' (deleted)'
+    # (on Linux) or '/private' + filename (on Mac OS X).
 
 
 def main(argv):

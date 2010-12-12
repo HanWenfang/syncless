@@ -440,7 +440,7 @@ provides an interactive console, a non-blocking replacement for python -i
   gevent: no
   Syncless: yes++, with built-in help and demos
   circuits: no
-provides a remote (TCP, telnet) interactive Python console
+provides a remote (TCP, telnet) interactive Python console backdoor
   Concurrence: no
   Eventlet: no
   Tornado: no
@@ -457,6 +457,15 @@ provides a remote (TCP, telnet) interactive Python console with line editing
   asyncore: no
   gevent: yes
   Syncless: yes
+  circuits: no
+provides a safe interactive Python console enabled by default
+  Concurrence: no
+  Eventlet: no
+  Tornado: no
+  Twisted: no
+  asyncore: no
+  gevent: no
+  Syncless: yes, use stackless/backdoor_client.py --pid:PID to connect
   circuits: no
 can use a non-blocking, high performance MySQL client
   Concurrence: yes, built-in
