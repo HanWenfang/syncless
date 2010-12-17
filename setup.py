@@ -58,6 +58,7 @@ from distutils import log
 from distutils.ccompiler import CCompiler
 from distutils.ccompiler import new_compiler
 from distutils.command.build import build
+from distutils.command.build_ext import build_ext
 from distutils.core import Command
 from distutils.core import Extension
 from distutils.core import setup
@@ -85,12 +86,15 @@ class MyBuild(build):
 
   sub_commands = [
       ('build_install_greenlet', lambda *args: True),
-      ('build_ext_dirs', build.has_ext_modules),
       ] + build.sub_commands + [
       ('build_ext_symlinks', build.has_ext_modules),
       ('build_src_symlinks', has_sources)]
 
-#print MyBuild.sub_commands
+class MyBuildExt(build_ext):
+  def run(self):
+    if self.extensions:
+      self.run_command('build_ext_dirs')
+      build_ext.run(self)
 
 def GetUrlAndUserFromSvn(svn_client_dir):
   """Return (svn_url, svn_user)."""
@@ -891,6 +895,7 @@ setup(name='syncless',
       cmdclass = {'build': MyBuild,
                   'build_install_greenlet': MyBuildInstallGreenlet,
                   'build_ext_dirs': MyBuildExtDirs,
+                  'build_ext': MyBuildExt,
                   'build_ext_symlinks': MyBuildExtSymlinks,
                   'build_src_symlinks': MyBuildSrcSymlinks,
                   'upload': MyUpload,
