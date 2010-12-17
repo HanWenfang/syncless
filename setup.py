@@ -45,11 +45,9 @@ if 'bdist_egg' in sys.argv:
   # This is when we're executed by easy_install.
   # Example sys.argv: ['.../setup.py', '-q', 'bdist_egg', '--dist-dir', '.../egg-dist-tmp-AEgKbo']
   import setuptools
-  i = sys.argv.index('bdist_egg')
-  sys.argv[i : i] = ['build_ext_dirs']
-  # We don't do anything if setuptools is loaded (i.e. setup.py is started
-  # by easy_install), because install_requires=[...] below will take care
-  # of installing greenlet.
+  # We don't download anything if setuptools is loaded (i.e. setup.py is
+  # started by easy_install), because install_requires=[...] below will take
+  # care of installing greenlet.
   if not have_stackless and not have_good_greenlet:
     have_greenlet = have_good_greenlet = True
     install_requires.append('greenlet>=0.3.1')
