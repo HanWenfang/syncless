@@ -1280,6 +1280,8 @@ Planned features
   that they are required not to fail if a client chooses to pipeline
   requests.
 * TODO(pts): Compare speed with http://github.com/william-os4y/fapws3
-  only WSGI; WSGI module implemented in C; uses libev; very fast?
+  only WSGI; WSGI module implemented in C; uses libev; very fast?;
+  reads the whole POST request to memory (and makes it available with
+  cStringIO)
 
 __EOF__
