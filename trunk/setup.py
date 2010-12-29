@@ -317,7 +317,7 @@ def run_test(test_file, is_tty):
 def run_tests(test_dir, is_tty):
   test_files = sorted(
       os.path.join(test_dir, entry) for entry in os.listdir(test_dir)
-      if entry.endswith('_test.py'))
+      if entry.endswith('_test.py') and not entry.startswith('.'))
   tests_failed = []
   start_at = time.time()
   for test_file in test_files:
