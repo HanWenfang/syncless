@@ -127,7 +127,11 @@ class WsgiTest(unittest.TestCase):
 
   def testSingleTooLongRequest(self):
     a, b = coio.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-    b.sendall('GET / HTTP/1.0\r\n' + 'Xy: Z\r\n' * 4714)
+    max_size = min(coio.max_nonblocking_pipe_write_size, 33333)
+    request = 'GET / HTTP/1.0\r\n'
+    request += 'Xy: Z\r\n' * ((max_size - len(request)) / 7)
+    assert len(request) < max_size
+    b.sendall(request)
     b.shutdown(1)
     CallWsgiWorker(a)
     try:

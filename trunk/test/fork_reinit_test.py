@@ -65,7 +65,7 @@ def RunWorker(sock_in, sock_out, max_size):
 
 class ForkReinitTest(unittest.TestCase):
 
-  MAX_SIZE = 20000
+  MAX_SIZE = min(coio.max_nonblocking_pipe_write_size, 20000)
   """Maximum line length in bytes to send up to."""
 
   def testWithoutPatch(self):

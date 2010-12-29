@@ -346,6 +346,17 @@ def nonblocking_loop_for_tests():
 
 # --- Utility functions
 
+import sys
+
+# Maximum number of bytes that can be written to a pipe (or socket) without
+# blocking if nobody is reading on the other end.
+cdef int c_max_nonblocking_pipe_write_size
+if sys.platform == 'linux2':
+  c_max_nonblocking_pipe_write_size = 65536  # Measured maximum on Linux 2.6.34 i386 is 112448
+else:
+  c_max_nonblocking_pipe_write_size = 8192   # Measured maximum on Mac OS X 10.5.0 is 8192
+max_nonblocking_pipe_write_size = c_max_nonblocking_pipe_write_size
+
 cdef int connect_tv_magic_usec
 connect_magic_usec = 120
 
