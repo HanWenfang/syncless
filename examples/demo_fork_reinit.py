@@ -78,7 +78,7 @@ if __name__ == '__main__':
   #select_function = select.select
 
   #a, b = socket.socketpair()
-  max_size = 20000
+  max_size = min(coio.max_nonblocking_pipe_write_size, 20000)
   # So we don't lose characters when writing the output to a file.
   EnableAppendMode(sys.stdout)
   EnableAppendMode(sys.stderr)
