@@ -130,7 +130,7 @@ class WsgiTest(unittest.TestCase):
     max_size = min(coio.max_nonblocking_pipe_write_size, 33333)
     request = 'GET / HTTP/1.0\r\n'
     request += 'Xy: Z\r\n' * ((max_size - len(request)) / 7)
-    assert len(request) < max_size
+    assert len(request) <= max_size
     b.sendall(request)
     b.shutdown(1)
     CallWsgiWorker(a)
