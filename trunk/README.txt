@@ -10,7 +10,7 @@ Syncless is a non-blocking (asynchronous) concurrent client and server
 socket network communication library for Stackless Python 2.6 (and also for
 regular Python with greenlet). For high speed, Syncless uses libev (and
 libevent) for event notification, and parts of Syncless' code is implemented
-in Pyrex/Cython and C. This alone makes Syncless faster than many of its
+in Pyrex/Cython and C. This alone makes Syncless faster than many other
 non-blocking network libraries for Python. Syncless contains an asynchronous
 DNS resolver (using evdns) and a HTTP server capable of serving WSGI
 applications. Syncless aims to be a coroutine-based alternative of
@@ -724,8 +724,8 @@ A11. Not at the moment, since the main event loop of these GUI frameworks doesn'
      to make Syncless support these main event loops instead of libevent.
 
 Q12. Is it possible to use stacklessocket, asyncore, pyevent,
-     python-libevent, Tornado, Twisted, circuits or another event-driven network
-     library with Syncless?
+     python-libevent, Tornado, Twisted, circuits or another event-driven
+     network library with Syncless?
 
 A12. Tornado (with its own main loop) is already supported with
      patch.patch_tornado(). See also examples/demo_tornado.py . Please note
@@ -971,12 +971,13 @@ Q23. Does Syncless work on Microsoft Windows?
 
 A23. As of now, Windows support is not implemented. Since that would be
      a considerably large piece of work, and it has low priority for the
-     Syncless developers, Windows support probably never be implemented.
+     Syncless developers, Windows support will probably never be implemented.
 
      Currently you need a recent Unix system to run Syncless. It should work
-     on Linux, FreeBSD, NetBSD, OpenBSD, Mac OS X and Solaris. If you have a
-     desktop or server Unix system on which Syncless doesn't compile or work
-     properly, please let us know, so we can fix it.
+     on Linux (works on 2.6), FreeBSD, NetBSD, OpenBSD, Mac OS X (works on
+     10.5) and Solaris. If you have a desktop or server Unix system on which
+     Syncless doesn't compile or work properly, please let us know, so we
+     can fix it.
 
 Q24. What are the dependencies of Syncless?
 
@@ -1149,7 +1150,7 @@ A25. Yes, it's in the syncless.remote_console module. You can start the
 
 Q26. Does Syncless support WebSocket connections?
 
-     There is no-built in support WebSocket clients, but you can use e.g.
+A26. There is no-built in support WebSocket clients, but you can use e.g.
      patch_socket() and the pywebsocket reference implementation.
 
      The syncless.wsgi module has support built-in for WebSocket servers.
@@ -1163,13 +1164,40 @@ Q26. Does Syncless support WebSocket connections?
 
 Q27. Does Syncless have unit tests?
 
-     Yes, they are test/*_test.py . You can run all of them them and get a
+A27. Yes, they are test/*_test.py . You can run all of them them and get a
      summary with
 
        $ stackless2.6 ./setup.py build test
 
      Please note that test coverage is far smaller than 100%: some methods
      and some classes are not covered at all.
+
+Q28. Syncless is too slow! How do I make my Syncless-based application run
+     faster?
+
+A28. Syncless is designed to be very fast compared to Python's built-in
+     file and socket.socket, and also to other coroutine-based socket
+     implementations.
+
+     If your program is too slow, first make sure that you use Syncless with
+     libev or libevent2. The backend libevent1 is a bit slower than
+     libevent2, and the backend minievent is very slow (because it's
+     optimized for portability, and not for speed). Also make sure that you
+     are using Syncless with Stackless Python (instead of greenlet), because
+     with greenlet Syncless emulates Stackless Python very slowly (see
+     stackless/greenstackless.py).
+
+     If your program uses Syncless with libev (or libevent2) and Stackess
+     Python, and it's still too slow, then please check if it gets faster by
+     using Python's built-in file and socket.socket classes (or an
+     alternative like gevent) instead. If Syncless is slower than the
+     others, then please report this as a bug at
+     http://code.google.com/p/syncless/issues/entry . The performance of
+     Syncless is a high priority for us, and we are eager to fix performance
+     bugs.
+
+     If you know of benchmark (no matter if Syncless fast or slow in it),
+     please let the author of Syncless know.
 
 Links
 ~~~~~
