@@ -2,6 +2,10 @@ recursive-include greenlet_stackless *.py
 recursive-include examples *.pem *.py
 recursive-include test *.py
 recursive-include coio_src *.c *.h *.py *.pyx *.pxi
+# We need to include at least one file from benchmark, because setup.py
+# expects the benchmark directory to be present.
+recursive-include benchmark README.txt
 #prune examples/sample?/build
 #prune ptsevent
 prune */syncless
+# SUXX: no effect for .#*: recursive-exclude test .*
