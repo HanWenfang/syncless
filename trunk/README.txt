@@ -60,6 +60,32 @@ Features
 * WebSocket server API in the WSGI server module
 * HTTP/1.1 request pipelining
 
+Trying out Syncless (the fastest way)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+On Linux, it's possible to try Syncless without installation, using the
+StaticPython binary Python distribution, like this:
+
+  $ wget -O stacklessco2.7-static
+  http://pts-mini-gpl.googlecode.com/svn/trunk/staticpython/release/stacklessco2.7-static
+  $ chmod +x stacklessco2.7-static
+  $ ./stacklessco2.7-static
+  Python 2.7.1 Stackless 3.1b3 060516 (release27-maint, Feb  1 2011, 16:57:16) 
+  [GCC 4.1.2] on linux2
+  Type "help", "copyright", "credits" or "license" for more information.
+  >>> from syncless import coio
+  >>> coio.sleep(1.5)
+  (sleeping for 1.5 second)
+  <object object at 0xf7709490>
+  >>>
+
+Limitations:
+
+* This solution requires Linux on x86 (i386) or x86_64 (amd64)
+  architectures. See the subsequent chapters about installation on other
+  systems.
+
+* This solution doesn't give you the newest version of Syncless.
+
 Requirements
 ~~~~~~~~~~~~
 * A recent Unix system. Tested on Linux 2.6, should work on FreeBSD. Testers
