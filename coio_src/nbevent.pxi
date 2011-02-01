@@ -169,7 +169,7 @@ cdef extern from "./coio_c_include_libevent.h":
 
     int EVLOOP_ONCE
     int EVLOOP_NONBLOCK
-    int EVLIST_INTERNAL
+    #int EVLIST_INTERNAL
 
     int c_EV_TIMEOUT "EV_TIMEOUT"
     int c_EV_READ "EV_READ"
@@ -296,6 +296,7 @@ cdef extern from "./coio_c_helper.h":
     int c_SSL_ERROR_WANT_WITE "coio_c_SSL_ERROR_WANT_WRITE"
     int c_SSL_ERROR_EOF "coio_c_SSL_ERROR_EOF"
     void coio_c_nop()
+    void coio_c_set_evlist_internal(event_t *ev)
     object coio_c_call_wrap_bomb(object function, object args, object kwargs,
                                  object bomb_class)
     object coio_c_ssl_call(object function, object args,
@@ -572,7 +573,7 @@ cdef void _setup_sigint():
               HandleCSigInt, NULL)
     # Make loop() exit immediately of only EVLIST_INTERNAL events
     # were added. Add EVLIST_INTERNAL after event_set.
-    sigint_ev.ev_flags |= EVLIST_INTERNAL
+    coio_c_set_evlist_internal(&sigint_ev)
     # This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
     # gets control) a KeyboardInterrupt in the main tasklet.
     event_add(&sigint_ev, NULL)
@@ -587,7 +588,7 @@ sigusr1_ev.ev_flags = 0
 cdef void _setup_sigusr1():
     event_set(&sigusr1_ev, SIGUSR1, c_EV_SIGNAL | c_EV_PERSIST,
               HandleCSigUsr1, NULL)
-    sigusr1_ev.ev_flags |= EVLIST_INTERNAL
+    coio_c_set_evlist_internal(&sigusr1_ev)
     event_add(&sigusr1_ev, NULL)
 
 cdef event_t sigusr2_ev
@@ -597,7 +598,7 @@ sigusr2_ev.ev_flags = 0
 cdef void _setup_sigusr2():
     event_set(&sigusr2_ev, SIGUSR2, c_EV_SIGNAL | c_EV_PERSIST,
               <event_handler>coio_c_nop, NULL)
-    sigusr2_ev.ev_flags |= EVLIST_INTERNAL
+    coio_c_set_evlist_internal(&sigusr2_ev)
     event_add(&sigusr2_ev, NULL)
 
 # The token in waiting_tasklet.tempval to signify that the event-waiting is
@@ -3419,7 +3420,7 @@ cdef class signal_event:
                   HandleCSignal, <void*>handler)
         # Make loop() exit immediately of only EVLIST_INTERNAL events
         # were added. Add EVLIST_INTERNAL after event_set.
-        self.ev.ev_flags |= EVLIST_INTERNAL
+        coio_c_set_evlist_internal(&self.ev)
         event_add(&self.ev, NULL)
 
     def delete(signal_event self):
