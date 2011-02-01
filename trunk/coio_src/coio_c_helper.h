@@ -7,6 +7,19 @@
 
 void coio_c_nop(void) {}
 
+#ifdef COIO_USE_LIBEVENT2
+/* Setting EVLIST_INTERNAL in libevent2 for SIGINT does harm: it delays the
+ * delivery of the SIGINT. So we rather don't do that.
+ */
+static inline void coio_c_set_evlist_internal(struct event *ev) {
+  (void)ev;
+}
+#else
+static inline void coio_c_set_evlist_internal(struct event *ev) {
+  ev->ev_flags |= EVLIST_INTERNAL;
+}
+#endif
+
 /* --- Event pool */
 
 /** Not 16384 to give some space for malloc's linked list headers. */
