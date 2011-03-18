@@ -86,6 +86,10 @@ Limitations:
 
 * This solution doesn't give you the newest version of Syncless.
 
+* You can't use Python extensions written in C, except for those compiled
+  into stacklessco2.7-static. See the full list on the StaticPython home
+  page: http://code.google.com/p/pts-mini-gpl/wiki/StaticPython .
+
 Requirements
 ~~~~~~~~~~~~
 * A recent Unix system. Tested on Linux 2.6, should work on FreeBSD. Testers

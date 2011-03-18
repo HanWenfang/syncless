@@ -432,6 +432,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
   if not hasattr(sock, 'makefile_samefd'):  # isinstance(sock, coio.nbsocket)
     raise TypeError
 
+  EISDIR = errno.EISDIR
   loglevel = logging.root.level
   is_debug = loglevel <= DEBUG
   do_keep_alive_ary = [True]
