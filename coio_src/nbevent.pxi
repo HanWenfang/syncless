@@ -539,6 +539,7 @@ def _main_loop():
                 # so the process will exit (sys.exit(0)).
                 #
                 # !! SUXX: event_loop() of libev never returns true here.
+                #    Also for libevent2 signal handlers prevent this.
                 #
                 # !! SUXX: there are registered events after an evdns lookup.
                 return
@@ -573,6 +574,8 @@ cdef void _setup_sigint():
               HandleCSigInt, NULL)
     # Make loop() exit immediately of only EVLIST_INTERNAL events
     # were added. Add EVLIST_INTERNAL after event_set.
+    # Equivalent to:
+    # sigint_ev.ev_flags |= c_EVLIST_INTERNAL
     coio_c_set_evlist_internal(&sigint_ev)
     # This is needed so Ctrl-<C> raises (eventually, when the main_loop_tasklet
     # gets control) a KeyboardInterrupt in the main tasklet.
@@ -588,6 +591,8 @@ sigusr1_ev.ev_flags = 0
 cdef void _setup_sigusr1():
     event_set(&sigusr1_ev, SIGUSR1, c_EV_SIGNAL | c_EV_PERSIST,
               HandleCSigUsr1, NULL)
+    # Equivalent to:
+    # sigusr1_ev.ev_flags |= c_EVLIST_INTERNAL
     coio_c_set_evlist_internal(&sigusr1_ev)
     event_add(&sigusr1_ev, NULL)
 
@@ -598,6 +603,8 @@ sigusr2_ev.ev_flags = 0
 cdef void _setup_sigusr2():
     event_set(&sigusr2_ev, SIGUSR2, c_EV_SIGNAL | c_EV_PERSIST,
               <event_handler>coio_c_nop, NULL)
+    # Equivalent to:
+    # sigusr2_ev.ev_flags |= c_EVLIST_INTERNAL
     coio_c_set_evlist_internal(&sigusr2_ev)
     event_add(&sigusr2_ev, NULL)
 
@@ -3392,19 +3399,19 @@ cdef class wakeup_info:
 
 # --- Signal support for Twisted 10.0.0
 
-# Map signal signums to signal_event objects.
-cdef dict signal_events
-signal_events = {}
+# Map signal signums to signal_handler_event objects.
+cdef dict signal_handler_events
+signal_handler_events = {}
 
 cdef void HandleCSignal(int signum, short evtype, void *arg) with gil:
     (<object>arg)(signum)  # Call with the signal number.
-    # Since this functions returns `void', Pyrex prints and ignores
-    # exceptions.
+    # Since this functions returns `void', Pyrex briefly prints and then
+    # ignores exceptions.
 
-cdef class signal_event:
+cdef class signal_handler_event:
     cdef event_t ev
 
-    def __cinit__(signal_event self, int signum, object handler):
+    def __cinit__(signal_handler_event self, int signum, object handler):
         if not callable(handler):
             raise TypeError('signal handler not callable')
         if signum == SIGINT and sigint_ev.ev_flags != 0:
@@ -3413,17 +3420,21 @@ cdef class signal_event:
         if signum == SIGUSR1 and sigusr1_ev.ev_flags != 0:
             event_del(&sigusr1_ev)
             sigusr1_ev.ev_flags = 0
-        # Prevent automatic __dealloc__. So we don't have to def __dealloc__.
+        # Prevent automatic __dealloc__ so self.ev will not disappear while
+        # it's event_add()ed. Having done that we don't have to def
+        # __dealloc__.
         Py_INCREF(self)
         Py_INCREF(handler)
         event_set(&self.ev, signum, c_EV_SIGNAL | c_EV_PERSIST,
                   HandleCSignal, <void*>handler)
-        # Make loop() exit immediately of only EVLIST_INTERNAL events
+        # Make loop() exit immediately if only EVLIST_INTERNAL events
         # were added. Add EVLIST_INTERNAL after event_set.
+        # Equivalent to:
+        # self.ev.ev_flags |= c_EVLIST_INTERNAL
         coio_c_set_evlist_internal(&self.ev)
         event_add(&self.ev, NULL)
 
-    def delete(signal_event self):
+    def delete(signal_handler_event self):
         cdef int signum
         if self.ev.ev_flags != 0:
             signum = self.ev.ev_fd
@@ -3431,12 +3442,22 @@ cdef class signal_event:
             event_del(&self.ev)
             self.ev.ev_flags = 0
             Py_DECREF(self)  # Corresponding to __cinit__.
-            signal_events.pop(self, None)
+            signal_handler_events.pop(self, None)
             if signum == SIGINT and sigint_ev.ev_flags == 0:
                 _setup_sigint()
+            # By design, don't take action on SIGUSR1 or SIGUSR2 here.
 
 def signal(int signum, object handler):
     """Register or unregister a signal handler.
+
+    Please note that for compatibility with signal.signal, there can be only
+    one signal handler installed for a signal number. Subsequent calls to
+    the signal function with with the same signum would overwrite the signal
+    handler. If you need multiple signal handlers to get called, please use
+    the signal_handler_event class defined in this module.
+
+    Please note that resetting signal.SIGINT to None would restore the
+    default handler raising KeyboardInterrupt.
 
     Args:
       signum: Positive signal number (e.g. signal.SIGINT). Unchecked.
@@ -3445,7 +3466,7 @@ def signal(int signum, object handler):
         times as it gets received. Exceptions raised by the handler are printed
         briefly (without a traceback), and get ignored.
     Returns:
-      The resulting signal_event object or None if unregistered.
+      The resulting signal_handler_event object or None if unregistered.
     """
     cdef event_t *ev
     signum_obj = signum
@@ -3458,21 +3479,21 @@ def signal(int signum, object handler):
         sigusr2_ev.ev_flags = 0
 
     # TODO(pts): Make Pyrex call `get' as a PyDictObject.
-    signal_event_obj = signal_events.get(signum_obj)
-    if signal_event_obj is None:
+    signal_handler_event_obj = signal_handler_events.get(signum_obj)
+    if signal_handler_event_obj is None:
         if handler is not None:
-            signal_event_obj = signal_event(signum, handler)
-            signal_events[signum_obj] = signal_event_obj
-            return signal_event_obj
+            signal_handler_event_obj = signal_handler_event(signum, handler)
+            signal_handler_events[signum_obj] = signal_handler_event_obj
+            return signal_handler_event_obj
     elif handler is None:
-        (<signal_event>signal_event_obj).delete()
-        del signal_events[signum_obj]
+        (<signal_handler_event>signal_handler_event_obj).delete()
+        del signal_handler_events[signum_obj]
     else:
-        ev = &(<signal_event>signal_event_obj).ev
+        ev = &(<signal_handler_event>signal_handler_event_obj).ev
         Py_DECREF(<object>ev.ev_arg)
         Py_INCREF(handler)
         ev.ev_arg = <void*>handler
-        return signal_event_obj
+        return signal_handler_event_obj
 
 # --- Concurrence 0.3.1 support
 #

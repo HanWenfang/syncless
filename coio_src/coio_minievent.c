@@ -46,7 +46,13 @@ static struct event minievent_head = {
 };
 static struct event *minievent_loop_ev = NULL;
 
-static volatile long minievent_got_signal_mask = 0;
+/* TODO(pts): Use long long if available to store more than 8 & sizeof(long)
+ * signals. But would that be atomic? maybe store an array of ints or chars
+ * instead.
+ */
+typedef unsigned minievent_signal_mask_t;
+
+static volatile minievent_signal_mask_t minievent_got_signal_mask = 0;
 
 /* TODO(pts): Make sure this is Python-safe (?). */
 static void minievent_signal_handler(int signum) {
@@ -109,6 +115,11 @@ int event_add(struct event *ev, const struct timeval *tv) {
       abort();
     }
     sa.sa_handler = minievent_signal_handler;
+    /* Please note that even with SA_RESTART, so system calls (such as
+     * select(2), nanosleep(2), pause(2) and socket operations with
+     * SO_RECVTIMEO or SO_SNDTIMEO) will still get an EINTR. See
+     * `man 7 signal' on Linux for details.
+     */
     sa.sa_flags = (ev->ev_fd == SIGCHLD) ? SA_NOCLDSTOP | SA_RESTART
                                          : SA_RESTART;
     sigemptyset(&sa.sa_mask);
@@ -146,7 +157,7 @@ int event_del(struct event *ev) {
     sa.sa_flags = (ev->ev_fd == SIGCHLD) ? SA_NOCLDSTOP | SA_RESTART
                                          : SA_RESTART;
     sigemptyset(&sa.sa_mask);
-    sigaction(/*signum:*/ev->ev_fd, &sa, NULL);  /* Ingore return value. */
+    sigaction(/*signum:*/ev->ev_fd, &sa, NULL);  /* Ignore return value. */
   }
   if (ev->evx_prev != NULL)
     ev->evx_prev->evx_next = ev->evx_next;
@@ -164,14 +175,14 @@ int event_del(struct event *ev) {
  */
 int event_loop(int flags) {
   struct event *ev;
-  int got, maxfd;
+  int got, maxfd, got_errno;
   int non_internal_event_count;
   fd_set readfds;
   fd_set writefds;
   fd_set exceptfds;
   struct timeval tv;
   struct timeval now;
-  long interesting_signal_mask;
+  minievent_signal_mask_t interesting_signal_mask;
   MINIEVENT_DEBUG((stderr, "ddd enter flags=%d\n", flags));
   if ((flags & EVLOOP_NONBLOCK) && !(flags & EVLOOP_ONCE)) {
     fprintf(stderr, "minievent: EVLOOP_NONBLOCK but not EVLOOP_ONCE\n");
@@ -183,8 +194,10 @@ int event_loop(int flags) {
   }
   do {
     ev = minievent_head.evx_next;
-    if (ev == &minievent_head)
+    if (ev == &minievent_head) {
+      MINIEVENT_DEBUG((stderr, "ddd no events registered\n"));
       return 1;  /* No events registered. */
+    }
     maxfd = -1;
     FD_ZERO(&readfds);
     FD_ZERO(&writefds);
@@ -196,7 +209,7 @@ int event_loop(int flags) {
       tv.tv_usec = 0;
     }
     interesting_signal_mask = 0;
-    non_internal_event_count = 0;
+    non_internal_event_count = 0;  /* this would be smarter, but not compatible with libevent-1.4.13: = (flags & EVLOOP_NONBLOCK) != 0; */
     for (; ev != &minievent_head; ev = ev->evx_next) {
       int fd = ev->ev_fd;
       if (ev->ev_events & EV_READ) {
@@ -221,17 +234,31 @@ int event_loop(int flags) {
       if (!(ev->ev_flags & EVLIST_INTERNAL))
         ++non_internal_event_count;
     }
-    if (0 == non_internal_event_count)
+    /* This doesn't make sense here, but we keep it for libevent 1.4.13
+     * compatibility. The helper sleep tasklet in testSignalHandlerEvent
+     * would not be necessary if we didn't return here.
+     */
+    if (0 == non_internal_event_count) {
+      MINIEVENT_DEBUG((stderr, "ddd all events are internal\n"));
       return 1;
+    }
     if (minievent_got_signal_mask & interesting_signal_mask)
       tv.tv_sec = tv.tv_usec = 0;  /* Don't wait: signal is ready. */
     MINIEVENT_DEBUG((stderr, "ddd expire %ld %ld\n", tv.tv_sec, tv.tv_usec));
     if (tv.tv_sec == MINIEVENT_HIGH_SEC) {
       /* TODO(pts): Use poll(2) if available (on Unix, it is) */
+      /* select(2) returns an EINTR if a signal was received while select(2)
+       * was blocking, even if the signal handler was installed with
+       * SA_RESTART. See `man 7 signal' on Linux for more information. This
+       * is good for us here, because by select returning early we can
+       * deliver the EV_SIGNAL events early.
+       */
       got = select(maxfd + 1, &readfds, &writefds, &exceptfds, NULL);
     } else {
-      if (gettimeofday(&now, NULL) != 0)
+      if (gettimeofday(&now, NULL) != 0) {
+        MINIEVENT_DEBUG((stderr, "ddd gettimeofday1: %s\n", strerror(errno)));
         return -1;
+      }
       tv.tv_sec = tv.tv_sec - now.tv_sec;
       tv.tv_usec = tv.tv_usec - now.tv_usec;
       MINIEVENT_FIX_TV_AFTER_SUBTRACT(tv);
@@ -239,17 +266,25 @@ int event_loop(int flags) {
         tv.tv_sec = tv.tv_usec = 0;
       MINIEVENT_DEBUG((stderr, "ddd timeout %ld %ld\n", tv.tv_sec, tv.tv_usec));
       got = select(maxfd + 1, &readfds, &writefds, &exceptfds, &tv);
-      /* select() may modift tv.tv_sec, but we don't care since it won't
-       * ever become tv.tv_sec.
+      /* select() may modify tv.tv_sec, but we don't care since it won't
+       * ever become the old value of tv.tv_sec.
        */
     }
+    got_errno = errno;
     MINIEVENT_DEBUG((stderr, "ddd select got %d\n", got));
-    if (got < 0 && errno != EINTR)
+    if (got < 0 && got_errno != EINTR) {
+      MINIEVENT_DEBUG((stderr, "ddd select: %s\n", strerror(errno)));
       return -1;
+    }
     if (got > 0 || tv.tv_sec != MINIEVENT_HIGH_SEC) {
-      if (gettimeofday(&now, NULL) != 0)
+      if (gettimeofday(&now, NULL) != 0) {
+        MINIEVENT_DEBUG((stderr, "ddd gettimeofday1: %s\n", strerror(errno)));
         return -1;
-      MINIEVENT_DEBUG((stderr, "ddd now %ld %ld\n", now.tv_sec, now.tv_usec));
+      }
+      interesting_signal_mask = minievent_got_signal_mask;
+      MINIEVENT_DEBUG((stderr, "ddd now %ld %ld signal_mask=0x%lx\n",
+                       now.tv_sec, now.tv_usec,
+                       (unsigned long)interesting_signal_mask));
       for (ev = minievent_head.evx_next;
            ev != &minievent_head;
            ev = minievent_loop_ev) {
@@ -260,7 +295,7 @@ int event_loop(int flags) {
         short events = ev->ev_events;
         short got_events =
             events & EV_SIGNAL ?
-                ((minievent_got_signal_mask & 1L << fd) ? EV_SIGNAL : 0) :
+                ((interesting_signal_mask & 1L << fd) ? EV_SIGNAL : 0) :
             events == 0 ? 0 :  /* A pure timeout event. */
             FD_ISSET(fd, &exceptfds) ? (EV_READ | EV_WRITE) :
             ((FD_ISSET(fd, &readfds) ? EV_READ : 0) |
@@ -285,6 +320,9 @@ int event_loop(int flags) {
         } else if (events & EV_SIGNAL) {
           if (got_events & EV_SIGNAL) {
             fire_events = EV_SIGNAL;
+            /* TODO(pts): What if multiple signal handlers are installed?
+             * Should we fire all of them?
+             */
             minievent_got_signal_mask &= ~(1L << fd);
           }
         }
@@ -299,7 +337,7 @@ int event_loop(int flags) {
           } else {
             event_del(ev);
           }
-          MINIEVENT_DEBUG((stderr, "ddd callback %d fev=%d\n", fd, fire_events));
+          MINIEVENT_DEBUG((stderr, "ddd callback fd=%d fev=%d\n", fd, fire_events));
           ev->ev_callback(fd, fire_events, ev->ev_arg);
         } else if (!MINIEVENT_TV_LT(now, ev->ev_expire)) {
           fire_events = EV_TIMEOUT;
@@ -310,5 +348,6 @@ int event_loop(int flags) {
     }
     MINIEVENT_DEBUG((stderr, "ddd processed\n"));
   } while (!(flags & EVLOOP_ONCE));
+  MINIEVENT_DEBUG((stderr, "ddd leave\n"));
   return 0;
 }
