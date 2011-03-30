@@ -737,9 +737,12 @@ def AutoDetect(command_obj):
     if asked_for_libevhdns:
       # TODO(pts): Add support for evhdns here.
       raise LinkError('evhdns does not work yet with libevent2')
+    # event2/event_compat.h in libevent-2.0.10 doesn't contain a prototype
+    # for event_reinit() and event_add() (they are in event2/event.h), so we
+    # don't check for those here.
     if (FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
             includes=['event2/event_compat.h'], library='event',
-            symbols=['event_init', 'event_loop', 'event_reinit']) and
+            symbols=['event_init', 'event_loop']) and
         FindLib(retval=retval, compiler=compiler, prefixes=prefixes,
             includes=['event2/dns.h', 'event2/dns_compat.h'],
             library='event',
