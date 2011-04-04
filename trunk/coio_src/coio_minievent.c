@@ -46,21 +46,31 @@ static struct event minievent_head = {
 };
 static struct event *minievent_loop_ev = NULL;
 
-/* TODO(pts): Use long long if available to store more than 8 & sizeof(long)
- * signals. But would that be atomic? maybe store an array of ints or chars
+/* TODO(pts): Use long long if available to store more than 8 * sizeof(long)
+ * signals. But would that be atomic? Maybe store an array of ints or chars
  * instead.
  */
 typedef unsigned minievent_signal_mask_t;
 
 static volatile minievent_signal_mask_t minievent_got_signal_mask = 0;
 
+static volatile struct timeval minievent_tv;
+
 /* TODO(pts): Make sure this is Python-safe (?). */
 static void minievent_signal_handler(int signum) {
   minievent_got_signal_mask |= 1L << signum;
+  /* Avoid a race condition, i.e. prevent select(2) in event_loop() from
+   * waiting if this signal handler runs earlier than select(2) is called.
+   * Alternatively, to avoid the race conditions, we could use pselect(2)
+   * instead of select(2) to block this signal handler until pselect(2) is
+   * called. The reason why we use select(2) plus this zeroing is that it
+   * seems to be more portable than pselect(2) + sigprocmask(2).
+   */
+  minievent_tv.tv_sec = minievent_tv.tv_usec = 0;
 }
 
 const char *event_get_version(void) {
-  return "0.01";
+  return "0.02";
 }
 const char *event_get_method(void) {
   return "minievent-select";
@@ -242,19 +252,17 @@ int event_loop(int flags) {
       MINIEVENT_DEBUG((stderr, "ddd all events are internal\n"));
       return 1;
     }
-    if (minievent_got_signal_mask & interesting_signal_mask)
-      tv.tv_sec = tv.tv_usec = 0;  /* Don't wait: signal is ready. */
-    MINIEVENT_DEBUG((stderr, "ddd expire %ld %ld\n", tv.tv_sec, tv.tv_usec));
-    if (tv.tv_sec == MINIEVENT_HIGH_SEC) {
-      /* TODO(pts): Use poll(2) if available (on Unix, it is) */
-      /* select(2) returns an EINTR if a signal was received while select(2)
-       * was blocking, even if the signal handler was installed with
-       * SA_RESTART. See `man 7 signal' on Linux for more information. This
-       * is good for us here, because by select returning early we can
-       * deliver the EV_SIGNAL events early.
+    if (minievent_got_signal_mask & interesting_signal_mask) {
+      /* Don't wait, because signal event is ready. */
+      minievent_tv.tv_sec = minievent_tv.tv_usec = 0;
+    } else if (tv.tv_sec == MINIEVENT_HIGH_SEC) {  /* Infinite timeout. */
+      /* Set a very large timeout. Please note that we set tv_usec = 0, to
+       * avoid a race condition with minievent_signal_handler().
        */
-      got = select(maxfd + 1, &readfds, &writefds, &exceptfds, NULL);
+      minievent_tv.tv_sec = 100000;
+      minievent_tv.tv_usec = 0;
     } else {
+      MINIEVENT_DEBUG((stderr, "ddd expire %ld %ld\n", tv.tv_sec, tv.tv_usec));
       if (gettimeofday(&now, NULL) != 0) {
         MINIEVENT_DEBUG((stderr, "ddd gettimeofday1: %s\n", strerror(errno)));
         return -1;
@@ -262,14 +270,29 @@ int event_loop(int flags) {
       tv.tv_sec = tv.tv_sec - now.tv_sec;
       tv.tv_usec = tv.tv_usec - now.tv_usec;
       MINIEVENT_FIX_TV_AFTER_SUBTRACT(tv);
-      if (tv.tv_sec < 0)
-        tv.tv_sec = tv.tv_usec = 0;
-      MINIEVENT_DEBUG((stderr, "ddd timeout %ld %ld\n", tv.tv_sec, tv.tv_usec));
-      got = select(maxfd + 1, &readfds, &writefds, &exceptfds, &tv);
-      /* select() may modify tv.tv_sec, but we don't care since it won't
-       * ever become the old value of tv.tv_sec.
-       */
+      if (tv.tv_sec < 0) {
+        minievent_tv.tv_sec = minievent_tv.tv_usec = 0;
+      } else {
+        minievent_tv = tv;
+        /* Avoid the race condition with minievent_signal_handler(). */
+        if (minievent_got_signal_mask & interesting_signal_mask)
+          minievent_tv.tv_sec = minievent_tv.tv_usec = 0;
+      }
     }
+    MINIEVENT_DEBUG((stderr, "ddd timeout %ld %ld\n",
+                     minievent_tv.tv_sec, minievent_tv.tv_usec));
+    /* select(2) returns an EINTR if a signal was received while select(2)
+     * was blocking, even if the signal handler was installed with
+     * SA_RESTART. See `man 7 signal' on Linux for more information. This
+     * is good for us here, because by select returning early we can
+     * deliver the EV_SIGNAL events early.
+     */
+    /* TODO(pts): Use poll(2) instead of select(2) if available (on Unix,
+     * it is), if it seems to be faster. Another advantage of poll(2) is
+     * that it works with large fd values.
+     */
+    got = select(maxfd + 1, &readfds, &writefds, &exceptfds,
+                 (struct timeval*)&minievent_tv);  /* Cast away volatile. */
     got_errno = errno;
     MINIEVENT_DEBUG((stderr, "ddd select got %d\n", got));
     if (got < 0 && got_errno != EINTR) {
@@ -320,8 +343,10 @@ int event_loop(int flags) {
         } else if (events & EV_SIGNAL) {
           if (got_events & EV_SIGNAL) {
             fire_events = EV_SIGNAL;
-            /* TODO(pts): What if multiple signal handlers are installed?
-             * Should we fire all of them?
+            /* This modification here doesn't contain a race condition,
+             * because we've already made a copy (interesting_signal_mask)
+             * above, and we use the copy to decide which event handlers to
+             * run below.
              */
             minievent_got_signal_mask &= ~(1L << fd);
           }
