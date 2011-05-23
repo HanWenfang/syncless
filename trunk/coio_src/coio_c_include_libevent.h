@@ -11,7 +11,10 @@ static struct event_base *coio_default_base = NULL;
 #include <event2/dns.h>
 #include <event2/dns_compat.h>
 */
-#define FEATURE_MAY_EVENT_LOOP_RETURN_1    1
+/* We set FEATURE_MAY_EVENT_LOOP_RETURN_1 to 0 here because of our
+ * always-registered SIGINT handler, see also in coio_c_set_evlist_internal.
+ */
+#define FEATURE_MAY_EVENT_LOOP_RETURN_1    0
 #define FEATURE_MULTIPLE_EVENTS_ON_SAME_FD 1
 #define coio_event_reinit_low() event_reinit(coio_default_base)
 #define coio_event_init_low() event_init()
