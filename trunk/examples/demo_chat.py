@@ -124,13 +124,17 @@ if __name__ == '__main__':
   patch.patch_stdin_and_stdout()  # sets sys.stdin = sys.stdout = ...
   patch.patch_stderr()  # For fair exeption reporting.
   assert sys.stdin is sys.stdout
+  server_host = ('127.0.0.1')
   port = 1337
-  if len(sys.argv) > 1:
+  if len(sys.argv) > 2:
+    server_host = sys.argv[1]
+    server_port = int(sys.argv[2])
+  elif len(sys.argv) > 1:
     port = int(sys.argv[1])
   broadcast_channel = coio.stackless.channel()
   broadcast_channel.preference = 1  # Prefer the sender.
   coio.stackless.tasklet(BroadcastWorker)()
-  coio.stackless.tasklet(ChatListener)(('127.0.0.1', port))
+  coio.stackless.tasklet(ChatListener)((server_host, port))
   # sys.stdin here can be used for writing, as set up by patch_stdin_and_stdout
   coio.stackless.tasklet(ChatWorker)(sys.stdin, 'console')
   coio.stackless.schedule_remove(None)
