@@ -591,7 +591,6 @@ def patch_gevent(do_emulate_greenlet=None):
     assert getattr(greenlet, 'is_pts_greenlet_emulated', None) is True, (
         'properly emulated greenlet not found')
   else:
-    # !! test this
     greenlet_using_stackless = None
     greenlet = stackless.greenlet
     assert not getattr(greenlet, 'is_pts_greenlet_emulated', None), (
