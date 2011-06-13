@@ -8,6 +8,11 @@ use the existing greenlet module, it also creates the top-level greenlet
 module to be imported by other modules, and it also provides the
 gevent_hub_main() convenience function.
 
+Please note that this emulator has been tested only with native Syncless. It
+most probably doesn't work with enumated Stackless (e.g. stacklesss.py in
+Eventlet, greenstackless.py in Syncless and PyPy's Stackless emulation).
+This emulator doesn't do any checks if it's using native Stackless.
+
 To use this module, replace the first occurrence of your imports:
 
   # Old module import: import greenlet
@@ -15,6 +20,20 @@ To use this module, replace the first occurrence of your imports:
   
   # Old class import: from greenlet import greenlet
   from syncless.greenlet_using_stackless import greenlet
+
+A minimalistic fake stackless module which lets the greenlet_using_stackless
+module be imported without exceptions (but it wouldn't work):
+
+  class FakeTasklet(object):
+    def __init__(self, function):
+      pass
+    def __call__(self, *args, **kwargs):
+      return self
+    def remove(self):
+      pass
+  stackless = sys.modules['stackless'] = type(sys)('stackless')
+  stackless.tasklet = FakeTasklet
+  stackless.current = FakeTasklet(None)
 """
 
 import stackless

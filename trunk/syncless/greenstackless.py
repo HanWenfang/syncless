@@ -18,6 +18,8 @@ Original _syncless.py downloaded from
 http://github.com/toymachine/concurrence/raw/master/lib/concurrence/_stackless.py
 at Thu Jan  7 22:59:54 CET 2010. Then modified and added unit test
 (test/stackless_test.py).
+
+TODO(pts): Emulate greenlet.greenlet.error
 """
 
 # Copyright (C) 2009, Hyves (Startphone Ltd.)

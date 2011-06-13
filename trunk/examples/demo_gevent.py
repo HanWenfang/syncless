@@ -107,6 +107,9 @@ def SetupSyncless():
   coio.stackless.tasklet(ProgressReporter)(0.05)
 
 if __name__ == '__main__':
+  # We need this patch so gevent.hub.spawn_raw below will create a greenlet
+  # of the correct type.
+  patch.patch_gevent()
   server_socket = gevent.socket.socket()
   # Old:
   #   gevent.socket.set_reuse_addr(server_socket)
