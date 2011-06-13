@@ -215,4 +215,8 @@ if __name__ == '__main__':
     else:
       print >>sys.stderr, 'info: using greenlet'
 
+    def testGreenletModule(self):
+      self.assertTrue('greenlet' in sys.modules)
+      self.assertEqual(self.greenlet, sys.modules['greenlet'].greenlet)
+
   unittest.main()

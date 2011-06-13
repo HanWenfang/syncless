@@ -46,6 +46,7 @@ except ImportError:
   except ImportError:
     raise ImportError('either greenlet or stackless required')
   from syncless import greenlet_using_stackless as greenlet
+  __import__('sys').modules['greenlet'] = greenlet
 
 # This is to make `from syncless.best_greenlet.greenlet import greenlet
 # work, where the rightmost greenlet is our greenlet.greenlet below.
