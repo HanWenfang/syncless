@@ -285,6 +285,7 @@ def run_test(test_file, is_tty):
     try:
       try:
         del sys.argv[1:]
+        sys.path[:0] = [os.path.dirname(test_file) or '.']
         import __main__
         import __builtin__
         # TODO(pts): Unload all modules from sys.modules.

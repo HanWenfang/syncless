@@ -1282,6 +1282,8 @@ Syncless. The intended audience is Syncless developers.
 
 Planned features
 ~~~~~~~~~~~~~~~~
+* TODO(pts): Add Socket.IO support (https://github.com/MrJoes/tornadio and
+  gevent-socketio)
 * TODO(pts): Wrap / monkey-patch the multiprocessing module (and its C code in
   _multiprocessing). The _multiprocessing module implemented in C doesn't
   seem to support non-blocking operation.
