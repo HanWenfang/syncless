@@ -7,4 +7,4 @@ This file must be possible to be `exec'ed on its own.
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
-VERSION = '0.21'
+VERSION = '0.23'
