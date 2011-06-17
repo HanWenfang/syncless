@@ -784,6 +784,27 @@ class StacklessTest(unittest.TestCase):
     self.assertEqual(True, stackless.current.is_main)
     self.assertEqual(stackless.main, stackless.current)
 
+  def testTaskletExitOnDelete(self):
+    exits = []
+    def Reporter(parent):
+      exits.append('HI')
+      try:
+        parent.run()
+      except BaseException, e:
+        exits.append(isinstance(e, TaskletExit))
+    tasklets = [stackless.tasklet(Reporter)(stackless.current)]
+    self.assertEqual([], exits)
+    tasklets[-1].run()
+    self.assertEqual(['HI'], exits)
+    tasklets.pop().remove()  # Like del tasklets[0].
+    # TaskletExit is raised when all references to the tasklet go aways.
+    # TODO(pts): Make greenstackless.py pass. Currently it fails with:
+    #            AssertionError: ['HI', True] != ['HI']
+    #            This means that greenstackless.py holds to many auxiliary
+    #            references to its emulated tasklet object, so Python won't
+    #            notice that the object now can deleted.
+    self.assertEqual(['HI', True], exits)
+    
 
 if __name__ == '__main__':
   unittest.main()
