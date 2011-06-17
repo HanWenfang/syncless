@@ -204,6 +204,188 @@ class Template(object):
       finally:
         dummy_tasklet.kill()
 
+    def testSwitchToParent(self):
+      greenlet1 = self.greenlet(lambda x=None: 'P:' + repr(x))
+      greenlet2 = self.greenlet(lambda x: x * 10, parent=greenlet1)
+      self.assertEqual('P:210', greenlet2.switch(21))
+
+      def Raiser(x):
+        raise self.greenlet.GreenletExit(x)
+      greenlet3 = self.greenlet(Raiser)
+      try:
+        # The exception is returned to the parent, not raised.
+        self.assertEqual('42', str(greenlet3.switch(42)))
+      except self.greenlet.GreenletExit, e:
+        self.assertFalse('unexpected GreenletExit: %s', e)
+
+      greenlet4 = self.greenlet(lambda x: 1 / x)
+      self.assertRaises(ZeroDivisionError, greenlet4.switch, 0)
+
+      greenlet5 = self.greenlet(lambda: 42)
+      greenlet6 = self.greenlet(lambda x: 1 / x, parent=greenlet5)
+      self.assertRaises(ZeroDivisionError, greenlet6.switch, 0)
+
+    def testGreenletExitOnDelete(self):
+      exits = []
+      def Reporter():
+        exits.append('HI')
+        try:
+          self.greenlet.getcurrent().parent.switch()
+        except BaseException, e:
+          exits.append(isinstance(e, self.greenlet.GreenletExit))
+      greenlets = [self.greenlet(Reporter)]
+      self.assertEqual([], exits)
+      greenlets[-1].switch()
+      self.assertEqual(['HI'], exits)
+      greenlets.pop()
+      # GreenletExit is raised when all references to the greenlet go aways.
+      self.assertEqual(['HI', True], exits)
+
+    def testParentChangeOnDelete(self):
+      x = []
+
+      def Work():
+        g1 = self.greenlet(x.append)
+        g2 = self.greenlet(lambda: 1 / 0, parent=g1)
+        del g2  #  This updates the parent of g2 to the current greenlet.
+        self.assertFalse(g1)
+        self.assertFalse(g1.dead)
+        self.assertEqual([], x)
+        x[:] = [()]
+
+      self.greenlet(Work).switch()
+      self.assertEqual([()], x)
+
+    def testParentOnKill(self):
+      x = []
+
+      def Work():
+        g1 = self.greenlet(lambda value: x.append(type(value)))
+        g2 = self.greenlet(lambda: 1 / 0, parent=g1)
+        g2.throw()
+        self.assertTrue(g1.dead)
+        self.assertEqual([self.greenlet.GreenletExit], x)
+        x[:] = [()]
+
+      self.greenlet(Work).switch()
+      self.assertEqual([()], x)
+
+    def testParentOnKillWithGreenletExit(self):
+      x = []
+
+      def Work():
+        g1 = self.greenlet(lambda value: x.append(type(value)))
+        g2 = self.greenlet(lambda: 1 / 0, parent=g1)
+        g2.throw(self.greenlet.GreenletExit)
+        self.assertTrue(g1.dead)
+        self.assertEqual([self.greenlet.GreenletExit], x)
+        x[:] = [()]
+
+      self.greenlet(Work).switch()
+      self.assertEqual([()], x)
+
+    def testParentOnKillWithGreenletExitSubclass(self):
+      x = []
+
+      class MyGreenletExit(self.greenlet.GreenletExit):
+        pass
+
+      def Work():
+        g1 = self.greenlet(lambda value: x.append(type(value)))
+        g2 = self.greenlet(lambda: 1 / 0, parent=g1)
+        g2.throw(MyGreenletExit)
+        self.assertTrue(g1.dead)
+        self.assertEqual([MyGreenletExit], x)
+        x[:] = [()]
+
+      self.greenlet(Work).switch()
+      self.assertEqual([()], x)
+
+    def testParentOnKillWithOtherError(self):
+      x = []
+
+      def Work():
+        g1 = self.greenlet(lambda: ()[0])
+        g2 = self.greenlet(lambda: 1 / 0, parent=g1)
+        e = None
+        try:
+          g2.throw(ValueError, 42)
+        except ValueError, e:
+          e = e.args
+        self.assertEqual((42,), e)
+        self.assertTrue(g1.dead)
+        self.assertEqual([], x)
+        x[:] = [()]
+
+      self.greenlet(Work).switch()
+      self.assertEqual([()], x)
+
+    def testParentCatchOnKill(self):
+      x = []
+
+      def Work():
+        gw = self.greenlet.getcurrent()
+        g1 = self.greenlet(lambda value: x.append(type(value)))
+        def F2():
+          try:
+            x.append('A')
+            x.append(self.greenlet.getcurrent().parent is g1)
+            gw.switch()
+          except self.greenlet.GreenletExit:
+            # For `del g2', parent becomes gw (who deleted it),
+            # for normal throw(), parent remains.
+            x.append('B')
+            x.append(self.greenlet.getcurrent().parent is gw)
+            x.append(self.greenlet.getcurrent().parent is g1)
+            x.append('C')
+            raise
+        g2 = self.greenlet(F2, parent=g1)
+        self.assertEqual([], x)
+        g2.switch()
+        self.assertEqual(['A', True], x)
+        g2.throw()
+        self.assertEqual(['A', True, 'B', False, True, 'C',
+                          self.greenlet.GreenletExit], x)
+        self.assertTrue(g1.dead)
+        self.assertTrue(g2.dead)
+        x[:] = [()]
+
+      self.greenlet(Work).switch()
+      self.assertEqual([()], x)
+
+    def testParentCatchOnDelete(self):
+      x = []
+
+      def Work():
+        gw = self.greenlet.getcurrent()
+        g1 = self.greenlet(lambda value: x.append(type(value)))
+        def F2():
+          try:
+            x.append('A')
+            x.append(self.greenlet.getcurrent().parent is g1)
+            gw.switch()
+          except self.greenlet.GreenletExit:
+            # For `del g2', parent becomes gw (who deleted it),
+            # for normal throw(), parent remains.
+            x.append('B')
+            x.append(self.greenlet.getcurrent().parent is gw)
+            x.append(self.greenlet.getcurrent().parent is g1)
+            x.append('C')
+            raise
+        g2 = self.greenlet(F2, parent=g1)
+        self.assertEqual([], x)
+        g2.switch()
+        self.assertEqual(['A', True], x)
+        del g2
+        self.assertEqual(['A', True, 'B', True, False, 'C'], x)
+        self.assertFalse(g1)
+        self.assertFalse(g1.dead)
+        x[:] = [()]
+
+      self.greenlet(Work).switch()
+      self.assertEqual([()], x)
+
+
 
 if __name__ == '__main__':
   class GreenletTest(Template.GreenletTestTemplate):
@@ -214,6 +396,8 @@ if __name__ == '__main__':
       getruncount = staticmethod(getruncount)  # Extra check.
     else:
       print >>sys.stderr, 'info: using greenlet'
+
+    assert isinstance(greenlet.GreenletExit(), BaseException)
 
     def testGreenletModule(self):
       self.assertTrue('greenlet' in sys.modules)
