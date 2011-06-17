@@ -2,7 +2,10 @@
 
 """A greenlet emulator using Stackless Python (or greenlet itself).
 
-To use this module, replace the first occurrence of your imports:
+Please see the docstring of the syncless.greenlet_using_stackless module to
+get a godd understanding of the emulator backend, its limitations etc.
+
+To use this emulator, replace the first occurrence of your imports:
 
   # Old module import: import greenlet
   from syncless.best_greenlet import greenlet
@@ -16,27 +19,26 @@ To use this module, replace the first occurrence of your imports:
 
 After that, you can keep subsequent `import greenlet' statements in your code.
 
-This module works with and without gevent and Syncless. For a combination of
-gevent and Syncless, see patch_gevent() in the syncless.patch module.
+This emulator works with and without gevent and Syncless. For a combination
+of gevent and Syncless, see patch_gevent() in the syncless.patch module.
 
-In addition to the regular symbols in the Greenlet module, 
+This emulator supports gevent. Example code:
 
-This emulation is at least 20% slower than real greenlet, but it can be much
-slower. (Speed measurements needed.) The emphasis was on the correctness of
-the emulation (as backed by test/greenlet_test.py) rather than its speed.
+  import syncless.best_greenlet  # Use real greenlet, or revert to emulation.
+  import gevent.wsgi
+  def WsgiApp(env, start_response):
+    return ['Hello, <b>World</b>!']
+  gevent.wsgi.WSGIServer(('127.0.0.1', 8080), WsgiApp).serve_forever()
 
-TODO(pts): Do speed measurements.
 """
 
 __author__ = 'Peter Szabo (pts@fazekas.hu)'
 
 def gevent_hub_main():
   """Run the gevent hub main loop forever."""
-  # This doesn't work with Syncless, but we have a monkey-patch for that.
-  try:
-    __import__('gevent.hub').hub.get_hub().switch()
-  except greenlet.GreenletExit:
-    raise SystemExit
+  # This doesn't work with Syncless, but we have a monkey-patch for that,
+  # see syncless.patch.gevent_hub_main().
+  __import__('gevent.hub').hub.get_hub().switch()
 
 try:
   import greenlet
