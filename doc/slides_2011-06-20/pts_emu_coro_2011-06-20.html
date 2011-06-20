@@ -2,7 +2,7 @@
     "http://www.w3.org/TR/html4/loose.dtd">
 <html><head>
 <meta http-equiv="content-type" content="text/html; charset=UTF-8">
-<title>13371 concurrent TCP connections in Python with coroutines</title>
+<title>Emulating Stackless and greenlet with each other</title>
 <script type="text/javascript" src="sh_main.min.js"></script>
 <script type="text/javascript" src="sh_python.min.js"></script>
 <script type="text/javascript" src="sh_javascript.min.js"></script>
@@ -812,6 +812,9 @@ div.slide > ul {
   padding-left:2.6em;
   padding-right:0.6em;
 }
+div.slide ul.h {
+  visibility:hidden;
+}
 div#rulers {
   position:fixed;
   display:none;
@@ -854,194 +857,12 @@ if (!window.slideJsOk) {
 // -->
 </script>
 <div class="percentheight" style="line-height:5%"></div>
-<div class="showtitle"><div>13371 concurrent TCP connections<br>
-in Python with coroutines</div></div>
+<div class="showtitle"><div>Emulating Stackless and greenlet<br>
+with each other</div></div>
 <div class="percentheight" style="line-height:20%"></div>
 <div style="text-align:center">Péter Szabó, <tt>pts@google.com</tt><br>
-<p>Zürich, 2010-11-29</div>
+<p>EuroPython, Florence, 2011-06-20</div>
 
-</div>
-
-<div class="slide">
-<h1>Who needs 13371 concurrent connections?</h1>
-<ul>
-<li>server with <b>long-living,</b> low volume connections
-<ul>
-<li>for chat rooms
-<li>for web&ndash;IRC gateways
-<li>for publish/subscribe messaging
-<li>for online multiplayer games (e.g. MUDs, second life)
-</ul>
-<li>low-traffic custom sites or services on <b>low-memory</b> servers
-<li>peer-to-peer clients (e.g. the bittorrent reference impl.)
-<li>session-aware proxies
-</ul>
-<p>Coroutines are also useful for just a dozen connections:
-<ul>
-<li>file transfer and backup clients
-<li>automated stock and forex trading
-</ul>
-</div>
-
-<div class="slide">
-<h1>How to run Ticker and Repeater in parallel?</h1>
-
-<p>View the full code listings for this presentation <a href="http://code.google.com/p/syncless/source/browse/#svn/trunk/doc/examples_2010-11-29">here</a>.
-
-<pre class=sh_python>line_count_ary = [0]
-def Ticker():
-  i = 0
-  while True:
-    i += 1
-    print 'Tick %d with %d lines.' % (i, line_count_ary[0])
-    Sleep(3)
-def Repeater():
-  print 'Hi, please type and press Enter.'
-  while True:
-    line = ReadLine()
-    if not line:
-      break
-    line_count_ary[0] += 1
-    print 'You typed %r.' % line
-  print 'End of input.'
-
-AddTask(Repeater)
-Ticker()</pre>
-</div>
-
-<div class="slide">
-<h1>Entities executing in parallel</h1>
-<ul>
-<li>actor (Erlang, Scala)
-<li>process
-<li>thread
-<li>callback
-<li>coroutine
-<ul>
-  <li>generator (Python function doing <code>yield</code>)
-  <li>greenlet (Python with extension <code>import greenlet</code>)
-  <li>tasklet (Stackless Python)
-  <li>Task (C#), goroutine (Go), callcc (Ruby, Lisp)
-</ul>
-</ul>
-</div>
-
-<div class="slide">
-<h1>Synchronous I/O with threads</h1>
-<ol>
-<li>Create and start a thread for each I/O operation you want to run in
-    parallel.
-<li>Do synchronous, blocking I/O operations, i.e. let the thread wait
-    (block) until it can read or write. Other threads can make progress in
-    the meantime.
-</ol>
-
-<p>Can't have more than a few thousand threads because:
-
-<ul>
-<li>Their stack consumes too much RAM.
-<li>They are slow to create.
-<li>They use system resources even when they are inactive.
-</ul>
-</div>
-
-<div class="slide">
-<h1>Asynchronous I/O with callbacks</h1>
-<ol>
-<li>Use only a single thread or one thread per CPU core available.
-<li>Do asynchronous I/O operations: for each I/O operation, supply your
-    callback function, to be called when the operation completes or can be
-    completed without waiting.
-<li>Use an I/O framework (e.g. libevent, libev or glib) to manage your
-    pending callbacks.
-</ol>
-
-<p>Disadvantage: the control flow of your code gets obfuscated.</p>
-</div>
-
-<div class="slide">
-<h1>I/O with callbacks hides the control flow</h1>
-
-<pre class=sh_python>line_count_ary = [0]
-def Ticker():
-  i_ary = [0]
-  def Callback():  # This was a while loop with a pre-test.
-    i_ary[0] += 1
-    print 'Tick %d with %d lines.' % (i_ary[0], line_count_ary[0])
-    Sleep(3, Callback)
-  Callback()
-def Repeater():
-  print 'Hi, please type and press Enter.'
-  def Callback(line):  # This was a while loop with a post-test.
-    if line:
-      print 'You typed %r.' % line
-      line_count_ary[0] += 1
-      ReadLine(Callback)
-    else:
-      print 'End of input.'
-  ReadLine(Callback)
-
-SetNonBlocking(STDIN_FD); AddTask(Ticker); AddTask(Repeater)
-MainLoop()</pre>
-</div>
-
-<div class="slide">
-<h1>The same in JavaScript with node.js</h1>
-
-<pre class="sh_javascript small">var line_count = 0
-function ticker() {
-  var i = 0
-  function callback() {
-    i += 1
-    console.log('Tick ' + i + ' with ' + line_count + ' lines.')
-    setTimeout(callback, 3000)
-  }
-  callback()
-}
-function repeater() {
-  var stdin = process.openStdin()
-  console.log('Hi, please type and press Enter.')
-  function callback(line) {
-    if (line.length) {
-      ++line_count
-      console.log('You typed ' + util.inspect(line) + '.')
-      readLine(stdin, callback)
-    } else {
-      console.log('End of input.')
-    }
-  }
-  readLine(stdin, callback)
-}
-process.nextTick(ticker)
-process.nextTick(repeater)</pre>
-</div>
-
-<div class="slide">
-<h1>But we have to implement input buffering</h1>
-<pre class="sh_javascript small">function readLine(readStream, callback) {
-  if (!('buf' in readStream))
-    readStream.buf = []
-  function onData(data) {
-    data = data.toString('UTF-8')
-    readStream.buf.push(data)
-    if (data.indexOf('\n') < 0)
-      return
-    readStream.buf = readStream.buf.join('').split('\n').reverse()
-    while (readStream.buf.length > 1)
-      callback(readStream.buf.pop() + '\n')
-    readStream.removeListener('data', onData)
-    readStream.removeListener('end', onEnd)
-  }
-  function onEnd() {
-    readStream.removeListener('data', onData)
-    readStream.removeListener('end', onEnd)
-    var data = readStream.buf.join('')
-    readStream.buf = null
-    callback(data)
-  }
-  readStream.on('data', onData)
-  readStream.on('end', onEnd)
-}</pre>
 </div>
 
 <div class="slide">
@@ -1059,6 +880,7 @@ is or will be running a coroutine
 space, filehandles, signal handlers, permissions etc.
 </ul>
 </div>
+
 
 <div class="slide">
 <h1>Most threads are waiting</h1>
@@ -1088,304 +910,222 @@ space, filehandles, signal handlers, permissions etc.
 
 </div>
 
-
 <div class="slide">
-<h1>Asynchronous I/O with coroutines</h1>
-<ol>
-<li>Create a coroutine for each task (e.g. active incoming HTTP
-    request, timeout). Create millions if needed.
-<li>Put all filehandles to <b>non-blocking mode.</b>
-<li>Pick a coroutine, run it in the current thread until it would block
-    on I/O. Repeat for other non-blocked coroutines.
-<li>When all coroutines would block on I/O, wait for I/O progress
-    (with <code>select()</code>, <code>poll()</code>, <code>kqueue()</code>,
-    <code>epoll_wait()</code>), and continue with the corresponding
-    coroutine.
-</ol>
+<h1>Coroutine implementations in Python</h1>
 
-<p>Get nice code control flow (just like with threads) and good performance.
-</div>
-
-<div class="slide">
-<h1>Same application code, with coroutines</h1>
-
-<pre class=sh_python>line_count_ary = [0]
-
-def Ticker():
-  i = 0
-  while True:
-    i += 1
-    print 'Tick %d with %d lines.' % (i, line_count_ary[0])
-    Sleep(3)
-
-def Repeater():
-  print 'Hi, please type and press Enter.'
-  while True:
-    line = ReadLine()
-    if not line:
-      break
-    line_count_ary[0] += 1
-    print 'You typed %r.' % line
-  print 'End of input.'
-
-AddTask(Repeater)
-Ticker()</pre>
-</div>
-
-<div class="slide">
-<h1>I/O libraries for Python</h1>
 <ul>
-<li><b>process:</b> (multiprocessing)
-<li><b>thread:</b> (threadpool)
-<li><b>callback:</b> Twisted, Tornado, (node.js), Orbited, circuits, asyncore
-<li><b>generator:</b> monocle, Chiral,
-    DieselWeb, MultiTask, FriendlyFlow, Weightless, Fibra, Cogen
-<li><b>greenlet:</b> gevent, Eventlet, Syncless, (Concurrence)
-<li><b>tasklet:</b> Syncless, Concurrence, (Eventlet)
+<li>Stackless <i>tasklet</i>
+<ul class=h>
+<li>Syncless, Concurrence, (Eventlet)
 </ul>
-<p>See feature comparisons of these <a href="http://ptspts.blogspot.com/2010/05/feature-comparison-of-python-non.html">here</a>
-and <a href="http://nichol.as/asynchronous-servers-in-python">here</a>.
+<li>greenlet
+<ul class=h>
+<li>gevent, Eventlet, Syncless, (Concurrence)
+</ul>
+<li>PyPy coroutine
+<li>(generator)
+<ul class=h>
+<li>monocle, Chiral, DieselWeb, MultiTask, FriendlyFlow, Weightless, Fibra,
+    Cogen
+</ul>
+<li>(thread)
+</ul>
+</div>
 
-<p>(C)Python has the <b>global interpreter lock</b>, so 1 Python
-process can use at most 1 CPU core for running Python code.
 </div>
 
 <div class="slide">
-<h1>Generators and iterators in Python</h1>
-
-<pre class=sh_python>def SquaresUpto(n):  # A generator.
-  i = 1
-  while i * i <= n:
-    yield i * i
-    i += 1
-
-def CubesUpto(n):  # Another generator.
-  i = 1
-  while i * i * i <= n:
-    yield i * i * i
-    i += 1
-
-def Double(iter):  # Another generator.
-  for i in iter:
-    yield 2 * i
-
-my_iter = SquaresUpto(100)  # An iterator from an generator.
-for i in my_iter:
-  print i
-#: [2, 16, 54, 128]
-print list(Double(CubesUpto(100)))</pre>
-</div>
-
-<div class="slide">
-<h1>Advanced generator example</h1>
-
-<pre class="sh_python small">def Merge(iter1, iter2):
-  i1 = i2 = None
-  while True:
-    if iter1 is not None and i1 is None:
-      try:
-        i1 = iter1.next()  # Run iter1 until it yields something (i1).
-      except StopIteration:
-        iter1 = None
-    if iter2 is not None and i2 is None:
-      try:
-        i2 = iter2.next()
-      except StopIteration:
-        iter2 = None
-    if i1 is None and i2 is None:
-      break  # Can't `return' from a itererator.
-    elif i2 is None or i1 < i2:
-      yield i1
-      i1 = None
-    else:
-      yield i2
-      i2 = None
-
-#: [1, 1, 4, 8, 9, 16, 25, 27, 36, 49, 64, 64, 81, 100]
-print list(Merge(SquaresUpto(100), CubesUpto(100)))</pre>
-</div>
-
-<div class="slide">
-<h1>Emulating coroutines with generators</h1>
+<h1>... and the corresponding I/O libraries</h1>
 
 <ul>
-<li>The generator remembers a stack frame: local variables + where to
-    resume at the next <code>.next()</code> (good).
-<li>The generator remembers only one stack frame (bad).
-<li>How to implement this? <code>ReadHttpRequest()</code> calls
-    <code>readline()</code>, which calls
-    <code>recv()</code>, which would have to wait for input, so the whole
-    traceback (all 3 stack frames) have to be suspended.
-<li>Solution: Make each stack frame a separate generator, and connect them,
-    e.g. as soon as <code>recv()</code> is done, call
-    <code>readline_iter.next(new_data)</code>.
-<li>Example application code: <code>new_data = yield f.readline()</code>
-<li>The framework code is much more complicated.
+<li>Stackless <i>tasklet</i>
+<ul>
+<li>Syncless, Concurrence, (Eventlet)
+</ul>
+<li>greenlet
+<ul>
+<li>gevent, Eventlet, Syncless, (Concurrence)
+</ul>
+<li>PyPy coroutine
+<li>(generator)
+<ul>
+<li>monocle, Chiral, DieselWeb, MultiTask, FriendlyFlow, Weightless, Fibra,
+    Cogen
+</ul>
+<li>(thread)
 </ul>
 </div>
 
 <div class="slide">
-<h1>Application code with generators</h1>
-<pre class=sh_python>line_count_ary = [0]
-def Ticker():  # A generator.
-  i = 0
-  while True:
-    i += 1
-    print 'Tick %d with %d lines.' % (i, line_count_ary[0])
-    yield Sleep(3)
-def Repeater():  # A generator.
-  print 'Hi, please type and press Enter.'
-  while True:
-    line = yield ReadLine()
-    if not line:
-      break
-    line_count_ary[0] += 1
-    print 'You typed %r.' % line
-  print 'End of input.'
-SetNonBlocking(STDIN_FD)
-AddTask(Ticker)
-AddTask(Repeater)
-MainLoop()</pre>
+<h1>Why emulate?</h1>
+<p>Why emulate coroutine implementations with each other?
+<ul>
+<li>to be able to run Syncless, Concurrence etc. with greenlet
+<li>to be able to run gevent etc. with Stackless
+<li>to understand them better
 </div>
 
 <div class="slide">
-<h1>Input buffering with generators</h1>
-<pre class=sh_python>stdin_read = []
-def ReadLine():  # A generator.
-  while True:
-    try:
-      got = os.read(STDIN_FD, 1024)
-      if not got or '\n' in got: break
-      stdin_read.append(got)
-    except OSError, e:
-      if e[0] != errno.EAGAIN: raise
-      yield WaitForEvent({'read': STDIN_FD})
-  if got:
-    i = got.find('\n') + 1
-    stdin_read.append(got[:i])
-    line = ''.join(stdin_read)
-    del stdin_read[:]
-    if i < len(got):
-      stdin_read.append(got[i:])
-  else:  # EOF on stdin
-    line = ''.join(stdin_read)
-    del stdin_read[:]
-  raise StopIteration(line)  # Disadvantage: can't use `return'.
-</pre>
-</div>
+<h1>Coroutine emulators in Python</h1>
 
-
-<div class="slide">
-<h1>Why generators?</h1>
-
-<p>Advantages for using generators to emulate coroutines:</p>
 <ul>
-<li>pure Python solution for Python 2.5 or later
+<li><b>emulate greenlet using Stackless</b>
+<ul>
+<li>Eventlet 0.9.16: <a href="https://bitbucket.org/chrisatlee/eventlet/raw/90cb11620bce/eventlet/support/stacklesss.py">eventlet/support/stacklesss.py</a>
 </ul>
-<p>Disadvantages:</p>
 <ul>
-<li>where to <code>yield</code> are where not to
+<li>Syncless 0.23: <a href="http://syncless.googlecode.com/svn/trunk/syncless/greenlet_using_stackless.py">syncless/greenlet_using_stackless.py</a>
 <ul>
-<li>works fine in C# because of type checking
-<li>if callee changes, all callers have to be updated
+<li>test: <a href="http://syncless.googlecode.com/svn/trunk/test/greenlet_test.py">test/greenlet_test.py</a></li>
 </ul>
-<li><code>raise StopIteration(...)</code> instead of <code>return</code>
-<li>speed
-<li>syntax cruft: some frameworks require decorators around generators
+</ul>
+
+<li><b>emulate Stackless using greenlet</b>
+<ul>
+<li>PyPy 1.5.0: <a href="http://codespeak.net/svn/pypy/trunk/lib_pypy/stackless.py">lib_pypy/stackless.py</a>
+<ul>
+<li>supports coroutine and greenlet natively
+<li>emulates Stackless using PyPy coroutine
+<li>as a fallback, emulates Stackless using greenlet
+</ul>
+<li>Concurrence 0.3.1: <a href="http://github.com/toymachine/concurrence/raw/master/lib/concurrence/_stackless.py">lib/concurrence/_stackless.py</a>
+<li>Syncless 0.23: <a href="http://syncless.googlecode.com/svn/trunk/syncless/greenstackless.py">syncless/greenstackless.py</a>
+<ul>
+<li>test: <a href="http://syncless.googlecode.com/svn/trunk/test/stackless_test.py">test/stackless_test.py</a></li>
+</ul>
+</ul>
 </ul>
 </div>
 
 <div class="slide">
-<h1>Context switching</h1>
-<p>How is execution context switching from one coroutine to another implemented
-in Python?
+<h1>greenlet emulation correctness</h1>
 <ul>
-<li><b>generator:</b> save the <code>locals()</code> dict and the bytecode
-instruction pointer
-<li><b>greenlet:</b> copy and overwrite the C stack
-<ul>
-<li>slow (O(n)) if the stack is long
-<li>safe because Python object pointers point to the heap
+<li>14: number of tests in <a href="http://syncless.googlecode.com/svn/trunk/test/greenlet_test.py">test/greenlet_test.py</a>
+<li>14: native CPython greenlet
+<li>14: Syncless
+<li><span style="visibility:hidden">0</span>9: native PyPy stackless.greenlet (no sys.getrefcount; fail: del)
+<li><span style="visibility:hidden">0</span>0: Eventlet (no throw, incomplete emulation, missing class members)
 </ul>
-<li>Stackless Python <b>hard switching</b>: copy the C stack (like in
-    greenlet, but the C stack is shorter)
-<li>Stackless Python <b>soft switching</b>: just change one pointer (works
-    is the call stack contains only pure Python frames)
+<p>These numbers useless as metrics, thus they are not fair.
+</div>
+
+<div class="slide">
+<h1>Stackless emulation correctness</h1>
+<ul>
+<li>20: number of tests in <a href="http://syncless.googlecode.com/svn/trunk/test/stackless_test.py">test/stackless_test.py</a>
+<li>20: native Stackless Python
+<li>18: Syncless (fails: del refcount, del gc)
+<li><span style="visibility:hidden">0</span>0: Concurrence (missing main, getmain, is_main, prev, next, current)
+<li><span style="visibility:hidden">0</span>0: PyPy (missing main, current, next, prev, TaskletExit)
+</ul>
+<p>These numbers useless as metrics, thus they are not fair.
+</div>
+
+
+<!-- ################# --->
+
+<div class="slide">
+<h1>Who needs 13371 concurrent connections?</h1>
+<ul>
+<li>server with <b>long-living,</b> low volume connections
+<ul>
+<li>for chat rooms
+<li>for web&ndash;IRC gateways
+<li>for publish/subscribe messaging
+<li>for online multiplayer games (e.g. MUDs, second life)
+</ul>
+<li>low-traffic custom sites or services on <b>low-memory</b> servers
+<li>peer-to-peer clients (e.g. the bittorrent reference impl.)
+<li>session-aware proxies
+</ul>
+<p>Coroutines are also useful for just a dozen connections:
+<ul>
+<li>file transfer and backup clients
+<li>automated stock and forex trading
 </ul>
 </div>
 
 <div class="slide">
-<h1>Waiting for I/O progress opportunity</h1>
-<p>The <code>select()</code> Unix system call (and its Windows equivalents):
+<h1>Memory leak in greenlet</h1>
+
+<pre class=sh_python>import gc
+import sys
+from greenlet import greenlet
+def F(other_ref, x):
+  greenlet.getcurrent().parent.switch(42)
+x = []
+xr = sys.getrefcount(x)
+g = [greenlet(F), greenlet(F)]
+assert 42 == g[0].switch(g[1], x)
+assert 42 == g[1].switch(g[0], x)  # Comment this line to fix.
+del g[:]
+gc.collect()
+print sys.getrefcount(x) - xr  #: 4, greenlets still not deleted.</pre>
+
 <ul>
-<li>needs 3 lists of file descriptors (fds): read, write and except
-<li>(except is useless, leave it empty)
-<li>needs a timeout value, or infinity
-<li>returns as soon as at least one of the specified fds are
-    readable or writable, respectively, or the timeout has been reached
-<li>returns the list of fds which are (maybe) readable and writable
-<li>can be used (together with <code>read()</code> and <code>write()</code>
-    and the non-blocking I/O mode)
-    to make progress on multiple I/O channels in a single thread
-<li>has faster, system specific alternatives (e.g. <code>poll()</code>,
-    <code>kqueue()</code>, <code>epoll_wait()</code>)
+<li>Should emulators emulate this memory leak?
+<li>May emulators postpone deletion or to have memory leaks?
+<li>Should emulators emulate <i>__del__</i> timing?
 </ul>
 </div>
 
 <div class="slide">
-<h1>A coroutine-based I/O library</h1>
+<h1>No memory leak in Stackless</h1>
+
+<pre class=sh_python>import gc
+import sys
+import stackless
+def F(other_ref, x):
+  stackless.schedule_remove()
+x = []
+xr = sys.getrefcount(x)
+g = [stackless.tasklet(F), stackless.tasklet(F)]
+g[0](g[1], x)
+g[1](g[0], x)
+print sys.getrefcount(x) - xr  #: 2
+g[0].run()
+g[1].run()
+del g[:]
+print sys.getrefcount(x) - xr  #: 1, tasklets not deleted yet.
+gc.collect()
+print sys.getrefcount(x) - xr  #: 0, tasklets deleted.</pre>
+</div>
+
+<div class="slide">
+<h1>Differences between greenlet, Stackless and coroutine</h1>
 <ul>
-<li>manages coroutine creation, context switching and error handling
-<li>uses <code>select()</code> (or its alternatives) to figure out which
-    blocked coroutines become ready to run
-<li>puts all fds it manages to non-blocking mode
-<li>provides convenient and compatible alternatives of the <code>file</code>
-    and <code>socket</code> classes (vs callback-based I/O libraries, which
-    provide a different interface)
-<li>switches to another coroutine in its I/O methods when the current
-    coroutine has to wait for blocking I/O
+<li><i>Stackless</i> runnables list
+<li><i>Stackless</i> channel
+<li><i>Stackless</i> channel waiting list
+<li><i>Stackless</i> pickling</i> (not emulated)
+<li><i>Stackless</i> main tasklet
+<li><i>greenlet</i> parent
+<li><i>coroutine</i> (no extras)
 </ul>
 </div>
 
 <div class="slide">
-<h1>Usability</h1>
-<p>To make the I/O library easy to use for the programmer:
+<h1>Emulation challenges</h1>
+
+<p>Pedantic:
 <ul>
-<li>provide an asynchronous DNS resolver
-<li>provide compatible drop-in replacements for <code>file</code>,
-    <code>socket</code>, <code>SSL.SSLSocket</code> etc. with proper error
-    reporting and timeout handling
-<li>provide monkey-patching for any 3rd party pure Python library at runtime
-    to make it use your drop-in replacements
-<li>make sure it works with greenlet (easier to install than Stackless Python)
-<li>provide a WSGI server
-<li>write the documentation in Python <code>.rst</code> format, and upload it
-    to the web in HTML
+<li>all classes, methods, functions and globals present
+<li>correct default values for all functions
+<li>correct argument names and default values for all functions
+<li>raise the same exceptions on invalid operations
+</ul>
+
+<p>Tricky:
+<ul>
+<li>which coroutine continues upon a fatal exception
+<li>which coroutine continues upon <i>__del__</i>
+<li>what is the default of the passed value
+<li><i>stackless.current</i> without calling a function
 </ul>
 </div>
-
-<div class="slide">
-<h1>Performance</h1>
-<p>To increase performance of the coroutine-based I/O library:</p>
-<ul>
-<li>replace <code>select()</code> with a system-specific alternative
-    (<code>epoll_wait()</code> on Linux, <code>kqueue()</code> on FreeBSD or
-    the Mac etc.)
-<li>write event notification code in C (instead of Python)
-<li>put timeouts to a binary heap instead of a list
-<li>or use an library like libev or libevent2 for low-level I/O event
-    notifications
-<li>write I/O buffering code (including <code>readline</code>) in C (Pyrex)
-<li>write as much parsing code (e.g. HTTP request parsing) as possible in
-    C (Pyrex)
-</ul>
-</div>
-
 
 <div class="slide">
 <p style="text-align:center;font-size:900%;margin-top:20%">?
 </div>
-
-<!-- TODO(pts): Add code with greenlet-based main loop -->
 
 </body></html>
