@@ -18,6 +18,7 @@ happening recently.
 
 __author__ = 'pts@fazekas.hu (Peter Szabo)'
 
+import gc
 import sys
 import unittest
 
@@ -385,6 +386,20 @@ class Template(object):
       self.greenlet(Work).switch()
       self.assertEqual([()], x)
 
+    def testCircularCoroutineReferences(self):
+      def F(other_ref, x):
+        self.greenlet.getcurrent().parent.switch(42)
+      x = []
+      xr = sys.getrefcount(x)
+      g = [self.greenlet(F), self.greenlet(F)]
+      self.assertEqual(42, g[0].switch(g[1], x))
+      self.assertEqual(42, g[1].switch(g[0], x))
+      del g[:]
+      gc.collect()
+      # It's 4 eith both greenlet_using_stackless.py and native greenlet.
+      # TODO(pts): Why do we end up with 4 references in
+      # greenlet_using_stackess.py? Shouldn't it go down to 0?
+      self.assertEqual(0, sys.getrefcount(x) - xr)
 
 
 if __name__ == '__main__':
@@ -402,5 +417,6 @@ if __name__ == '__main__':
     def testGreenletModule(self):
       self.assertTrue('greenlet' in sys.modules)
       self.assertEqual(self.greenlet, sys.modules['greenlet'].greenlet)
+
 
   unittest.main()

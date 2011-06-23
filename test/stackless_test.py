@@ -6,6 +6,7 @@ These tests also test the syncless.greenstackless emulation module if run
 under non-Stackless Python.
 """
 
+import gc
 import sys
 import unittest
 
@@ -804,6 +805,22 @@ class StacklessTest(unittest.TestCase):
     #            references to its emulated tasklet object, so Python won't
     #            notice that the object now can deleted.
     self.assertEqual(['HI', True], exits)
+
+  def testCircularCoroutineReferences(self):
+    def F(other_ref, x):
+      stackless.schedule_remove()
+    x = []
+    xr = sys.getrefcount(x)
+    g = [stackless.tasklet(F), stackless.tasklet(F)]
+    g[0](g[1], x)
+    g[1](g[0], x)
+    # print 'A', sys.getrefcount(x) - xr  #: 2
+    g[0].run()
+    g[1].run()
+    del g[:]
+    # print 'B', sys.getrefcount(x) - xr  #: 1, tasklets not deleted yet.
+    gc.collect()
+    self.assertEqual(0, sys.getrefcount(x) - xr)  #: 0, tasklets deleted.
     
 
 if __name__ == '__main__':

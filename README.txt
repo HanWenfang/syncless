@@ -1229,8 +1229,16 @@ A28. Syncless is designed to be very fast compared to Python's built-in
      If you know of benchmark (no matter if Syncless fast or slow in it),
      please let the author of Syncless know.
 
+Memory leak in greenlet
+~~~~~~~~~~~~~~~~~~~~~~~
+PyPy’s greenlets do not suffer from the cyclic GC limitation that the
+CPython greenlets have: greenlets referencing each other via local variables
+tend to leak on top of CPython (where it is mostly impossible to do the
+right thing). It works correctly on top of PyPy.
+
 Links
 ~~~~~
+* doc: about greenlet: http://codespeak.net/svn/greenlet/trunk/doc/greenlet.txt
 * doc: related: eventlet vs gevent:
   http://blog.gevent.org/2010/02/27/why-gevent/
 * doc: http://www.disinterest.org/resource/stackless/2.6.4-docs-html/library/stackless/channels.html
