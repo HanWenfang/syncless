@@ -23,6 +23,7 @@
 #include <signal.h>
 
 #ifdef COIO_MINIEVENT_DEBUG
+#  include <string.h>
 #  define MINIEVENT_DEBUG(x) fprintf x
 #else
 #  define MINIEVENT_DEBUG(x) do {} while(0)
@@ -193,6 +194,7 @@ int event_loop(int flags) {
   struct timeval tv;
   struct timeval now;
   minievent_signal_mask_t interesting_signal_mask;
+  char do_ignore_fds;
   MINIEVENT_DEBUG((stderr, "ddd enter flags=%d\n", flags));
   if ((flags & EVLOOP_NONBLOCK) && !(flags & EVLOOP_ONCE)) {
     fprintf(stderr, "minievent: EVLOOP_NONBLOCK but not EVLOOP_ONCE\n");
@@ -295,9 +297,12 @@ int event_loop(int flags) {
                  (struct timeval*)&minievent_tv);  /* Cast away volatile. */
     got_errno = errno;
     MINIEVENT_DEBUG((stderr, "ddd select got %d\n", got));
-    if (got < 0 && got_errno != EINTR) {
-      MINIEVENT_DEBUG((stderr, "ddd select: %s\n", strerror(errno)));
-      return -1;
+    if ((do_ignore_fds = (got < 0)) != 0) {
+      if (got_errno != EINTR) {
+        MINIEVENT_DEBUG((stderr, "ddd select: %s\n", strerror(errno)));
+        return -1;
+      }
+      got = 1;
     }
     if (got > 0 || tv.tv_sec != MINIEVENT_HIGH_SEC) {
       if (gettimeofday(&now, NULL) != 0) {
@@ -319,7 +324,7 @@ int event_loop(int flags) {
         short got_events =
             events & EV_SIGNAL ?
                 ((interesting_signal_mask & 1L << fd) ? EV_SIGNAL : 0) :
-            events == 0 ? 0 :  /* A pure timeout event. */
+            events == 0 || do_ignore_fds ? 0 :  /* A pure timeout event. */
             FD_ISSET(fd, &exceptfds) ? (EV_READ | EV_WRITE) :
             ((FD_ISSET(fd, &readfds) ? EV_READ : 0) |
              (FD_ISSET(fd, &writefds) ? EV_WRITE : 0));
