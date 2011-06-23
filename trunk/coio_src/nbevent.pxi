@@ -2439,7 +2439,7 @@ cdef class nbsslsocket:
         derives its underlying the socket._realsocket from its first
         argument (using the ._sock property). As an exterions to this,
         nbsslsocket accepts a socket.socket, socket._realsocket or
-        nbsocket (all treated equvalently) in its first argument, and gets
+        nbsocket (all treated equivalently) in its first argument, and gets
         its underlying socket._realsocket accordingly.
     """
     cdef socket_wakeup_info_s swi
