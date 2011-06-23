@@ -310,6 +310,9 @@ static void coio_c_exc_set_eagain(PyObject *exc_class) {
  *
  * This function is called from nbsslsocket.makefile().read(), called from
  * httplib used by urllib used by examples/demo_https_client.py.
+ *
+ * Returns 1 on success, 0 on EOF if do_return_zero_at_eof is true, -1
+ * otherwise (on error or EOF).
  */
 static int coio_c_handle_ssl_eagain(
     double timeout_value,
@@ -348,6 +351,12 @@ static int coio_c_handle_ssl_eagain(
       coio_c_exc_set_eagain((PyObject*)exc_class);
       return -1;
     }
+    if (timeout_value < 0.0) {
+      if (NULL == (retval = coio_c_wait(read_ev, NULL)))
+        return -1;
+      Py_DECREF(retval);
+      return 1;
+    }
     retval = coio_c_wait(read_ev, tv);
     if (retval != coio_event_happened_token && retval != NULL) {
       Py_DECREF(retval);
@@ -364,6 +373,12 @@ static int coio_c_handle_ssl_eagain(
       /* This is what methods of socket.socket raise, we just mimic that */
       coio_c_exc_set_eagain((PyObject*)exc_class);
       return -1;
+    }
+    if (timeout_value < 0.0) {
+      if (NULL == (retval = coio_c_wait(write_ev, NULL)))
+        return -1;
+      Py_DECREF(retval);
+      return 1;
     }
     retval = coio_c_wait(write_ev, tv);
     if (retval != coio_event_happened_token && retval != NULL) {
