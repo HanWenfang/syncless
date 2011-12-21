@@ -20,6 +20,7 @@ def ProgressReporter(delta_sec):
 
 def Sleeper(thread_pool_obj, duration):
   thread_pool_obj(time.sleep, duration)
+  print 'sleep done, duration=%d' % duration
 
 
 def Foo():
@@ -29,21 +30,30 @@ def Foo():
   stackless.tasklet(Sleeper)(thread_pool_obj, 2)
   stackless.schedule()
   f = lambda a, b: time.sleep(0.2) or a / b
+  #f = lambda a, b: a / b
   #f = lambda a, b: sys.exit(42)
+  print 'X0'
   if False:
     for i in xrange(1, 11):
       print i
       assert 42 == worker(f, 84 * i, 2 * i)
-  print 'C1'
+  print 'X1'
+  # This first call is slow (takes about 2 seconds), because we have to wait for
+  # a Sleeper to return.
   print thread_pool_obj(f, -42, -1)
-  print 'C2'
+  print 'X2'
   print thread_pool_obj(f, -42, -1)
-  print 'C3'
+  print 'X3'
   print thread_pool_obj(f, -42, -1)
   #print 'T'
   #time.sleep(10)
-  print 'CR'
-  print thread_pool_obj(f, 7, 0)
+  print 'X4'
+  try:
+    thread_pool_obj(f, 7, 0)
+    e = None
+  except ZeroDivisionError, e:
+    pass
+  assert isinstance(e, ZeroDivisionError), repr(e)
 
 #coio.stackless.tasklet(ProgressReporter)(0.05)
 

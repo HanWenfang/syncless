@@ -3640,6 +3640,13 @@ cdef class thread_pool:
     a non-blocking MySQL client (see the Syncless README) instead of calling
     the methods of libmysqlclient in a thread pool.
 
+    Please note that threads and thread pools won't let you use more than one
+    CPU core at the same time in Python code, because there is the GIL
+    (global interpreter lock), which is held whenever Python code is
+    running. It is not held during I/O operations or in zlib, bz2 compression,
+    blocking I/O operations and blocking mutex (thread.allocate_lock())
+    operations.
+
     See examples/demo_thread_pool*.py for example uses.
 
     Please note that TaskletExit or SystemExit is not raised in the worker
@@ -3696,10 +3703,7 @@ cdef class thread_pool:
             #
             # This might raise a bomb.
             #
-            # This poeration happens to work even with greenstackless.
-            # TODO(pts): examples/demo_thread_pool_work.py seems to wait an
-            # extra amount above CR with greenstackless (as compared to real
-            # stackless).
+            # This operation happens to work even with greenstackless.
             return thread_worker[TWI_RESULT_CHANNEL].receive()
         finally:
             if self.available_thread_workers or self.notify_channel.balance >= 0:
