@@ -941,7 +941,7 @@ cdef object nbfile_read_http_reqhead(nbfile self, Py_ssize_t limit):
     if read_eb.off == 0:
         nbfile_read_more1(self, limit)
     c = (<char*>read_eb.buf)[0]
-    if c == c'\x80':
+    if c == c'\x80' or c == c'\x16':
         return 'ssl', None, None, 'ssl', req_lines
     elif c == c'<':
         if limit > 32:
