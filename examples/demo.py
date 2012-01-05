@@ -17,7 +17,7 @@ import os
 
 import demo_wsgiapp
 from syncless import coio
-from syncless import patch
+from syncless import ssl_util
 from syncless import wsgi
 
 
@@ -57,6 +57,7 @@ if __name__ == '__main__':
   use_psyco = False
   do_verbose = False
   use_https = False
+  use_http = None
   use_cherrypy = False
   for arg in sys.argv[1:]:
     if arg in ('--cherrypy-wsgi', '--cherrypy', '-c'):
@@ -64,6 +65,8 @@ if __name__ == '__main__':
       use_cherrypy = True
     elif arg in ('--https', '-s'):
       use_https  = True
+    elif arg in ('--http', '-h'):
+      use_http = True
     elif arg in ('--verbose', '-v'):
       do_verbose = True
     elif arg in ('--psyco', '-p'):
@@ -72,6 +75,9 @@ if __name__ == '__main__':
       use_psyco = False
     else:
       assert 0, 'invalid arg: %s' % arg
+
+  if use_http is None:
+    use_http = not use_https
 
   if do_verbose:
     logging.root.setLevel(logging.DEBUG)
@@ -87,12 +93,13 @@ if __name__ == '__main__':
   else:
     logging.info('not using psyco')
 
-  try:
-    rdata = coio.gethostbyname_ex('en.wikipedia.org')
-  except socket.gaierror, e:
-    rdata = e
-  logging.info(repr(rdata))
-  logging.info('Query2 done.')
+  #try:
+  #  rdata = coio.gethostbyname_ex('en.wikipedia.org')
+  #except socket.gaierror, e:
+  #  rdata = e
+  #logging.info(repr(rdata))
+  #logging.info('Query2 done.')
+
   listener_nbs = coio.new_realsocket(socket.AF_INET, socket.SOCK_STREAM)
   listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
   listener_nbs.bind(('127.0.0.1', 6666))
@@ -101,24 +108,17 @@ if __name__ == '__main__':
   # ab -n 100000 -c 50 http://127.0.0.1:6666/ >ab.stackless3.txt
   # It increases the maximum Connect time from 8 to 9200 milliseconds.
   listener_nbs.listen(100)
-  logging.info('visit http://%s:%s/' % listener_nbs.getsockname())
+  if use_http:
+    logging.info('visit http://%s:%s/' % listener_nbs.getsockname())
   if use_https:
-    sslsock_kwargs = {
-        # Parallelize handshakes by moving them to a tasklet.
-        'do_handshake_on_connect': False,
-        'certfile': os.path.join(os.path.dirname(__file__), 'ssl_cert.pem'),
-        'keyfile':  os.path.join(os.path.dirname(__file__), 'ssl_key.pem'),
-    }
-    # Make sure that the keyfile and certfile exist and they are valid etc.
-    patch.validate_new_sslsock(**sslsock_kwargs)
-    ssl_listener_nbs = coio.nbsslsocket(
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM), **sslsock_kwargs)
-    ssl_listener_nbs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    ssl_listener_nbs.bind(('127.0.0.1', 4443))
-    ssl_listener_nbs.listen(100)
-    logging.info('visit https://%s:%s/' % ssl_listener_nbs.getsockname())
-    coio.stackless.tasklet(wsgi_listener)(
-        ssl_listener_nbs, demo_wsgiapp.WsgiApp)
-  coio.stackless.tasklet(wsgi_listener)(listener_nbs, demo_wsgiapp.WsgiApp)
+    upgrade_ssl_callback = wsgi.SslUpgrader(
+        {'certfile': os.path.join(os.path.dirname(__file__), 'ssl_cert.pem'),
+         'keyfile':  os.path.join(os.path.dirname(__file__), 'ssl_key.pem')},
+        use_http)
+    logging.info('visit https://%s:%s/' % listener_nbs.getsockname())
+  else:
+    upgrade_ssl_callback = None
+  coio.stackless.tasklet(wsgi_listener)(
+      listener_nbs, demo_wsgiapp.WsgiApp, upgrade_ssl_callback)
   std_nbf = coio.nbfile(0, 1, write_buffer_limit=2)
   ChatWorker(std_nbf, nbf_to_close=listener_nbs)
