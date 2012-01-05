@@ -35,7 +35,7 @@ def CallWsgiWorker(accepted_socket, do_multirequest=True):
   wsgi.PopulateDefaultWsgiEnv(env, ('127.0.0.1', 80))
   peer_name = ('127.0.0.1', 2)
   wsgi.WsgiWorker(accepted_socket, peer_name, TestApplication, env, TEST_DATE,
-                  do_multirequest)
+                  do_multirequest, None)
 
 def ParseHttpResponse(data):
   head = 'Status: '

@@ -21,6 +21,7 @@ import ssl
 import sys
 from syncless import coio
 from syncless import patch
+from syncless import ssl_util
 
 # Here is how to create the SSL certificates:
 # sudo apt-get install openssl
@@ -86,7 +87,7 @@ if __name__ == '__main__':
         'keyfile':  os.path.join(os.path.dirname(__file__), 'ssl_key.pem'),
     }
     # Make sure that the keyfile and certfile exist and they are valid etc.
-    patch.validate_new_sslsock(**sslsock_kwargs)
+    ssl_util.validate_new_sslsock(**sslsock_kwargs)
     sslsock = sslsocket_impl(sock, **sslsock_kwargs)
   else:
     sslsock = sock

@@ -56,7 +56,8 @@ The convenience function RunHttpServer can be used in __main__ to run a HTTP
 server forever, serving WSGI, BaseHTTPRequestHandler, CherrPy, web.py or
 webapp applications.
 
-WsgiListener/WsgiWorker takes care of error detection and recovery. The details:
+WsgiListener and WsgiWorker take care of error detection and recovery. The
+details:
 
 * WsgiListener won't crash: it catches, reports and recovers from all I/O
   errors, HTTP request parse errors and also the exceptions raised by the
@@ -90,8 +91,33 @@ exhausted.  (The only possible exception to this rule is if the response
 headers explicitly include a Content-Length of zero.)
 
 Please note that the WebSocket WSGI bindings implemented in syncless.wsgi
-are Syncless-specific, since WebSocket bindings are standardized in the WSGI
-specifications. gevent-websocket exposes a different binding API.
+are Syncless-specific, since WebSocket bindings are not standardized in the
+WSGI specifications. gevent-websocket exposes a different binding API.
+
+WsgiListener always listens on a single TCP port. It handles incoming
+requests as HTTP by default (upgrade_ssl_callback=None), but it can be
+configured to handle HTTPS requests or both HTTP and HTTPS (on the same
+port). To use HTTPS, you need a private SSL key and a certificate here is
+how you can generate one (with a self-signed certificate):
+
+  $ sudo apt-get install openssl
+  $ openssl genrsa -out my_key.pem 2048
+  $ yes '' | openssl req -new -key my_key.pem -out my_cert.csr
+  $ yes '' | openssl req -new -x509 -key my_key.pem -out my_cert.pem
+  $ rm -f my_cert.csr
+  $ ls -l my_cert.{csr,pem}
+
+Once you have the cert and the key files, run WsgiListener like this for HTTPS:
+
+  wsgi.WsgiListener(serverr_socket, wsgi_application, wsgi.SslUpgrader(
+      {'certfile': 'my_cert.pem', 'keyfile': 'my_key.pem'}, use_http=False))
+
+If you want WsgiListener to handle both HTTP and HTTPS on the same port
+(deciding on-the-fly for each request, based on the 1st byte the client
+sends), specify use_http=True instead above.
+
+For HTTPS requests, WsgiWorker sets env['wgsi.url_scheme'] to 'https' and
+env['HTTPS'] to 'on'.
 
 Doc: WSGI server in stackless: http://stacklessexamples.googlecode.com/svn/trunk/examples/networking/wsgi/stacklesswsgi.py
 Doc: WSGI specification: http://www.python.org/dev/peps/pep-0333/
@@ -113,6 +139,7 @@ import types
 
 from syncless.best_stackless import stackless
 from syncless import coio
+from syncless import ssl_util
 
 # TODO(pts): Add tests.
 
@@ -340,7 +367,7 @@ def GetWebSocketKey(value):
 
 class WebSocket(object):
   """A message-based bidirectional TCP connection with the WebSocket protocol.
-  
+
   It is assumed that the WebSocket handshake is done before a WebSocket object
   gets created.
 
@@ -357,7 +384,7 @@ class WebSocket(object):
 
   def read_msg(self):
     """Read one message (as a str) from a WebSocket file object.
-    
+
     A byte string is always returned. It contains UTF-8 or binary data
     according to the WebSocket specification -- but that's not checked.
     """
@@ -399,10 +426,10 @@ class WebSocket(object):
     else:
       raise WebSocketInvalidFrameTypeError('%02X' % ord(frame_type))
     # return None
-      
+
   def write_msg(self, msg):
     """Write a UTF-8 message (str or unicode) to a WebSocket.
-    
+
     The order of the arguments is deliberate, so the defaults can be overridden.
 
     The message to be written must be valid UTF-8 (only it is checked that it
@@ -419,8 +446,9 @@ class WebSocket(object):
     else:
       raise TypeError('expected WebSocket message, got %s' % type(msg))
 
+
 def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
-               do_multirequest):
+               do_multirequest, upgrade_ssl_callback):
   # TODO(pts): Implement the full WSGI spec
   # http://www.python.org/dev/peps/pep-0333/
   #
@@ -431,6 +459,8 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
     raise TypeError
   if not hasattr(sock, 'makefile_samefd'):  # isinstance(sock, coio.nbsocket)
     raise TypeError
+  if not (upgrade_ssl_callback is None or callable(upgrade_ssl_callback)):
+    raise TypeError
 
   EISDIR = errno.EISDIR
   loglevel = logging.root.level
@@ -438,15 +468,14 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
   do_keep_alive_ary = [True]
   headers_sent_ary = [False]
   server_software = default_env['SERVER_SOFTWARE']
-  if hasattr(sock, 'do_handshake'):
-    # Do the SSL handshake in a non-blocking way.
-    try:
-      sock.do_handshake()
-    except IOError_all, e:
-      if is_debug:
-        logging.debug('https SSL handshake failed: %s' % e)
+
+  if upgrade_ssl_callback is not None:
+    # Make shallow copy because upgrade_ssl_callback may modify it in place.
+    default_env = dict(default_env)
+    sock = upgrade_ssl_callback(sock, default_env, is_debug)
+    if sock is None:
       return
-        
+
   sockfile = sock.makefile_samefd()
   sockfile.read_exc_class = WsgiReadError
   sockfile.write_exc_class = WsgiWriteError
@@ -504,7 +533,7 @@ def WsgiWorker(sock, peer_name, wsgi_application, default_env, date,
         return
       if special_request_type == 'ssl':
         if is_debug:
-          logging.debug('found an uexpectedSSL (http) request')
+          logging.debug('found an uexpected SSL (http) request')
         return  # TODO(pts): Process the SSL request. Needs buffering changes.
       if date is None:
         date = GetHttpDate(time.time())
@@ -1005,12 +1034,8 @@ def PopulateDefaultWsgiEnv(env, server_socket):
   env['wsgi.multithread']  = True
   env['wsgi.multiprocess'] = False
   env['wsgi.run_once']     = False
-  if hasattr(server_socket, 'do_handshake'):
-    env['wsgi.url_scheme']   = 'https'
-    env['HTTPS']             = 'on'     # Apache sets this
-  else:
-    env['wsgi.url_scheme']   = 'http'
-    env['HTTPS']             = 'off'
+  env['wsgi.url_scheme']   = 'http'
+  env['HTTPS']             = 'off'
   if isinstance(server_socket, tuple):
     server_ipaddr, server_port = server_socket
   else:
@@ -1025,7 +1050,7 @@ def PopulateDefaultWsgiEnv(env, server_socket):
     env['SERVER_ADDR'] = env['SERVER_NAME'] = socket.gethostname()
 
 
-def WsgiListener(server_socket, wsgi_application):
+def WsgiListener(server_socket, wsgi_application, upgrade_ssl_callback=None):
   """HTTP or HTTPS server serving WSGI, listing on server_socket.
 
   WsgiListener should be run in is own tasklet.
@@ -1040,7 +1065,16 @@ def WsgiListener(server_socket, wsgi_application):
   alive indefinitely. TODO(pts): Specify a timeout.
 
   Args:
-    server_sock: An acceptable coio.nbsocket or coio.nbsslsocket.
+    server_socket: An acceptable coio.nbsocket or coio.nbsslsocket.
+    upgrade_ssl_callback: A callable which takes (sock, env, is_debug), where
+      sock is a coio.nbsocket
+      and returns another coio.nbsocket (usually a coio.nbsslsocket, usually
+      doing the server side of an SSL handshake), or None. The callback may
+      modify the WSGI environment env in place. Must not raise an exception,
+      but may return None. Please note that it
+      is possible to make the WSGI server listen as both HTTP and HTTPS on the
+      same port using an appropriate upgrade_ssl_callback calling
+      accepted_socket.recv(..., socket.MSG_PEEK).
   """
   if not hasattr(server_socket, 'getsockname'):
     raise TypeError
@@ -1055,11 +1089,56 @@ def WsgiListener(server_socket, wsgi_application):
       if logging.root.level <= DEBUG:
         logging.debug('connection accepted from=%r' % (peer_name,))
       stackless.tasklet(WsgiWorker)(
-          accepted_socket, peer_name, wsgi_application, env, date, True)
+          accepted_socket, peer_name, wsgi_application, env, date, True,
+          upgrade_ssl_callback)
       accepted_socket = peer_name = None  # Help the garbage collector.
   finally:
     server_socket.close()
 
+
+class SslUpgrader(object):
+  """A simple upgrade_ssl_callback implementation."""
+
+  __slots__ = ['sslsock_kwargs', 'use_http']
+
+  def __init__(self, sslsock_kwargs, use_http):
+    """Constructor.
+
+    Args:
+      sslsock_kwargs: dict containing keyword arguments for ssl.SSLSocket.
+        Example: {'certfile': ..., 'keyfile': ...}.
+      use_http: bool indicating if HTTP connections are also allowed (in
+        addition to HTTPS connections).
+    """
+    self.use_http = bool(use_http)
+    self.sslsock_kwargs = dict(sslsock_kwargs)
+    self.sslsock_kwargs['do_handshake_on_connect'] = False
+    self.sslsock_kwargs['server_side'] = True
+    ssl_util.validate_new_sslsock(**sslsock_kwargs)
+
+  def __call__(self, sock, env, is_debug):
+    if self.use_http:
+      try:
+        first_byte = sock.recv(1, socket.MSG_PEEK)
+      except IOError_all, e:
+        if is_debug:
+          logging.debug('peeking first byte for SSL failed: %s' % e)
+        return
+      if first_byte not in ('\x80', '\x16'):  # Not SSL.
+        return sock
+    try:
+      sock = coio.nbsslsocket(sock, **self.sslsock_kwargs)
+      sock.do_handshake()
+    except IOError_all, e:
+      if is_debug:
+        logging.debug('https SSL handshake failed: %s' % e)
+      return
+    env['wsgi.url_scheme'] = 'https'
+    env['HTTPS'] = 'on'     # Apache sets this.
+    return sock
+
+
+# --- CherryPy WSGI
 
 class FakeServerSocket(object):
   """A fake TCP server socket, used as CherryPyWSGIServer.socket."""
@@ -1102,13 +1181,20 @@ class FakeRequests(object):
     self.requests.append(request)
 
 
-def CherryPyWsgiListener(server_sock, wsgi_application):
+def CherryPyWsgiListener(server_socket, wsgi_application,
+                         upgrade_ssl_callback=None):
   """HTTP or HTTPS server serving WSGI, using CherryPy's implementation.
 
   This function should be run in is own tasklet.
 
   Args:
-    server_sock: An acceptable coio.nbsocket or coio.nbsslsocket.
+    server_socket: An acceptable coio.nbsocket or coio.nbsslsocket.
+    upgrade_ssl_callback: A callable which takes (sock, env, is_debug), where
+      sock is a coio.nbsocket
+      and returns another coio.nbsocket (usually a coio.nbsslsocket, usually
+      doing the server side of an SSL handshake), or None. The callback may
+      modify the WSGI environment env in place. Must not raise an exception,
+      but may return None.
   """
   # !! TODO(pts): Speed: Why is CherryPy's /infinite twice as fast as ours?
   # Only sometimes.
@@ -1118,6 +1204,7 @@ def CherryPyWsgiListener(server_sock, wsgi_application):
   if not callable(wsgi_application):
     raise TypeError
   try:
+    # CherryPy-3.1.2 is known to work. Maybe it won't work with newer versions.
     from cherrypy import wsgiserver
   except ImportError:
     from web import wsgiserver  # Another implementation in (web.py).
@@ -1128,9 +1215,15 @@ def CherryPyWsgiListener(server_sock, wsgi_application):
   wsgi_server.requests = FakeRequests()
   wsgi_server.timeout = None  # TODO(pts): Fix once implemented.
 
-  def HandshakeAndCommunicate(sock, http_connection):
-    sock.do_handshake()
-    sock = None
+  def UpgradeAndCommunicate(sock, http_connection):
+    assert http_connection.socket is sock
+    is_debug = logging.root.level <= DEBUG
+    sock = upgrade_ssl_callback(sock, http_connection.environ, is_debug)
+    if sock is not None:
+      http_connection.socket = sock
+      http_connection.rfile._sock = sock
+      http_connection.wfile._sock = sock
+    del sock
     http_connection.communicate()
 
   try:
@@ -1144,8 +1237,8 @@ def CherryPyWsgiListener(server_sock, wsgi_application):
       wsgi_server.tick()
       assert len(wsgi_server.requests.requests) == 1
       http_connection = wsgi_server.requests.requests.pop()
-      if hasattr(sock, 'do_handshake'):
-        stackless.tasklet(HandshakeAndCommunicate)(sock, http_connection)
+      if upgrade_ssl_callback:
+        stackless.tasklet(UpgradeAndCommunicate)(sock, http_connection)
       else:
         stackless.tasklet(http_connection.communicate)()
       # Help the garbage collector free memory early.
