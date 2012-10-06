@@ -322,6 +322,37 @@ class NbfileSocketPairTest(NbfileTest):
     f.settimeout(0.000002)
     self.assertRaisesStr(socket.timeout, 'timed out', f.read, 1)
 
+  def testReadlineWithDelim(self):
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'brakadabra')
+      os.close(wfd)
+      wfd = None
+      f = coio.fdopen(rfd)
+      rfd = None
+      self.assertEqual(('bra', 'ka', 'da', 'bra'),
+                       tuple(iter(lambda: f.readline(delim='a'), '')))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'abrakadabra!')
+      os.close(wfd)
+      wfd = None
+      f = coio.fdopen(rfd)
+      rfd = None
+      self.assertEqual(('a', 'bra', 'ka', 'da', 'bra', '!'),
+                       tuple(iter(lambda: f.readline(delim='a'), '')))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
 
 if __name__ == '__main__':
   unittest.main()

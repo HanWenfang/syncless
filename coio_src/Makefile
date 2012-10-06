@@ -1,4 +1,4 @@
-PYTHON=stackless2.6
+PYTHON=$(shell if type stackless2.6 >/dev/null 2>&1; then echo stackless2.6; else echo python2.6; fi)
 
 # Ignoring DeprecationWarning since Pyrex does an `import md5'
 PYREXC=$(PYTHON) -W ignore::DeprecationWarning -c "from Pyrex.Compiler.Main import main; from Pyrex.Compiler.Errors import warnings_issued; warnings_issued['or_none'] = 1; main(command_line=1)"
