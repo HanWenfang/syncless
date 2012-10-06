@@ -322,6 +322,15 @@ class NbfileSocketPairTest(NbfileTest):
     f.settimeout(0.000002)
     self.assertRaisesStr(socket.timeout, 'timed out', f.read, 1)
 
+  def testReadlineWithBadDelimLen(self):
+    rfd, wfd = os.pipe()
+    os.close(wfd)
+    f = coio.fdopen(rfd)
+    # Multicharacter string delimiters not allowed.
+    self.assertRaises(TypeError, f.readline, delim='fo')
+    # Empty string delimiters not allowed.
+    self.assertRaises(TypeError, f.readline, delim='')
+
   def testReadlineWithDelim(self):
     rfd, wfd = os.pipe()
     try:
@@ -347,6 +356,53 @@ class NbfileSocketPairTest(NbfileTest):
       rfd = None
       self.assertEqual(('a', 'bra', 'ka', 'da', 'bra', '!'),
                        tuple(iter(lambda: f.readline(delim='a'), '')))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'br\xFFk\xFFd\xFFbr\xFF')
+      os.close(wfd)
+      wfd = None
+      f = coio.fdopen(rfd)
+      rfd = None
+      self.assertEqual(('br\xFF', 'k\xFF', 'd\xFF', 'br\xFF'),
+                       tuple(iter(lambda: f.readline(delim='\xFF'), '')))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'br\xFFk\xFFd\xFFbr\xFF')
+      os.close(wfd)
+      wfd = None
+      f = coio.fdopen(rfd)
+      rfd = None
+      self.assertEqual(
+          ('br\xFF', 'k\xFF', 'd\xFF', 'br\xFF'),
+          tuple(iter(lambda: f.readline(limit=3, delim='\xFF'), '')))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'br\xFFk\xFFd\xFFbr\xFF')
+      os.close(wfd)
+      wfd = None
+      f = coio.fdopen(rfd)
+      rfd = None
+      self.assertEqual(
+          ('br', '\xFF', 'k\xFF', 'd\xFF', 'br', '\xFF'),
+          tuple(iter(lambda: f.readline(limit=2, delim='\xFF'), '')))
     finally:
       if rfd is not None:
         os.close(rfd)
