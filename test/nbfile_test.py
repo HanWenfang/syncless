@@ -332,12 +332,23 @@ class NbfileSocketPairTest(NbfileTest):
     self.assertRaises(TypeError, f.readline, delim='')
 
   def testReadlineWithDelim(self):
+    self.DoTestReadlineWithDelim(False)
+
+  def testNblimitreaderReadlineWithDelim(self):
+    self.DoTestReadlineWithDelim(True)
+
+  def DoTestReadlineWithDelim(self, use_nblimitreader):
+    if use_nblimitreader:
+      fdopen = lambda fd: coio.nblimitreader(coio.fdopen(fd), 654321)
+    else:
+      fdopen = coio.fdopen
+  
     rfd, wfd = os.pipe()
     try:
       os.write(wfd, 'brakadabra')
       os.close(wfd)
       wfd = None
-      f = coio.fdopen(rfd)
+      f = fdopen(rfd)
       rfd = None
       self.assertEqual(('bra', 'ka', 'da', 'bra'),
                        tuple(iter(lambda: f.readline(delim='a'), '')))
@@ -352,7 +363,7 @@ class NbfileSocketPairTest(NbfileTest):
       os.write(wfd, 'abrakadabra!')
       os.close(wfd)
       wfd = None
-      f = coio.fdopen(rfd)
+      f = fdopen(rfd)
       rfd = None
       self.assertEqual(('a', 'bra', 'ka', 'da', 'bra', '!'),
                        tuple(iter(lambda: f.readline(delim='a'), '')))
@@ -367,7 +378,7 @@ class NbfileSocketPairTest(NbfileTest):
       os.write(wfd, 'br\xFFk\xFFd\xFFbr\xFF')
       os.close(wfd)
       wfd = None
-      f = coio.fdopen(rfd)
+      f = fdopen(rfd)
       rfd = None
       self.assertEqual(('br\xFF', 'k\xFF', 'd\xFF', 'br\xFF'),
                        tuple(iter(lambda: f.readline(delim='\xFF'), '')))
@@ -382,7 +393,7 @@ class NbfileSocketPairTest(NbfileTest):
       os.write(wfd, 'br\xFFk\xFFd\xFFbr\xFF')
       os.close(wfd)
       wfd = None
-      f = coio.fdopen(rfd)
+      f = fdopen(rfd)
       rfd = None
       self.assertEqual(
           ('br\xFF', 'k\xFF', 'd\xFF', 'br\xFF'),
@@ -398,7 +409,7 @@ class NbfileSocketPairTest(NbfileTest):
       os.write(wfd, 'br\xFFk\xFFd\xFFbr\xFF')
       os.close(wfd)
       wfd = None
-      f = coio.fdopen(rfd)
+      f = fdopen(rfd)
       rfd = None
       self.assertEqual(
           ('br', '\xFF', 'k\xFF', 'd\xFF', 'br', '\xFF'),

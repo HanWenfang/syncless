@@ -1915,17 +1915,21 @@ cdef class nblimitreader:
             self.f = None
         return buf
 
-    def readline(nblimitreader self, delim=None):
+    def readline(nblimitreader self, int limit=-1, delim=None):
         cdef object buf
         cdef Py_ssize_t size
         cdef char c_delim
+        cdef Py_ssize_t slimit
+        slimit = limit
+        if slimit < 0 or slimit > self.limit:
+            slimit = self.limit
+        if slimit == 0:
+            return ''
         if delim is None:
             c_delim = c'\n'
         else:
             c_delim = ord(delim)
-        if self.limit == 0:
-            return ''
-        buf = nbfile_readline_with_limit(self.f, self.limit, c_delim)
+        buf = nbfile_readline_with_limit(self.f, slimit, c_delim)
         size = len(buf)
         if size > 0:
             self.limit -= size
@@ -1936,18 +1940,28 @@ cdef class nblimitreader:
             self.f = None
         return buf
 
-    def readline_stripend(nblimitreader self):
-        """Read line, strip '\\r\\n' or '\\n' from the end.
+    def readline_stripend(nblimitreader self, delim=None):
+        """Read line, strip delim from the end.
 
+	Args:
+	  delim: Character to be used as a line delimiter, or None to use
+	    either '\\r\\n' or '\\n'.
         Returns:
-          The line read, with '\\r\\n' or '\\n' stripped, or None on EOF or
+          The line read, with delim stripped, or None on EOF or
           on an incomplete line before EOF.
         """
         cdef object buf
         cdef Py_ssize_t size
         cdef Py_ssize_t delta
+        cdef int c_delim
         if self.limit == 0:
             return ''
+        if delim is None:
+            c_delim = -1
+        else:
+            c_delim = ord(delim)
+        if c_delim != -1:
+            raise NotImplementedError('nblimitreader.readline_stripend(delim=...) not implemented.')
         delta = 0
         buf = nbfile_readline_stripend_with_limit(self.f, self.limit, &delta)
         if buf:
