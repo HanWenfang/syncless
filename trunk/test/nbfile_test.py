@@ -420,6 +420,198 @@ class NbfileSocketPairTest(NbfileTest):
       if wfd is not None:
         os.close(wfd)
 
+  def testReadlineStripendWithDelim(self):
+    self.DoTestReadlineStripendWithDelim(False)
+
+  def testNblimitreaderReadlineStripendWithDelim(self):
+    self.DoTestReadlineStripendWithDelim(True)
+
+  def DoTestReadlineStripendWithDelim(self, use_nblimitreader):
+    if use_nblimitreader:
+      fdopen = lambda fd: coio.nblimitreader(coio.fdopen(fd), 654321)
+    else:
+      fdopen = coio.fdopen
+  
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'brakadabra')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(('br', 'k', 'd', 'br'),
+                       tuple(iter(lambda: f.readline_stripend(delim='a'), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'abrakadabra!')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(('', 'br', 'k', 'd', 'br', '!'),
+                       tuple(iter(lambda: f.readline_stripend(delim='a'), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'br\xFFk\xFFd\xFFbr\xFF')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(('br', 'k', 'd', 'br'),
+                       tuple(iter(lambda: f.readline_stripend(delim='\xFF'), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'br\xFFk\xFFd\xFFbr\xFF')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(
+          ('br', 'k', 'd', 'br'),
+          tuple(iter(lambda: f.readline_stripend(limit=3, delim='\xFF'), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'br\xFFk\xFFd\xFFbr\xFF')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(
+          ('br', '', 'k', 'd', 'br', ''),
+          tuple(iter(lambda: f.readline_stripend(limit=2, delim='\xFF'), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+  def testReadlineStripend(self):
+    self.DoTestReadlineStripend(False)
+
+  def testNblimitreaderReadlineStripend(self):
+    self.DoTestReadlineStripend(True)
+
+  def DoTestReadlineStripend(self, use_nblimitreader):
+    if use_nblimitreader:
+      fdopen = lambda fd: coio.nblimitreader(coio.fdopen(fd), 654321)
+    else:
+      fdopen = coio.fdopen
+  
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, 'br\nk\r\nd\n\rbr\r\n')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(('br', 'k', 'd', '\rbr'),
+                       tuple(iter(lambda: f.readline_stripend(), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, '\r\nbr\nk\r\nd\n\rbr\n!\r')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(('', 'br', 'k', 'd', '\rbr', '!\r'),
+                       tuple(iter(lambda: f.readline_stripend(), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, '\r\nbr\nk\r\nd\n\rbr\n!\r')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(('', 'br', 'k', 'd', '\rbr', '!\r'),
+                       tuple(iter(lambda: f.readline_stripend(limit=4), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, '\r\nbr\nk\r\nd\n\rbr\n!\r')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(('', 'br', 'k', 'd', '\rbr', '', '!\r'),
+                       tuple(iter(lambda: f.readline_stripend(limit=3), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, '\r\nbr\nk\r\nd\n\rbr\n!\r')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(('', 'br', '', 'k\r', '', 'd', '\rb', 'r', '!\r'),
+                       tuple(iter(lambda: f.readline_stripend(limit=2), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
+    rfd, wfd = os.pipe()
+    try:
+      os.write(wfd, '\r\nbr\nk\r\nd\n\rbr\n!\r')
+      os.close(wfd)
+      wfd = None
+      f = fdopen(rfd)
+      rfd = None
+      self.assertEqual(('\r', '', 'b', 'r', '', 'k', '\r', '', 'd', '',
+                        '\r', 'b', 'r', '', '!', '\r'),
+                       tuple(iter(lambda: f.readline_stripend(limit=1), None)))
+    finally:
+      if rfd is not None:
+        os.close(rfd)
+      if wfd is not None:
+        os.close(wfd)
+
 
 if __name__ == '__main__':
   unittest.main()
