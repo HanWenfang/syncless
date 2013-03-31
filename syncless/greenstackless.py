@@ -57,7 +57,7 @@ class TaskletExit(SystemExit):
 __import__('__builtin__').TaskletExit = TaskletExit
 
 
-def ImportTooLateError(Exception):
+class ImportTooLateError(Exception):
   """Raised when syncless.coio is imported too late.
 
   To solve this problem, either import syncless.greenstackless (or
