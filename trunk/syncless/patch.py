@@ -67,7 +67,8 @@ def get_fake_coio_socket_module():
     fake_coio_socket_module = type(socket)('fake_coio_socket')
     for name in dir(socket):
       if (name[0] in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' and
-          isinstance(getattr(socket, name), int)):
+          isinstance(getattr(socket, name), int) or
+          name == 'error'):
         setattr(fake_coio_socket_module, name, getattr(socket, name))
       if name.startswith('RAND_'):
         # RAND_Add, RAND_egd and RAND_status from the SSL module.
