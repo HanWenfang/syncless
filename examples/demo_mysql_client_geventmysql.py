@@ -113,6 +113,9 @@ def main():
 
 
 if __name__ == '__main__':
+  # We need this before we create the first stackless.tasklet if
+  # syncless.greenstackless is used.
+  __import__('syncless.coio')
   # Moving all work to another tasklet because stackless.main is not allowed
   # to be blocked on a channel.receive() (StopIteration would be raised).
   stackless.tasklet(main)()
